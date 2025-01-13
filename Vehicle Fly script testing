@@ -425,9 +425,9 @@ local forwardVelocity = 100
 local backwardVelocity = -100
 local leftVelocity = -100
 local rightVelocity = 100
-local upVelocity = 100
-local downVelocity = -100
-local rotationSpeed = 30
+local upVelocity = 50
+local downVelocity = -50
+local rotationSpeed = 5
 
 local function setupButtonConnections()
     table.insert(activeConnections, ForwardButton.MouseButton1Down:Connect(function()
