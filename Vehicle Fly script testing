@@ -256,7 +256,7 @@ local function initializeGUI()
     RotateLeftButton.Parent = LeftSideFrame
     RotateLeftButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
     RotateLeftButton.Size = UDim2.new(0, 50, 0, 50)
-    RotateLeftButton.Position = UDim2.new(0.9, -25, 0, 40)
+    RotateLeftButton.Position = UDim2.new(0.86, -25, 0, 50)
     RotateLeftButton.Font = Enum.Font.GothamBold
     RotateLeftButton.Text = "⟩>"
     RotateLeftButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -266,7 +266,7 @@ local function initializeGUI()
     RotateRightButton.Parent = LeftSideFrame
     RotateRightButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
     RotateRightButton.Size = UDim2.new(0, 50, 0, 50)
-    RotateRightButton.Position = UDim2.new(0.1, -25, 0, 40)
+    RotateRightButton.Position = UDim2.new(0.14, -25, 0, 50)
     RotateRightButton.Font = Enum.Font.GothamBold
     RotateRightButton.Text = "<⟨"
     RotateRightButton.TextColor3 = Color3.fromRGB(255, 255, 255)
