@@ -158,7 +158,7 @@ local function initializeGUI()
 	-- ControllerFrame properties
 	ControllerFrame.Parent = ControllerGui
 	ControllerFrame.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-	ControllerFrame.Position = UDim2.new(0.8, -75, 0.5, -75)
+	ControllerFrame.Position = UDim2.new(0.78, -75, 0.5, -75)
 	ControllerFrame.Size = UDim2.new(0, 150, 0, 150)
 	ControllerFrame.Active = false
 	ControllerFrame.Draggable = false
