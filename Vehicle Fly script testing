@@ -180,7 +180,7 @@ local function initializeGUI()
 	BackwardButton.Parent = ControllerFrame
 	BackwardButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 	BackwardButton.Size = UDim2.new(0, 50, 0, 50)
- 	BackwardButton.Position = UDim2.new(0.5, -25, 0, 75)
+ 	BackwardButton.Position = UDim2.new(0.5, -25, 0, 85)
 	BackwardButton.Font = Enum.Font.GothamBold
 	BackwardButton.Text = "▼"
 	BackwardButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -210,7 +210,7 @@ local function initializeGUI()
     AntiLockButton.Parent = ControllerFrame
     AntiLockButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
     AntiLockButton.Size = UDim2.new(0, 50, 0, 30)
-    AntiLockButton.Position = UDim2.new(0.5, -25, 0, 45)
+    AntiLockButton.Position = UDim2.new(0.5, -25, 0, 60)
     AntiLockButton.Font = Enum.Font.GothamBold
     AntiLockButton.Text = "A-L"
     AntiLockButton.TextColor3 = Color3.fromRGB(255, 255, 255)
