@@ -235,7 +235,7 @@ local function initializeGUI()
     -- UpButton Properties
     UpButton.Parent = LeftSideFrame
     UpButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-    UpButton.Size = UDim2.new(0, 50, 0, 30)
+    UpButton.Size = UDim2.new(0, 50, 0, 50)
     UpButton.Position = UDim2.new(0.5, -25, 0, 10)
     UpButton.Font = Enum.Font.GothamBold
     UpButton.Text = "↑"
@@ -245,8 +245,8 @@ local function initializeGUI()
     -- DownButton properties
     DownButton.Parent = LeftSideFrame
     DownButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-    DownButton.Size = UDim2.new(0, 50, 0, 30)
-    DownButton.Position = UDim2.new(0.5, -25, 0, 50)
+    DownButton.Size = UDim2.new(0, 50, 0, 50)
+    DownButton.Position = UDim2.new(0.5, -25, 0, 90)
     DownButton.Font = Enum.Font.GothamBold
     DownButton.Text = "↓"
     DownButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -255,8 +255,8 @@ local function initializeGUI()
     -- RotateLeftButton Properties
     RotateLeftButton.Parent = LeftSideFrame
     RotateLeftButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-    RotateLeftButton.Size = UDim2.new(0, 50, 0, 30)
-    RotateLeftButton.Position = UDim2.new(0.5, -25, 0, 90)
+    RotateLeftButton.Size = UDim2.new(0, 50, 0, 50)
+    RotateLeftButton.Position = UDim2.new(0.9, -25, 0, 40)
     RotateLeftButton.Font = Enum.Font.GothamBold
     RotateLeftButton.Text = "⟩>"
     RotateLeftButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -265,8 +265,8 @@ local function initializeGUI()
     -- RotateRightButton Properties
     RotateRightButton.Parent = LeftSideFrame
     RotateRightButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-    RotateRightButton.Size = UDim2.new(0, 50, 0, 30)
-    RotateRightButton.Position = UDim2.new(0.5, -25, 0, 130)
+    RotateRightButton.Size = UDim2.new(0, 50, 0, 50)
+    RotateRightButton.Position = UDim2.new(0.1, -25, 0, 40)
     RotateRightButton.Font = Enum.Font.GothamBold
     RotateRightButton.Text = "<⟨"
     RotateRightButton.TextColor3 = Color3.fromRGB(255, 255, 255)
