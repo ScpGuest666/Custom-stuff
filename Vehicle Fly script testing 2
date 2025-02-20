@@ -1,9 +1,7 @@
 local StarterGui = game:GetService("StarterGui")
 local tweenService = game:GetService("TweenService")
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 
--- Instances (GUI setup - remains mostly the same, so I'm shortening it for brevity)
+-- Instances (GUI elements - no changes here)
 local ScreenGui = Instance.new("ScreenGui")
 local MainFrame = Instance.new("Frame")
 local Title = Instance.new("TextLabel")
@@ -17,6 +15,8 @@ local ControllerButton = Instance.new("TextButton")
 local UIGradient = Instance.new("UIGradient")
 local UICorner = Instance.new("UICorner")
 local UIStroke = Instance.new("UIStroke")
+
+-- Controller GUI Instances
 local ControllerGui = Instance.new("ScreenGui")
 local ControllerFrame = Instance.new("Frame")
 local ForwardButton = Instance.new("TextButton")
@@ -24,6 +24,8 @@ local BackwardButton = Instance.new("TextButton")
 local LeftButton = Instance.new("TextButton")
 local RightButton = Instance.new("TextButton")
 local AntiLockButton = Instance.new("TextButton")
+
+-- Left Side Movement GUI
 local LeftSideGui = Instance.new("ScreenGui")
 local LeftSideFrame = Instance.new("Frame")
 local UpButton = Instance.new("TextButton")
@@ -31,24 +33,34 @@ local DownButton = Instance.new("TextButton")
 local RotateLeftButton = Instance.new("TextButton")
 local RotateRightButton = Instance.new("TextButton")
 
-
 -- Global Variables
-local velocityHandlerName = "VelocityHandler"  -- Use strings for names, more reliable
-local gyroHandlerName = "GyroHandler"
+local velocityHandlerName = 32
+local gyroHandlerName = 64
 local VelocityHandler = nil
 local GyroHandler = nil
-local mfly1 = nil
-local mfly2 = nil
 local isAntiLockOn = false
-local isFlying = false  -- Track flying state
 
--- Track Active Connections (Good practice for cleanup)
+-- Track Active Connections
 local activeConnections = {}
 
+-- Fly and Seat State
+local FlyEnabled = false
+local seatConnection = nil
+local unseatConnection = nil
+local controllerEnabled = false
+local movementDirection = {}
 
--- Initialize GUI (This part remains largely unchanged, so I won't repeat it)
+-- Movement Speeds (Adjust as needed)
+local forwardVelocity = 100
+local backwardVelocity = 100
+local leftVelocity = 100
+local rightVelocity = 100
+local upVelocity = 50
+local downVelocity = 50
+local rotationSpeed = 5
+
 local function initializeGUI()
-	-- ... (Your GUI setup code here, as in the original) ...
+	-- ... (All your GUI setup code - no changes here) ...
 	-- ScreenGui properties
 	ScreenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
 	ScreenGui.ResetOnSpawn = false
@@ -165,7 +177,7 @@ local function initializeGUI()
 	ControllerFrame.Size = UDim2.new(0, 150, 0, 150)
 	ControllerFrame.Active = false
 	ControllerFrame.Draggable = false
-	local ControllerCorner = Instance.new("UICorner")
+    local ControllerCorner = Instance.new("UICorner")
 	ControllerCorner.CornerRadius = UDim.new(0.5, 0)
 	ControllerCorner.Parent = ControllerFrame
 
@@ -183,260 +195,156 @@ local function initializeGUI()
 	BackwardButton.Parent = ControllerFrame
 	BackwardButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 	BackwardButton.Size = UDim2.new(0, 50, 0, 50)
-	BackwardButton.Position = UDim2.new(0.5, -25, 0, 85)
+ 	BackwardButton.Position = UDim2.new(0.5, -25, 0, 85)
 	BackwardButton.Font = Enum.Font.GothamBold
 	BackwardButton.Text = "▼"
 	BackwardButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 	BackwardButton.TextScaled = true
 
 	-- LeftButton properties
-	LeftButton.Parent = ControllerFrame
-	LeftButton.BackgroundColor3 = Color3.fromRGB(80,80,80)
-	LeftButton.Size = UDim2.new(0, 50, 0, 50)
-	LeftButton.Position = UDim2.new(0, 0, 0.5, -25)
-	LeftButton.Font = Enum.Font.GothamBold
-	LeftButton.Text = "<"
-	LeftButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-	LeftButton.TextScaled = true
+    LeftButton.Parent = ControllerFrame
+    LeftButton.BackgroundColor3 = Color3.fromRGB(80,80,80)
+    LeftButton.Size = UDim2.new(0, 50, 0, 50)
+    LeftButton.Position = UDim2.new(0, 0, 0.5, -25)
+    LeftButton.Font = Enum.Font.GothamBold
+    LeftButton.Text = "<"
+    LeftButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    LeftButton.TextScaled = true
 
-	-- RightButton properties
-	RightButton.Parent = ControllerFrame
-	RightButton.BackgroundColor3 = Color3.fromRGB(80,80,80)
-	RightButton.Size = UDim2.new(0, 50, 0, 50)
-	RightButton.Position = UDim2.new(1, -50, 0.5, -25)
-	RightButton.Font = Enum.Font.GothamBold
-	RightButton.Text = ">"
-	RightButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-	RightButton.TextScaled = true
+    -- RightButton properties
+    RightButton.Parent = ControllerFrame
+    RightButton.BackgroundColor3 = Color3.fromRGB(80,80,80)
+    RightButton.Size = UDim2.new(0, 50, 0, 50)
+    RightButton.Position = UDim2.new(1, -50, 0.5, -25)
+    RightButton.Font = Enum.Font.GothamBold
+    RightButton.Text = ">"
+    RightButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    RightButton.TextScaled = true
 
 	--AntiLock Button properties
-	AntiLockButton.Parent = ControllerFrame
-	AntiLockButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-	AntiLockButton.Size = UDim2.new(0, 50, 0, 30)
-	AntiLockButton.Position = UDim2.new(0.5, -25, 0, 60)
-	AntiLockButton.Font = Enum.Font.GothamBold
-	AntiLockButton.Text = "A-L"
-	AntiLockButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-	AntiLockButton.TextScaled = true
+    AntiLockButton.Parent = ControllerFrame
+    AntiLockButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    AntiLockButton.Size = UDim2.new(0, 50, 0, 30)
+    AntiLockButton.Position = UDim2.new(0.5, -25, 0, 60)
+    AntiLockButton.Font = Enum.Font.GothamBold
+    AntiLockButton.Text = "A-L"
+    AntiLockButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    AntiLockButton.TextScaled = true
 
 	-- Left Side GUI
 	LeftSideGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
-	LeftSideGui.ResetOnSpawn = false
-	LeftSideGui.Enabled = false
+    LeftSideGui.ResetOnSpawn = false
+    LeftSideGui.Enabled = false
 
-	LeftSideFrame.Parent = LeftSideGui
-	LeftSideFrame.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-	LeftSideFrame.Position = UDim2.new(0.1, 20, 0.5, -75)
-	LeftSideFrame.Size = UDim2.new(0, 150, 0, 150)
-	LeftSideFrame.Active = false
-	LeftSideFrame.Draggable = false
-	local LeftSideCorner = Instance.new("UICorner")
-	LeftSideCorner.CornerRadius = UDim.new(0.5, 0)
-	LeftSideCorner.Parent = LeftSideFrame
+    LeftSideFrame.Parent = LeftSideGui
+    LeftSideFrame.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    LeftSideFrame.Position = UDim2.new(0.1, 20, 0.5, -75)
+    LeftSideFrame.Size = UDim2.new(0, 150, 0, 150)
+    LeftSideFrame.Active = false
+    LeftSideFrame.Draggable = false
+    local LeftSideCorner = Instance.new("UICorner")
+    LeftSideCorner.CornerRadius = UDim.new(0.5, 0)
+    LeftSideCorner.Parent = LeftSideFrame
 
 
-	-- UpButton Properties
-	UpButton.Parent = LeftSideFrame
-	UpButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-	UpButton.Size = UDim2.new(0, 50, 0, 50)
-	UpButton.Position = UDim2.new(0.5, -25, 0, 10)
-	UpButton.Font = Enum.Font.GothamBold
-	UpButton.Text = "↑"
-	UpButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-	UpButton.TextScaled = true
+    -- UpButton Properties
+    UpButton.Parent = LeftSideFrame
+    UpButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    UpButton.Size = UDim2.new(0, 50, 0, 50)
+    UpButton.Position = UDim2.new(0.5, -25, 0, 10)
+    UpButton.Font = Enum.Font.GothamBold
+    UpButton.Text = "↑"
+    UpButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    UpButton.TextScaled = true
 
-	-- DownButton properties
-	DownButton.Parent = LeftSideFrame
-	DownButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-	DownButton.Size = UDim2.new(0, 50, 0, 50)
-	DownButton.Position = UDim2.new(0.5, -25, 0, 90)
-	DownButton.Font = Enum.Font.GothamBold
-	DownButton.Text = "↓"
-	DownButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-	DownButton.TextScaled = true
+    -- DownButton properties
+    DownButton.Parent = LeftSideFrame
+    DownButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    DownButton.Size = UDim2.new(0, 50, 0, 50)
+    DownButton.Position = UDim2.new(0.5, -25, 0, 90)
+    DownButton.Font = Enum.Font.GothamBold
+    DownButton.Text = "↓"
+    DownButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    DownButton.TextScaled = true
 
-	-- RotateLeftButton Properties
-	RotateLeftButton.Parent = LeftSideFrame
-	RotateLeftButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-	RotateLeftButton.Size = UDim2.new(0, 50, 0, 50)
-	RotateLeftButton.Position = UDim2.new(0.86, -25, 0, 50)
-	RotateLeftButton.Font = Enum.Font.GothamBold
-	RotateLeftButton.Text = "⟩>"
-	RotateLeftButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-	RotateLeftButton.TextScaled = true
+    -- RotateLeftButton Properties
+    RotateLeftButton.Parent = LeftSideFrame
+    RotateLeftButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    RotateLeftButton.Size = UDim2.new(0, 50, 0, 50)
+    RotateLeftButton.Position = UDim2.new(0.86, -25, 0, 50)
+    RotateLeftButton.Font = Enum.Font.GothamBold
+    RotateLeftButton.Text = "⟩>"
+    RotateLeftButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    RotateLeftButton.TextScaled = true
 
-	-- RotateRightButton Properties
-	RotateRightButton.Parent = LeftSideFrame
-	RotateRightButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-	RotateRightButton.Size = UDim2.new(0, 50, 0, 50)
-	RotateRightButton.Position = UDim2.new(0.14, -25, 0, 50)
-	RotateRightButton.Font = Enum.Font.GothamBold
-	RotateRightButton.Text = "<⟨"
-	RotateRightButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-	RotateRightButton.TextScaled = true
+    -- RotateRightButton Properties
+    RotateRightButton.Parent = LeftSideFrame
+    RotateRightButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    RotateRightButton.Size = UDim2.new(0, 50, 0, 50)
+    RotateRightButton.Position = UDim2.new(0.14, -25, 0, 50)
+    RotateRightButton.Font = Enum.Font.GothamBold
+    RotateRightButton.Text = "<⟨"
+    RotateRightButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    RotateRightButton.TextScaled = true
 end
 
 local function cleanupConnections()
-	for _, connection in pairs(activeConnections) do
-		if connection and connection.Disconnect then
-			connection:Disconnect()
-		end
-	end
-	activeConnections = {}
+    for _, connection in pairs(activeConnections) do
+        if connection and connection.Disconnect then
+            connection:Disconnect()
+        end
+    end
+    activeConnections = {}
 end
 
--- Function to manage BodyVelocity and BodyGyro
+-- Sets up BodyVelocity and BodyGyro
 local function setupFlyInstances(character)
-	if not character or not character:FindFirstChild("HumanoidRootPart") then return end
+    if not character or not character:FindFirstChild("HumanoidRootPart") then return end
 
-	local initialRotation = character.HumanoidRootPart.CFrame.Rotation
+    -- Destroy old instances
+    if VelocityHandler then VelocityHandler:Destroy() end
+    if GyroHandler then GyroHandler:Destroy() end
 
-	-- Destroy old instances (important for re-enabling)
-	if VelocityHandler then VelocityHandler:Destroy() end
-	if GyroHandler then GyroHandler:Destroy() end
+    VelocityHandler = Instance.new("BodyVelocity")
+    VelocityHandler.Name = velocityHandlerName
+    VelocityHandler.Parent = character.HumanoidRootPart
+    VelocityHandler.MaxForce = Vector3.new(9e9, 9e9, 9e9)  -- Allow full control
+    VelocityHandler.Velocity = Vector3.new() -- Start with no velocity
 
-	VelocityHandler = Instance.new("BodyVelocity")
-	VelocityHandler.Name = velocityHandlerName
-	VelocityHandler.Parent = character.HumanoidRootPart
-	VelocityHandler.MaxForce = Vector3.new(0, 0, 0) -- Initialize to zero
-	VelocityHandler.Velocity = Vector3.new(0, 0, 0)
+    GyroHandler = Instance.new("BodyGyro")
+    GyroHandler.Name = gyroHandlerName
+    GyroHandler.Parent = character.HumanoidRootPart
+    GyroHandler.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+    GyroHandler.P = 1000
+    GyroHandler.D = 50
+	GyroHandler.CFrame = character.HumanoidRootPart.CFrame
+end
 
-	GyroHandler = Instance.new("BodyGyro")
-	GyroHandler.Name = gyroHandlerName
-	GyroHandler.Parent = character.HumanoidRootPart
-	GyroHandler.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-	GyroHandler.P = 1000
-	GyroHandler.D = 50
-	-- Simplified initial CFrame setting:
-	GyroHandler.CFrame = CFrame.new(character.HumanoidRootPart.Position) * initialRotation
+-- Simplified EnableFlight - only sets up instances.
+local function EnableFlight()
+    local character = game.Players.LocalPlayer.Character
+    if character then
+        setupFlyInstances(character)
+    end
+end
+
+local function DisableFlight()
+    if VelocityHandler then VelocityHandler:Destroy() end
+    if GyroHandler then GyroHandler:Destroy() end
+    VelocityHandler = nil  -- Good practice to set to nil after destroying
+    GyroHandler = nil
 end
 
 
-
-local function EnableFly()
-	local player = Players.LocalPlayer
-	local character = player.Character
-	if not character then return end
-
-	isFlying = true -- Set flying state
-	setupFlyInstances(character)  -- Create/recreate instances
-
-	-- CharacterAdded connection (handles respawns)
-	if mfly1 then mfly1:Disconnect() end
-	mfly1 = player.CharacterAdded:Connect(function(newCharacter)
-		if isFlying then  -- Only re-enable if we *were* flying
-			setupFlyInstances(newCharacter)
-		end
-	end)
-
-	-- RenderStepped connection (the core flight logic)
-	if mfly2 then mfly2:Disconnect() end
-	mfly2 = RunService.RenderStepped:Connect(function()
-		if not isFlying or not character or not character:FindFirstChild("HumanoidRootPart") then
-			return  -- Exit if not flying or character is invalid
-		end
-
-		local humanoid = character:FindFirstChildWhichIsA("Humanoid")
-		if not humanoid then return end
-
-		-- Get the current camera
-		local camera = workspace.CurrentCamera
-		if not camera then return end
-
-		-- Get move direction from player input
-		local controlModule = require(player.PlayerScripts:WaitForChild("PlayerModule"):WaitForChild("ControlModule"))
-		local moveVector = controlModule:GetMoveVector()
-
-		-- Get speed from the TextBox
-		local speed = tonumber(SpeedTextBox.Text) or 1  -- Default speed 1
-
-		if not VelocityHandler or not GyroHandler then return end -- Check exist
-
-		VelocityHandler.MaxForce = Vector3.new(9e9, 9e9, 9e9) --Allow Movement
-		GyroHandler.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-
-		-- Calculate movement direction based on camera and input
-		local forward = camera.CFrame.LookVector * (moveVector.Z * -speed * 50)
-		local right = camera.CFrame.RightVector * (moveVector.X * speed * 50)
-		local up = Vector3.new(0, moveVector.Y * speed * 50, 0) -- Up/down
-		local combinedVelocity = forward + right + up
-
-        -- Apply velocity and gyro
-		VelocityHandler.Velocity = combinedVelocity
-
-
-		-- GYRO (Orientation) - Only yaw if AntiLock is off
-		if not isAntiLockOn then
-			local lookVector = camera.CFrame.LookVector
-			GyroHandler.CFrame = CFrame.new(GyroHandler.Parent.Position, GyroHandler.Parent.Position + Vector3.new(lookVector.X, 0, lookVector.Z)) * CFrame.fromEulerAnglesXYZ(0, math.rad(character.HumanoidRootPart.CFrame:ToEulerAnglesXYZ()), 0)
-		end
-	end)
-end
-
-
-local function DisableFly()
-	isFlying = false  -- Turn off flying state
-
-	if mfly1 then mfly1:Disconnect(); mfly1 = nil end
-	if mfly2 then mfly2:Disconnect(); mfly2 = nil end
-
-	-- Clean up BodyMovers
-	if VelocityHandler then VelocityHandler:Destroy() end
-	if GyroHandler then GyroHandler:Destroy() end
-
-    local character = Players.LocalPlayer.Character
-	if character then
-		local humanoid = character:FindFirstChildWhichIsA("Humanoid")
-		if humanoid then
-			humanoid.PlatformStand = false  -- Reset PlatformStand
-		end
-	end
-end
-
--- Function to handle character respawn and disable the controller GUI
 local function resetControllerOnSpawn()
-	ControllerGui.Enabled = false
-	LeftSideGui.Enabled = false
+    ControllerGui.Enabled = false
+    LeftSideGui.Enabled = false
 end
 
 game.Players.LocalPlayer.CharacterAdded:Connect(resetControllerOnSpawn)
 game.Players.LocalPlayer.CharacterRemoving:Connect(resetControllerOnSpawn)
 
-local function moveCharacter(velocity)
-	local character = game.Players.LocalPlayer.Character
-	if not character or not character:FindFirstChild("HumanoidRootPart") or not character.HumanoidRootPart:FindFirstChild(velocityHandlerName) then
-		return
-	end
 
-	local VelocityHandler = character.HumanoidRootPart:FindFirstChild(velocityHandlerName)
-	local camera = workspace.CurrentCamera
-	local lookVector = camera.CFrame.LookVector
-	local horizontalLookVector = Vector3.new(lookVector.X, 0, lookVector.Z).Unit
-	local rightVector = camera.CFrame.RightVector
-	local targetVelocity
-
-	if isAntiLockOn then
-		local hrp = character.HumanoidRootPart
-		targetVelocity = hrp.CFrame:VectorToWorldSpace(Vector3.new(velocity.X, velocity.Y, -velocity.Z))
-	else
-		if velocity.X == 0 and velocity.Z == 0 then
-			targetVelocity =  Vector3.new(0, velocity.Y, 0)
-		else
-			targetVelocity =  horizontalLookVector * velocity.Z + rightVector * velocity.X + lookVector * velocity.Y
-		end
-	end
-	VelocityHandler.Velocity = targetVelocity
-end
-
-local controllerEnabled = false
-local movementDirection = {}
-local forwardVelocity = 100
-local backwardVelocity = -100
-local leftVelocity = -100
-local rightVelocity = 100
-local upVelocity = 50
-local downVelocity = -50
-local rotationSpeed = 5
 
 local function setupButtonConnections()
 	table.insert(activeConnections, ForwardButton.MouseButton1Down:Connect(function()
@@ -453,7 +361,7 @@ local function setupButtonConnections()
 		table.insert(movementDirection, "backward")
 	end))
 	table.insert(activeConnections, BackwardButton.MouseButton1Up:Connect(function()
-		for i = #movementDirection, 1, -1 do
+		 for i = #movementDirection, 1, -1 do
 			if movementDirection[i] == "backward" then
 				table.remove(movementDirection, i)
 			end
@@ -463,7 +371,7 @@ local function setupButtonConnections()
 		table.insert(movementDirection, "left")
 	end))
 	table.insert(activeConnections, LeftButton.MouseButton1Up:Connect(function()
-		for i = #movementDirection, 1, -1 do
+		 for i = #movementDirection, 1, -1 do
 			if movementDirection[i] == "left" then
 				table.remove(movementDirection, i)
 			end
@@ -473,7 +381,7 @@ local function setupButtonConnections()
 		table.insert(movementDirection, "right")
 	end))
 	table.insert(activeConnections, RightButton.MouseButton1Up:Connect(function()
-		for i = #movementDirection, 1, -1 do
+		 for i = #movementDirection, 1, -1 do
 			if movementDirection[i] == "right" then
 				table.remove(movementDirection, i)
 			end
@@ -493,7 +401,7 @@ local function setupButtonConnections()
 		table.insert(movementDirection, "down")
 	end))
 	table.insert(activeConnections, DownButton.MouseButton1Up:Connect(function()
-		for i = #movementDirection, 1, -1 do
+		 for i = #movementDirection, 1, -1 do
 			if movementDirection[i] == "down" then
 				table.remove(movementDirection, i)
 			end
@@ -503,7 +411,7 @@ local function setupButtonConnections()
 		table.insert(movementDirection, "rotateLeft")
 	end))
 	table.insert(activeConnections, RotateLeftButton.MouseButton1Up:Connect(function()
-		for i = #movementDirection, 1, -1 do
+		 for i = #movementDirection, 1, -1 do
 			if movementDirection[i] == "rotateLeft" then
 				table.remove(movementDirection, i)
 			end
@@ -513,7 +421,7 @@ local function setupButtonConnections()
 		table.insert(movementDirection, "rotateRight")
 	end))
 	table.insert(activeConnections, RotateRightButton.MouseButton1Up:Connect(function()
-		for i = #movementDirection, 1, -1 do
+		 for i = #movementDirection, 1, -1 do
 			if movementDirection[i] == "rotateRight" then
 				table.remove(movementDirection, i)
 			end
@@ -524,107 +432,176 @@ local function setupButtonConnections()
 		if isAntiLockOn then
 			AntiLockButton.Text = "A-L On"
 		else
-			AntiLockButton.Text = "A-L"
+			 AntiLockButton.Text = "A-L"
 		end
 	end))
 end
 
+-- Unified Input Handling - Handles BOTH controller buttons AND camera-based movement.
 local function handleInput()
-	local controlModule = require(game.Players.LocalPlayer.PlayerScripts:WaitForChild("PlayerModule"):WaitForChild("ControlModule"))
-	if not game.Players.LocalPlayer.Character or not game.Players.LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or not game.Players.LocalPlayer.Character.HumanoidRootPart:FindFirstChild(velocityHandlerName) then
-		return
-	end
-	local velocity = Vector3.new()
-	local thumbstickDirection = controlModule:GetMoveVector()
-	local gyro = game.Players.LocalPlayer.Character.HumanoidRootPart:FindFirstChild(gyroHandlerName)
+    local character = game.Players.LocalPlayer.Character
+    if not character then return end
+    local humanoid = character:FindFirstChild("Humanoid")
+    if not humanoid then return end
+    
+    -- ONLY proceed if FlyEnabled is true AND the player is seated.
+    if FlyEnabled and humanoid.SeatPart then
 
-	for _, direction in ipairs(movementDirection) do
-		if direction == "forward" then
-			velocity = velocity + Vector3.new(0, 0, forwardVelocity)
-		elseif direction == "backward" then
-			velocity = velocity + Vector3.new(0, 0, backwardVelocity)
-		elseif direction == "left" then
-			velocity = velocity + Vector3.new(leftVelocity, 0, 0)
-		elseif direction == "right" then
-			velocity = velocity + Vector3.new(rightVelocity, 0, 0)
-		elseif direction == "up" then
-			velocity = velocity + Vector3.new(0, upVelocity, 0)
-		elseif direction == "down" then
-			velocity = velocity + Vector3.new(0, downVelocity, 0)
-		elseif direction == "rotateLeft" then
-			if gyro then
-				if isAntiLockOn then
-					local currentCFrame = GyroHandler.CFrame
-					local targetCFrame = currentCFrame * CFrame.Angles(0, math.rad(-rotationSpeed), 0)
-					GyroHandler.CFrame = targetCFrame
-				else
-					local currentAngle = math.deg(GyroHandler.CFrame:ToEulerAnglesXYZ())
-					local targetAngle = currentAngle - rotationSpeed
-					GyroHandler.CFrame = CFrame.new(GyroHandler.Parent.Position, GyroHandler.Parent.Position + Vector3.new(1,0,0)) * CFrame.fromEulerAnglesXYZ(0, math.rad(targetAngle), 0)
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return end
+
+        if not VelocityHandler then return end --Critical Check
+
+        local camera = workspace.CurrentCamera
+        local controlModule = require(game.Players.LocalPlayer.PlayerScripts:WaitForChild("PlayerModule"):WaitForChild("ControlModule"))
+
+        local velocity = Vector3.new()
+        local gyro = rootPart:FindFirstChild(gyroHandlerName)  -- Use consistent naming
+
+
+        -- Get thumbstick direction (for WASD or gamepad)
+        local thumbstickDirection = controlModule:GetMoveVector()
+        local speed = tonumber(SpeedTextBox.Text) or 1
+
+		-- Prioritize controller button input
+		if #movementDirection > 0 then
+			for _, direction in ipairs(movementDirection) do
+				if direction == "forward" then
+					velocity = velocity + Vector3.new(0, 0, -forwardVelocity)  -- Move forward in the seat's CFrame
+				elseif direction == "backward" then
+					velocity = velocity + Vector3.new(0, 0, backwardVelocity)  -- Move backward in the seat's CFrame
+				elseif direction == "left" then
+					velocity = velocity + Vector3.new(-leftVelocity, 0, 0)  -- Move left in the seat's CFrame
+				elseif direction == "right" then
+					velocity = velocity + Vector3.new(rightVelocity, 0, 0)  -- Move right in the seat's CFrame
+				elseif direction == "up" then
+					velocity = velocity + Vector3.new(0, upVelocity, 0)
+				elseif direction == "down" then
+					velocity = velocity + Vector3.new(0, -downVelocity, 0)
+				elseif direction == "rotateLeft" and gyro then
+					if isAntiLockOn then
+						gyro.CFrame = gyro.CFrame * CFrame.Angles(0, math.rad(-rotationSpeed), 0)
+					else
+						local currentAngle = math.deg((gyro.CFrame).Rotation:ToEulerAnglesXYZ())
+                        local targetAngle = currentAngle - rotationSpeed
+						gyro.CFrame = CFrame.new(gyro.Parent.Position) * CFrame.fromEulerAnglesYXZ(0, math.rad(targetAngle), 0)
+					end
+				elseif direction == "rotateRight" and gyro then
+					if isAntiLockOn then
+						gyro.CFrame = gyro.CFrame * CFrame.Angles(0, math.rad(rotationSpeed), 0)
+					else
+						local currentAngle = math.deg((gyro.CFrame).Rotation:ToEulerAnglesXYZ())
+                        local targetAngle = currentAngle + rotationSpeed
+                        gyro.CFrame = CFrame.new(gyro.Parent.Position) * CFrame.fromEulerAnglesYXZ(0, math.rad(targetAngle), 0)
+					end
 				end
 			end
-		elseif direction == "rotateRight" then
-			if gyro then
-				if isAntiLockOn then
-					local currentCFrame = GyroHandler.CFrame
-					local targetCFrame = currentCFrame * CFrame.Angles(0, math.rad(rotationSpeed), 0)
-					GyroHandler.CFrame = targetCFrame
-				else
-					local currentAngle = math.deg(GyroHandler.CFrame:ToEulerAnglesXYZ())
-					local targetAngle = currentAngle + rotationSpeed
-					GyroHandler.CFrame = CFrame.new(GyroHandler.Parent.Position, GyroHandler.Parent.Position + Vector3.new(1,0,0)) * CFrame.fromEulerAnglesXYZ(0, math.rad(targetAngle), 0)
-				end
-			end
-		end
-	end
-	-- Use the thumbstick input when no button is held
-	if #movementDirection == 0 then
-		velocity = Vector3.new(thumbstickDirection.X * 100, -thumbstickDirection.Z * 100, 0)
-	end
-	moveCharacter(velocity)
+
+            -- Apply velocity in world space, relative to the seat.
+            VelocityHandler.Velocity = humanoid.SeatPart.CFrame:VectorToWorldSpace(velocity * speed)
+        else
+            -- If no controller buttons are pressed, use camera-based movement.
+            velocity = camera.CFrame.RightVector * thumbstickDirection.X * speed * 50
+                      - camera.CFrame.LookVector * thumbstickDirection.Z * speed * 50
+
+            VelocityHandler.Velocity = velocity  -- Apply directly
+
+             if not isAntiLockOn and gyro then
+                local lookVector = camera.CFrame.LookVector
+                gyro.CFrame = CFrame.new(gyro.Parent.Position, gyro.Parent.Position + Vector3.new(lookVector.X, 0, lookVector.Z)) * CFrame.fromEulerAnglesXYZ(0, math.rad(rootPart.CFrame:ToEulerAnglesXYZ()), 0)
+             end
+        end
+
+
+    else
+        -- If not flying or not seated, ensure zero velocity.  Important!
+        if VelocityHandler then
+            VelocityHandler.Velocity = Vector3.new()
+        end
+    end
 end
+
+
 -- Function to set up event listeners and move the player
 local function setupEventListeners()
-	setupButtonConnections()
-	table.insert(activeConnections, game:GetService("RunService").RenderStepped:Connect(handleInput))
+    setupButtonConnections()
+    table.insert(activeConnections, game:GetService("RunService").RenderStepped:Connect(handleInput))
 end
 
 -- Function to cleanup all connection and states
 local function cleanup()
-	DisableFly()
-	cleanupConnections()
-	movementDirection = {}
-	controllerEnabled = false
+    DisableFlight()
+    cleanupConnections()
+    movementDirection = {}
+    controllerEnabled = false
+
+    if seatConnection then seatConnection:Disconnect() end
+    if unseatConnection then unseatConnection:Disconnect() end
+    seatConnection = nil
+    unseatConnection = nil
+    FlyEnabled = false
 end
 
 DestroyButton.MouseButton1Click:Connect(function()
-	cleanup()
-	for _, v in pairs(ScreenGui:GetChildren()) do
-		v:Destroy()
-	end
-	ScreenGui:Destroy()
+    cleanup()
+    for _, v in pairs(ScreenGui:GetChildren()) do
+        v:Destroy()
+    end
+    ScreenGui:Destroy()
 end)
 
+
+
+-- Updated FlyButton click handler
 FlyButton.MouseButton1Click:Connect(function()
-	if FlyButton.Text == "Fly" then
-		FlyButton.Text = "UnFly"
-		EnableFly()
-	else
-		FlyButton.Text = "Fly"
-		DisableFly()
-	end
+    FlyEnabled = not FlyEnabled
+    local character = game.Players.LocalPlayer.Character
+    local humanoid = character and character:FindFirstChild("Humanoid")
+
+    if FlyEnabled then
+        FlyButton.Text = "UnFly"
+        if humanoid then
+            -- Cleanup existing connections
+            if seatConnection then seatConnection:Disconnect() end
+            if unseatConnection then unseatConnection:Disconnect() end
+
+            if humanoid.SeatPart then
+                EnableFlight()  -- Set up BodyVelocity/Gyro *after* confirming seat
+            else
+                -- Wait for seating
+                seatConnection = humanoid:GetPropertyChangedSignal("SeatPart"):Connect(function()
+                    if humanoid.SeatPart then
+                        EnableFlight()
+                    end
+                end)
+            end
+
+            -- Listen for unseating
+            unseatConnection = humanoid:GetPropertyChangedSignal("SeatPart"):Connect(function()
+                if not humanoid.SeatPart then
+                    DisableFlight()
+                end
+            end)
+        end
+    else
+        FlyButton.Text = "Fly"
+        DisableFlight()
+        -- Cleanup connections
+        if seatConnection then seatConnection:Disconnect() end
+        if unseatConnection then unseatConnection:Disconnect() end
+        seatConnection = nil
+        unseatConnection = nil
+    end
 end)
+
 ControllerButton.MouseButton1Click:Connect(function()
-	controllerEnabled = not controllerEnabled
-	ControllerGui.Enabled = controllerEnabled
-	if controllerEnabled then
-		LeftSideGui.Enabled = true
-	else
-		LeftSideGui.Enabled = false
-	end
-	print("Controller Button Clicked")
-	-- Add controller functionality here later
+    controllerEnabled = not controllerEnabled
+    ControllerGui.Enabled = controllerEnabled
+    LeftSideGui.Enabled = controllerEnabled  -- Control both GUIs together
+    print("Controller Button Clicked")
+    -- Add controller functionality here later
 end)
+
 -- Initialization
 initializeGUI()
 setupEventListeners()
