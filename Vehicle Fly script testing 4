@@ -478,7 +478,7 @@ local function handleInput()
     local humanoid = character:FindFirstChild("Humanoid")
     if not humanoid then return end
 
-    -- ONLY run if FlyEnabled AND seated
+    -- ONLY run if FlyEnabled AND seated (or FwF is on)
     if FlyEnabled and (humanoid.SeatPart or flightWithoutFlyEnabled) then
 
         local rootPart = character:FindFirstChild("HumanoidRootPart")
@@ -512,30 +512,19 @@ local function handleInput()
                     if isAntiLockOn then
                         gyro.CFrame = gyro.CFrame * CFrame.Angles(0, math.rad(-rotationSpeed), 0)
                     else
-                        local currentAngle = math.deg((gyro.CFrame).Rotation:ToEulerAnglesXYZ())
-                        local targetAngle = currentAngle - rotationSpeed
-                        gyro.CFrame = CFrame.new(gyro.Parent.Position) * CFrame.fromEulerAnglesYXZ(0, math.rad(targetAngle), 0)
+                         -- Simplified, less accurate rotation (but consistent with original)
+                        gyro.CFrame = gyro.CFrame * CFrame.Angles(0, math.rad(-rotationSpeed), 0)
                     end
                 elseif direction == "rotateRight" and gyro then
                     if isAntiLockOn then
                         gyro.CFrame = gyro.CFrame * CFrame.Angles(0, math.rad(rotationSpeed), 0)
                     else
-                        local currentAngle = math.deg((gyro.CFrame).Rotation:ToEulerAnglesXYZ())
-                        local targetAngle = currentAngle + rotationSpeed
-                        gyro.CFrame = CFrame.new(gyro.Parent.Position) * CFrame.fromEulerAnglesYXZ(0, math.rad(targetAngle), 0)
+                        -- Simplified rotation (consistent with original)
+                        gyro.CFrame = gyro.CFrame * CFrame.Angles(0, math.rad(rotationSpeed), 0)
                     end
                 end
             end
 
-            -- Apply pitch movement if Pitch is on and A-L is off
-            if isPitchOn and not isAntiLockOn then
-                local pitchSpeed = 5  -- Adjust pitch speed as needed
-                local pitchInput = controlModule:GetMouse().Position.Y / workspace.CurrentCamera.ViewportSize.Y
-                local pitchAngle = (pitchInput - 0.5) * pitchSpeed
-                if gyro then
-                    gyro.CFrame = gyro.CFrame * CFrame.Angles(math.rad(pitchAngle), 0, 0)
-                end
-            end
 
             -- Apply velocity based on isAntiLockOn
             if isAntiLockOn then
@@ -550,24 +539,20 @@ local function handleInput()
             velocity = camera.CFrame.RightVector * thumbstickDirection.X * speed * 50
                       - camera.CFrame.LookVector * thumbstickDirection.Z * speed * 50
 
-            -- Apply pitch movement if Pitch is on and A-L is off
-            if isPitchOn and not isAntiLockOn then
-                local pitchSpeed = 5  -- Adjust pitch speed as needed
-                local pitchInput = controlModule:GetMouse().Position.Y / workspace.CurrentCamera.ViewportSize.Y
-                local pitchAngle = (pitchInput - 0.5) * pitchSpeed
-                if gyro then
-                    gyro.CFrame = gyro.CFrame * CFrame.Angles(math.rad(pitchAngle), 0, 0)
-                end
-            end
-
             -- Apply velocity
             VelocityHandler.Velocity = velocity
 
-            if not isAntiLockOn and gyro then
-                local lookVector = camera.CFrame.LookVector
-                gyro.CFrame = CFrame.new(gyro.Parent.Position, gyro.Parent.Position + Vector3.new(lookVector.X, 0, lookVector.Z))
-            end
         end
+
+        -- *** PITCH CONTROL (Moved and Simplified) ***
+        if isPitchOn and not isAntiLockOn and gyro then
+            gyro.CFrame = camera.CFrame  -- Directly set the CFrame to the camera's.
+        elseif gyro and not isPitchOn and not isAntiLockOn then
+           -- Apply yaw (left/right look) ONLY when pitch is OFF.  This preserves WASD behavior.
+           local lookVector = camera.CFrame.LookVector
+           gyro.CFrame = CFrame.new(gyro.Parent.Position, gyro.Parent.Position + Vector3.new(lookVector.X, 0, lookVector.Z))
+        end
+
 
     else
         -- If not flying or not seated, ensure zero velocity
