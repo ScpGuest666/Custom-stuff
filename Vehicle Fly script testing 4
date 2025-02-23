@@ -361,6 +361,17 @@ game.Players.LocalPlayer.CharacterAdded:Connect(resetControllerOnSpawn)
 game.Players.LocalPlayer.CharacterRemoving:Connect(resetControllerOnSpawn)
 
 local function setupButtonConnections()
+    --Increase and Decrease buttons
+    table.insert(activeConnections, IncreaseButton.MouseButton1Click:Connect(function()
+        local currentSpeed = tonumber(SpeedTextBox.Text) or 1  -- Default to 1 if not a number
+        SpeedTextBox.Text = tostring(currentSpeed + 1)
+    end))
+
+    table.insert(activeConnections, DecreaseButton.MouseButton1Click:Connect(function()
+        local currentSpeed = tonumber(SpeedTextBox.Text) or 1
+        SpeedTextBox.Text = tostring(math.max(1, currentSpeed - 1))  -- Prevent going below 1
+    end))
+
     table.insert(activeConnections, ForwardButton.MouseButton1Down:Connect(function()
         table.insert(movementDirection, "forward")
     end))
