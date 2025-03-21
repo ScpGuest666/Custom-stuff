@@ -54,8 +54,7 @@ local controllerEnabled = false
 local movementDirection = {}
 
 -- Movement Speeds
-local forwardVelocity = 100
-local backwardVelocity = -100
+local forwardVelocity = 100  -- Controls both forward/backward magnitude
 local leftVelocity = 100
 local rightVelocity = 100
 local upVelocity = 50
@@ -540,7 +539,7 @@ local function handleInput()
             if direction == "forward" then
                 velocity += movementCFrame.LookVector * forwardVelocity
             elseif direction == "backward" then
-                velocity += movementCFrame.LookVector * backwardVelocity
+                velocity += -movementCFrame.LookVector * forwardVelocity  -- Changed to use forwardVelocity
             elseif direction == "left" then
                 velocity += movementCFrame.RightVector * -leftVelocity
             elseif direction == "right" then
@@ -584,7 +583,7 @@ local function handleInput()
                     if direction == "forward" then
                         seatVelocity += seatForward * forwardVelocity
                     elseif direction == "backward" then
-                        seatVelocity += -seatForward * backwardVelocity  -- Corrected: Use negative for backward
+                        seatVelocity += -seatForward * forwardVelocity  -- Corrected: Use negative for backward
                     elseif direction == "left" then
                         seatVelocity += -seatRight * leftVelocity
                     elseif direction == "right" then
