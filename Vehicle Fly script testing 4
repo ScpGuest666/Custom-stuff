@@ -54,7 +54,7 @@ local controllerEnabled = false
 local movementDirection = {}
 
 -- Movement Speeds
-local forwardVelocity = -100
+local forwardVelocity = 100
 local backwardVelocity = -100
 local leftVelocity = 100
 local rightVelocity = 100
@@ -538,7 +538,7 @@ local function handleInput()
 
         for _, direction in ipairs(movementDirection) do
             if direction == "forward" then
-                velocity += movementCFrame.LookVector * -forwardVelocity
+                velocity += movementCFrame.LookVector * forwardVelocity
             elseif direction == "backward" then
                 velocity += movementCFrame.LookVector * backwardVelocity
             elseif direction == "left" then
@@ -563,9 +563,17 @@ local function handleInput()
             VelocityHandler.Velocity = velocity * speed
         end
 
-        -- Update gyro orientation for pitch control
-        if isPitchOn and gyro and not isAntiLockOn then
-            gyro.CFrame = workspace.CurrentCamera.CFrame
+         -- Update gyro orientation to match camera rotation
+        if not isAntiLockOn then
+            local camera = workspace.CurrentCamera
+            if isPitchOn and gyro then
+                -- Full camera alignment including pitch
+                gyro.CFrame = camera.CFrame
+            elseif gyro then
+                -- Horizontal alignment only (yaw)
+                local flatLookVector = camera.CFrame.LookVector * Vector3.new(1, 0, 1)
+                gyro.CFrame = CFrame.new(gyro.Parent.Position, gyro.Parent.Position + flatLookVector)
+            end
         end
 
     else
