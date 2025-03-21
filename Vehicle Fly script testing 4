@@ -556,12 +556,35 @@ local function handleInput()
             end
         end
 
-        -- Apply anti-lock system if enabled
         if isAntiLockOn and humanoid.SeatPart then
-            VelocityHandler.Velocity = humanoid.SeatPart.CFrame:VectorToWorldSpace(velocity * speed)
+            -- Get seat-relative directions
+            local seatForward = humanoid.SeatPart.CFrame.LookVector
+            local seatRight = humanoid.SeatPart.CFrame.RightVector
+            local seatUp = humanoid.SeatPart.CFrame.UpVector
+
+            -- Calculate seat-relative movement
+            local seatVelocity = Vector3.new()
+            for _, direction in ipairs(movementDirection) do
+                if direction == "forward" then
+                    seatVelocity += seatForward * forwardVelocity
+                elseif direction == "backward" then
+                    seatVelocity += -seatForward * backwardVelocity  -- Corrected: Use negative for backward
+                elseif direction == "left" then
+                    seatVelocity += -seatRight * leftVelocity
+                elseif direction == "right" then
+                    seatVelocity += seatRight * rightVelocity
+                elseif direction == "up" then
+                    seatVelocity += seatUp * upVelocity
+                elseif direction == "down" then
+                    seatVelocity += -seatUp * downVelocity
+                end
+            end
+
+            VelocityHandler.Velocity = seatVelocity * speed
         else
             VelocityHandler.Velocity = velocity * speed
         end
+
 
          -- Update gyro orientation to match camera rotation
         if not isAntiLockOn then
