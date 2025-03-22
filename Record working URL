@@ -309,24 +309,11 @@ local function serializePlatformData()
     end
 
     local rawData = HttpService:JSONEncode(data)
-    return game:GetService("HttpService"):Compress(rawData)
-end
-
--- Large Data Optimization
-local function decompressData(compressed)
-    return game:GetService("HttpService"):Decompress(compressed)
+    return rawData
 end
 
 -- Function to deserialize platform data from JSON
 local function deserializePlatformData(jsonData)
-    -- Check for compressed data marker
-    if jsonData:sub(1,1) == "{" then
-        -- Regular JSON data
-    else
-        -- Compressed data
-        jsonData = decompressData(jsonData)
-    end
-
     local success, data = pcall(function()
         return HttpService:JSONDecode(jsonData)
     end)
