@@ -272,7 +272,7 @@ local function addPlatformToScrollFrame(platformName)
             if not shouldStopReplay then
                 statusLabel.Text = "Status: Completed all platforms"
                 statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
-                task.wait(2)
+                task.wait(1)
             end
             
             statusLabel.Text = "Status: Idle"
