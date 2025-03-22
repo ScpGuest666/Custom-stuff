@@ -636,41 +636,53 @@ local ALLOWED_HOSTS = {
 loadButton.MouseButton1Click:Connect(function()
     local input = pasteTextBox.Text
     
-    -- New improved URL validation
-    if input:match("^https?://") then
-        local parsedUrl = input:match("https?://([^/]+)/?")
-        local pathPart = input:match("https?://[^/]+/(.+)") or ""
-        
-        local isAllowed = false
-        for _, allowed in ipairs(ALLOWED_HOSTS) do
-            if parsedUrl:find(allowed, 1, true) or pathPart:find(allowed, 1, true) then
-                isAllowed = true
-                break
-            end
+    -- Clear existing platforms FIRST
+    if #platforms > 0 or #yellowPlatforms > 0 then
+        -- Destroy physical parts
+        for _, platform in ipairs(platforms) do
+            platform:Destroy()
         end
+        for _, yellowPlatform in ipairs(yellowPlatforms) do
+            yellowPlatform:Destroy()
+        end
+        
+        -- Reset all data structures
+        platforms = {}
+        yellowPlatforms = {}
+        platformData = {}
+        yellowToRedMapping = {}
+        platformCounter = 0
+        
+        -- Clear scroll list
+        scrollFrame:ClearAllChildren()
+        local uiListLayout = Instance.new("UIListLayout")
+        uiListLayout.Parent = scrollFrame
+        uiListLayout.Padding = UDim.new(0, 5)
+        scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+        
+        statusLabel.Text = "Status: Cleared old platforms"
+        statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+        wait(0.5) -- Give visual feedback
+    end
 
-        if isAllowed then
-            statusLabel.Text = "Loading 0%"
-            local url = input
-            local success, response = pcall(function()
-                return game:HttpGet(url, true, function(content, contentLength)
-                    local progress = math.floor((#content/contentLength)*100)
-                    statusLabel.Text = "Loading "..progress.."%"
-                end)
+    -- Then load new data
+    if input:match("^https?://") then
+        statusLabel.Text = "Loading 0%"
+        local url = input
+        local success, response = pcall(function()
+            return game:HttpGet(url, true, function(content, contentLength)
+                local progress = math.floor((#content/contentLength)*100)
+                statusLabel.Text = "Loading "..progress.."%"
             end)
-    
-            if success then
-                deserializePlatformData(response)
-            else
-                statusLabel.Text = "Load failed: "..tostring(response):sub(1,50)
-                statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
-            end
+        end)
+
+        if success then
+            deserializePlatformData(response)
         else
-            statusLabel.Text = "Status: URL not whitelisted"
+            statusLabel.Text = "Load failed: "..tostring(response):sub(1,50)
             statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
         end
     else
-        -- Existing JSON handling
         if input ~= "" then
             deserializePlatformData(input)
         end
