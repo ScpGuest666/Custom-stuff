@@ -89,9 +89,16 @@ local lastPosition = nil
 local replayThread
 local yellowToRedMapping = {} -- Mapping of yellow platforms to red platforms
 
+-- Add these variables at the top with other declarations
+local currentReplayThread = nil
+local shouldStopReplay = false
+local currentPlatformIndex = 0
+local totalPlatformsToPlay = 0
+
 -- Pathfinding service
 local PathfindingService = game:GetService("PathfindingService")
 local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
 
 -- Helper Functions
 local function isCharacterMoving()
@@ -134,6 +141,16 @@ local function addPlatformToScrollFrame(platformName)
     playButton.MouseButton1Click:Connect(function()
         if replaying then return end
 
+        -- Stop any existing replay first
+        if currentReplayThread then
+            shouldStopReplay = true
+            task.wait() -- Allow cancellation to propagate
+        end
+
+        -- Reset control flags
+        replaying = true
+        shouldStopReplay = false
+
         -- Extract platform number safely
         local platformNumber = tonumber(button.Text:match("%d+"))
         if not platformNumber or platformNumber < 1 or platformNumber > #platforms then
@@ -143,6 +160,10 @@ local function addPlatformToScrollFrame(platformName)
         end
 
         local platform = platforms[platformNumber]
+
+        -- Update initial status
+        statusLabel.Text = string.format("Starting playback from Platform %d", platformNumber)
+        statusLabel.TextColor3 = Color3.fromRGB(0, 0, 255)
 
         -- Walk to the platform before replaying (Pathfinding Integrated)
         local function walkToPlatform(destination)
@@ -160,7 +181,7 @@ local function addPlatformToScrollFrame(platformName)
             if path.Status == Enum.PathStatus.Success then
                 local waypoints = path:GetWaypoints()
                 for _, waypoint in ipairs(waypoints) do
-                    if not replaying then return end
+                    if shouldStopReplay then break end
                     humanoid:MoveTo(waypoint.Position)
                     if waypoint.Action == Enum.PathWaypointAction.Jump then
                         humanoid.Jump = true
@@ -176,8 +197,16 @@ local function addPlatformToScrollFrame(platformName)
 
         -- Replay logic for sequential platforms (Improved)
         local function replayPlatforms(startIndex)
+            totalPlatformsToPlay = #platforms -- Total platforms
+            currentPlatformIndex = startIndex -- Starting point
+
             for i = startIndex, #platforms do
-                if not replaying then return end
+                if shouldStopReplay then break end
+                
+                -- Update status with absolute position
+                statusLabel.Text = string.format("Playing from Platform %d/%d", currentPlatformIndex, totalPlatformsToPlay)
+                statusLabel.TextColor3 = Color3.fromRGB(0, 0, 255)
+                
                 local platform = platforms[i]
                 -- Walk to platform using pathfinding
                 walkToPlatform(platform.Position + Vector3.new(0, 3, 0))
@@ -185,7 +214,7 @@ local function addPlatformToScrollFrame(platformName)
                 if movements then
                     --print("Movement data type check:", typeof(movements[1].position), typeof(movements[1].orientation)) -- Debug print
                     for j = 1, #movements - 1 do
-                        if not replaying then return end
+                        if shouldStopReplay then break end
 
                         local startMovement = movements[j]
                         local endMovement = movements[j + 1]
@@ -204,7 +233,7 @@ local function addPlatformToScrollFrame(platformName)
                         local endTime = startTime + duration
 
                         while tick() < endTime do
-                            if not replaying then return end
+                            if shouldStopReplay then break end
                             local alpha = (tick() - startTime) / duration
                             alpha = math.min(alpha, 1)
 
@@ -232,26 +261,48 @@ local function addPlatformToScrollFrame(platformName)
                                 humanoid.Jump = true
                             end
 
-                            game:GetService("RunService").Heartbeat:Wait()
+                            RunService.Heartbeat:Wait()
                         end
                     end
                 end
-                -- Removed the wait(0.5) to eliminate the delay
+                
+                currentPlatformIndex += 1 -- Move to next platform index
             end
-            replaying = false
+            -- Final status update
+            if not shouldStopReplay then
+                statusLabel.Text = "Status: Completed all platforms"
+                statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+                task.wait(2)
+            end
+            
             statusLabel.Text = "Status: Idle"
             statusLabel.TextColor3 = Color3.fromRGB(0, 0, 0)
+            replaying = false
         end
 
-        -- Update status and start replaying
-        statusLabel.Text = "Status: Playing from " .. platformName
-        statusLabel.TextColor3 = Color3.fromRGB(0, 0, 255)
-        replaying = true
-        spawn(function()
+        -- Start new replay in a tracked thread
+        currentReplayThread = task.spawn(function()
             replayPlatforms(platformNumber)
+            currentReplayThread = nil
         end)
     end)
 end
+
+-- Modify the stopReplayButton click handler
+stopReplayButton.MouseButton1Click:Connect(function()
+    if replaying then
+        shouldStopReplay = true
+        replaying = false
+        statusLabel.Text = string.format("Stopped at Platform %d/%d", currentPlatformIndex-1, totalPlatformsToPlay)
+        statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+        task.wait(2)
+        statusLabel.Text = "Status: Idle"
+        -- Cancel any ongoing movement
+        if character:FindFirstChild("Humanoid") then
+            character.Humanoid:MoveTo(character.HumanoidRootPart.Position)
+        end
+    end
+end)
 
 -- Function to add text label to a platform
 local function addTextLabelToPlatform(platform, platformNumber)
@@ -418,6 +469,12 @@ player.CharacterAdded:Connect(function(newCharacter)
         uiListLayout.Parent = scrollFrame
         uiListLayout.Padding = UDim.new(0, 5)
         scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+        shouldStopReplay = true
+        replaying = false
+        if currentReplayThread then
+            task.cancel(currentReplayThread) -- Cancel the replay thread
+            currentReplayThread = nil
+        end
     end
 end)
 
@@ -526,9 +583,16 @@ end)
 
 stopReplayButton.MouseButton1Click:Connect(function()
     if replaying then
+        shouldStopReplay = true
         replaying = false
-        statusLabel.Text = "Status: Replay Stopped"
-        statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+        statusLabel.Text = string.format("Stopped at Platform %d/%d", currentPlatformIndex-1, totalPlatformsToPlay)
+        statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+        task.wait(2)
+        statusLabel.Text = "Status: Idle"
+        -- Cancel any ongoing movement
+        if character:FindFirstChild("Humanoid") then
+            character.Humanoid:MoveTo(character.HumanoidRootPart.Position)
+        end
     end
 end)
 
