@@ -1,0 +1,578 @@
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+screenGui.ResetOnSpawn = false
+
+-- Create Frame (GUI 1)
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+frame.Size = UDim2.new(0, 200, 0, 210)
+frame.Position = UDim2.new(0.5, -100, 0.5, -150)
+frame.Active = true
+frame.Draggable = true
+
+-- Removed Off Button
+
+-- Create Auto Button (Moved and Resized)
+local autoButton = Instance.new("TextButton")
+autoButton.Parent = frame
+autoButton.BackgroundColor3 = Color3.fromRGB(255, 165, 0) -- Orange
+autoButton.Size = UDim2.new(0, 160, 0, 30) -- Wider to fill space
+autoButton.Position = UDim2.new(0, 20, 0, 20) -- Moved to the left
+autoButton.Text = "Auto: Off"
+autoButton.TextScaled = true
+
+-- Create Destroy Button
+local destroyButton = Instance.new("TextButton")
+destroyButton.Parent = frame
+destroyButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+destroyButton.Size = UDim2.new(0, 160, 0, 30)
+destroyButton.Position = UDim2.new(0, 20, 0, 60) -- Position remains below Auto button
+destroyButton.Text = "Destroy"
+destroyButton.TextScaled = true
+
+-- Create Status Indicator
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = frame
+statusLabel.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+statusLabel.Size = UDim2.new(0, 160, 0, 30)
+statusLabel.Position = UDim2.new(0, 40, 0, -30)
+
+-- Add GUI Toggle Button
+local toggleButton = Instance.new("TextButton")
+toggleButton.Parent = frame
+toggleButton.Size = UDim2.new(0, 30, 0, 30)
+toggleButton.Position = UDim2.new(0, 5, 0, -30)
+toggleButton.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+toggleButton.Text = "<"
+toggleButton.TextScaled = true
+statusLabel.Text = "Status: Off"
+statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+statusLabel.TextScaled = true
+
+-- Create Team List Frame
+local teamListFrame = Instance.new("ScrollingFrame")
+teamListFrame.Parent = frame
+teamListFrame.BackgroundColor3 = Color3.fromRGB(240, 240, 240)
+teamListFrame.Size = UDim2.new(0, 160, 0, 100)
+teamListFrame.Position = UDim2.new(0, 20, 0, 100)
+teamListFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+teamListFrame.ScrollBarThickness = 1
+teamListFrame.ScrollingDirection = Enum.ScrollingDirection.Y
+
+-- Variables
+-- Removed teleportEnabled, selectedTeam, currentFollowedPlayer, originalPosition, tpButtons
+local guiVisible = false
+local tweenService = game:GetService("TweenService")
+local settingsGuiConnection = nil
+
+-- Add these variables at the top
+local LocalPlayer = game.Players.LocalPlayer
+local Character = nil
+local HumanoidRootPart = nil
+
+-- Add these variables at the top with other variables
+local withinStuds = 10
+local teleportStuds = 10
+local raycastEnabled = false
+local dodgingActive = false
+local userTapped = false
+local lastTapTime = 0
+local doubleTapInterval = 0.3
+local hasTeams = false
+
+-- Add these variables at the top
+local hasBall = false
+local autoDodgeEnabled = false -- Master switch from GUI 2
+local basketballName = "Basketball" -- Adjust based on the game's object name/tag
+
+-- Helper Functions
+-- Improved isSafePosition Function
+local function isSafePosition(position)
+	if not Character or not HumanoidRootPart then return false end
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterDescendantsInstances = {Character}
+	raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+
+	-- Cast a ray downward with longer distance (300 studs)
+	local ray = Ray.new(position, Vector3.new(0, -300, 0))
+	local raycastResult = workspace:Raycast(ray.Origin, ray.Direction * 300, raycastParams)
+
+	-- Ensure the hit position is below the target and not too far
+	return raycastResult and (position.Y - raycastResult.Position.Y) < 10
+end
+
+-- Add to avoidPlayers()
+local function getSafeTeleportPosition(playerHumanoidRootPart)
+	if not Character or not HumanoidRootPart then return nil end
+	local angleIncrement = math.pi / 12 -- 30 degree increments for smoother coverage
+	local radius = teleportStuds
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterDescendantsInstances = {Character}
+	raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+
+	for i = 0, 23 do -- Check 24 directions (full circle)
+		local angle = i * angleIncrement
+		local direction = Vector3.new(math.cos(angle), 0, math.sin(angle))
+		local targetPosition = HumanoidRootPart.Position + (direction * radius)
+
+		-- Check if position is safe
+		local raycastResult = workspace:Raycast(HumanoidRootPart.Position, direction * radius, raycastParams)
+		if not raycastResult and isSafePosition(targetPosition) then
+			return targetPosition
+		end
+	end
+	return nil
+end
+
+-- Add to avoidPlayers()
+local function isFacingTarget(otherHumanoidRootPart)
+	if not Character or not HumanoidRootPart then return false end
+	local directionToOtherPlayer = (otherHumanoidRootPart.Position - HumanoidRootPart.Position).unit
+	local facingDirection = HumanoidRootPart.CFrame.LookVector
+	local dotProduct = facingDirection:Dot(directionToOtherPlayer)
+	return dotProduct > 0.7
+end
+
+-- Function to check ball possession
+local function checkBallPossession()
+	if not Character then return false end
+	-- Check if the character is holding a basketball (adjust based on game structure)
+	for _, item in pairs(Character:GetChildren()) do
+		if item.Name == basketballName or item:HasTag("Ball") then
+			return true
+		end
+	end
+	return false
+end
+
+-- Update dodging based on ball possession
+local function updateDodgeStatus()
+	if autoDodgeEnabled then
+		hasBall = checkBallPossession()
+		dodgingActive = hasBall -- Dodge only when holding the ball
+		statusLabel.Text = "Status: " .. (hasBall and "Dodging (Ball)" or "Standby")
+		statusLabel.TextColor3 = hasBall and Color3.new(0, 1, 0) or Color3.new(1, 0, 0)
+	elseif not autoDodgeEnabled then -- If auto is off, status depends on manual dodging state
+		statusLabel.Text = "Status: " .. (dodgingActive and "On" or "Off")
+		statusLabel.TextColor3 = dodgingActive and Color3.new(0, 1, 0) or Color3.new(1, 0, 0)
+	end
+end
+
+
+-- Modify the avoidPlayers function
+local function avoidPlayers()
+	if not dodgingActive or not Character or not HumanoidRootPart then return end
+
+	local localTeam = LocalPlayer.Team
+	local teamsExist = hasTeams
+
+	for _, player in pairs(game.Players:GetPlayers()) do
+		if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+			local otherHumanoidRootPart = player.Character.HumanoidRootPart
+			local distance = (HumanoidRootPart.Position - otherHumanoidRootPart.Position).Magnitude
+
+			-- Team check logic
+			local shouldDodge = true
+			if teamsExist then
+				local playerTeam = player.Team
+				if localTeam and playerTeam then
+					shouldDodge = localTeam ~= playerTeam
+				else
+					shouldDodge = true -- Dodge if either has no team when teams exist
+				end
+			end
+
+			if shouldDodge and distance < withinStuds then
+				-- Existing dodging logic
+				local direction = (otherHumanoidRootPart.Position - HumanoidRootPart.Position).unit
+				local newPosition = HumanoidRootPart.Position - (direction * teleportStuds)
+
+				if raycastEnabled then
+					newPosition = getSafeTeleportPosition(otherHumanoidRootPart)
+				end
+
+				if newPosition and isSafePosition(newPosition) then
+					HumanoidRootPart.CFrame = CFrame.new(newPosition)
+				end
+			end
+		end
+	end
+end
+
+-- Helper Functions
+-- Removed teleportToRandomPlayerOnTeam
+-- Removed followPlayer
+-- Removed createTpButton
+
+-- Modify the updateTeamList function
+local function updateTeamList()
+	for _, child in pairs(teamListFrame:GetChildren()) do
+		if child:IsA("TextLabel") or child:IsA("TextButton") then
+			child:Destroy()
+		end
+	end
+
+	-- Removed tpButtons table initialization
+	local teams = game:GetService("Teams"):GetTeams()
+	hasTeams = #teams > 0 -- Update team existence check
+	local yPosition = 0
+	local localPlayer = game.Players.LocalPlayer
+
+	-- Create header showing total teams
+	local headerLabel = Instance.new("TextLabel")
+	headerLabel.Parent = teamListFrame
+	headerLabel.Size = UDim2.new(1, 0, 0, 20) -- Full width
+	headerLabel.Position = UDim2.new(0, 0, 0, yPosition)
+	headerLabel.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+	headerLabel.Text = "Total Teams: " .. #teams
+	headerLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	headerLabel.TextScaled = true
+	yPosition += 25
+
+	for _, team in pairs(teams) do
+		-- Count players in team
+		local playerCount = 0
+		for _, player in pairs(game.Players:GetPlayers()) do
+			if player.Team == team then
+				playerCount += 1
+			end
+		end
+
+		-- Create team label with border highlight if player is in team
+		local isPlayerTeam = localPlayer.Team == team
+		local teamLabel = Instance.new("TextLabel")
+		teamLabel.Parent = teamListFrame
+		teamLabel.Size = UDim2.new(1, -10, 0, 20) -- Adjusted size (full width minus padding)
+		teamLabel.Position = UDim2.new(0, 5, 0, yPosition) -- Adjusted position (added padding)
+		teamLabel.BackgroundColor3 = team.TeamColor.Color
+		teamLabel.Text = team.Name .. ": " .. playerCount
+		teamLabel.TextColor3 = Color3.fromRGB(255, 255, 255) -- White text
+		teamLabel.TextScaled = true
+		teamLabel.TextStrokeTransparency = 0.2 -- Stronger text outline
+		teamLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+
+		-- Add green border if player's team
+		if isPlayerTeam then
+			local border = Instance.new("UIStroke")
+			border.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+			border.Color = Color3.fromRGB(0, 255, 0)
+			border.Thickness = 2
+			border.Parent = teamLabel
+		end
+
+		-- Removed TP button creation
+
+		yPosition += 25
+	end
+
+	teamListFrame.CanvasSize = UDim2.new(0, 0, 0, yPosition)
+end
+
+-- Create GUI 2
+local settingsGui = Instance.new("Frame")
+settingsGui.Parent = screenGui
+settingsGui.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+settingsGui.Size = UDim2.new(0, 200, 0, 210)
+settingsGui.Visible = false
+
+-- Create GUI 2 Title
+local settingsTitle = Instance.new("TextLabel")
+settingsTitle.Parent = settingsGui
+settingsTitle.Size = UDim2.new(0, 200, 0, 30)
+settingsTitle.Position = UDim2.new(0, 0, 0, -30)
+settingsTitle.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+settingsTitle.Text = "Settings"
+settingsTitle.TextScaled = true
+
+-- Create On/Off Buttons in GUI 2
+local settingsOnButton = Instance.new("TextButton")
+settingsOnButton.Parent = settingsGui
+settingsOnButton.Size = UDim2.new(0, 80, 0, 30)
+settingsOnButton.Position = UDim2.new(0, 20, 0, 20)
+settingsOnButton.TextScaled = true
+
+local settingsOffButton = Instance.new("TextButton")
+settingsOffButton.Parent = settingsGui
+settingsOffButton.Size = UDim2.new(0, 80, 0, 30)
+settingsOffButton.Position = UDim2.new(0, 100, 0, 20)
+settingsOffButton.TextScaled = true
+
+-- Corrected button functionality
+local settingsDodgeOnButton = settingsOnButton
+local settingsDodgeOffButton = settingsOffButton
+
+-- Fix button labels and initial state
+settingsDodgeOnButton.Text = "On"
+settingsDodgeOnButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0) -- Start red (off)
+settingsDodgeOffButton.Text = "Off"
+settingsDodgeOffButton.BackgroundColor3 = Color3.fromRGB(0, 255, 0) -- Start green (on)
+
+
+-- Update GUI 2's Dodge buttons to respect Auto mode
+settingsDodgeOnButton.MouseButton1Click:Connect(function()
+	if autoButton.Text == "Auto: Off" then -- Only work if Auto is off
+		dodgingActive = true -- Activate manual dodging
+		settingsDodgeOnButton.BackgroundColor3 = Color3.new(0, 1, 0) -- Turn On button green
+		settingsDodgeOffButton.BackgroundColor3 = Color3.new(1, 0, 0) -- Turn Off button red
+		updateDodgeStatus() -- Update main status label
+	end
+end)
+
+settingsDodgeOffButton.MouseButton1Click:Connect(function()
+	if autoButton.Text == "Auto: Off" then -- Only work if Auto is off
+		dodgingActive = false -- Deactivate manual dodging
+		settingsDodgeOnButton.BackgroundColor3 = Color3.new(1, 0, 0) -- Turn On button red
+		settingsDodgeOffButton.BackgroundColor3 = Color3.new(0, 1, 0) -- Turn Off button green
+		updateDodgeStatus() -- Update main status label
+	end
+end)
+
+
+-- Modify the createStudsControl function to handle input
+local function createStudsControl(yPosition, labelText, isWithinStuds)
+	local container = Instance.new("Frame")
+	container.Parent = settingsGui
+	container.Size = UDim2.new(0, 180, 0, 30) -- Wider container
+	container.Position = UDim2.new(0, 10, 0, yPosition) -- Adjust X position
+	container.BackgroundTransparency = 1
+
+	-- Label (narrower to fit buttons)
+	local label = Instance.new("TextLabel")
+	label.Parent = container
+	label.Size = UDim2.new(0, 80, 0, 30) -- Reduced width
+	label.Position = UDim2.new(0, 0, 0, 0)
+	label.Text = labelText
+	label.TextScaled = true
+
+	-- Minus button
+	local minusButton = Instance.new("TextButton")
+	minusButton.Parent = container
+	minusButton.Size = UDim2.new(0, 30, 0, 30)
+	minusButton.Position = UDim2.new(0, 80, 0, 0) -- Position after label
+	minusButton.Text = "-"
+	minusButton.TextScaled = true
+
+	-- Value textbox
+	local valueBox = Instance.new("TextBox")
+	valueBox.Parent = container
+	valueBox.Size = UDim2.new(0, 40, 0, 30)
+	valueBox.Position = UDim2.new(0, 110, 0, 0) -- Position after minus button
+	valueBox.Text = "10"
+	valueBox.TextScaled = true
+
+	-- Plus button
+	local plusButton = Instance.new("TextButton")
+	plusButton.Parent = container
+	plusButton.Size = UDim2.new(0, 30, 0, 30)
+	plusButton.Position = UDim2.new(0, 150, 0, 0) -- Position after textbox
+	plusButton.Text = "+"
+	plusButton.TextScaled = true
+
+	-- Add button functionality
+	local function updateValue(newValue)
+		newValue = math.clamp(tonumber(newValue) or 10, 1, 100)
+		valueBox.Text = tostring(newValue)
+		if isWithinStuds then
+			withinStuds = newValue
+		else
+			teleportStuds = newValue
+		end
+	end
+
+	minusButton.MouseButton1Click:Connect(function()
+		updateValue((tonumber(valueBox.Text) or 10) - 1)
+	end)
+
+	plusButton.MouseButton1Click:Connect(function()
+		updateValue((tonumber(valueBox.Text) or 10) + 1)
+	end)
+
+	valueBox.FocusLost:Connect(function()
+		updateValue(valueBox.Text)
+	end)
+
+	return container
+end
+
+-- Update the studs control creation
+createStudsControl(60, "Within studs:", true)
+createStudsControl(100, "Away studs:", false)
+
+-- Add dodging mode toggle (Raycast Toggle)
+local enableRaycastLabel = Instance.new("TextLabel", settingsGui)
+enableRaycastLabel.Size = UDim2.new(0, 100, 0, 30)
+enableRaycastLabel.Position = UDim2.new(0, 20, 0, 140) -- Y=140
+enableRaycastLabel.Text = "Dodging Mode: Off"
+enableRaycastLabel.TextScaled = true
+
+local enableRaycastButton = Instance.new("TextButton", settingsGui)
+enableRaycastButton.Size = UDim2.new(0, 100, 0, 30)
+enableRaycastButton.Position = UDim2.new(0, 20, 0, 170) -- Y=170
+enableRaycastButton.Text = "Toggle Dodging"
+enableRaycastButton.BackgroundColor3 = Color3.new(1, 0, 0)
+enableRaycastButton.TextScaled = true
+
+enableRaycastButton.MouseButton1Click:Connect(function()
+	raycastEnabled = not raycastEnabled
+	enableRaycastButton.BackgroundColor3 = raycastEnabled and Color3.new(0, 1, 0) or Color3.new(1, 0, 0)
+	enableRaycastLabel.Text = "Dodging Mode: " .. (raycastEnabled and "On" or "Off")
+end)
+
+
+-- Add Auto Button functionality
+autoButton.MouseButton1Click:Connect(function()
+	local currentState = autoButton.Text == "Auto: On"
+	if currentState then
+		autoButton.Text = "Auto: Off"
+		autoButton.BackgroundColor3 = Color3.fromRGB(255, 165, 0) -- Orange
+		autoDodgeEnabled = false
+		dodgingActive = false -- Turn off manual dodging too when Auto is off
+		updateDodgeStatus() -- Update status based on manual state
+	else
+		autoButton.Text = "Auto: On"
+		autoButton.BackgroundColor3 = Color3.fromRGB(0, 255, 0) -- Green
+		autoDodgeEnabled = true
+		updateDodgeStatus() -- Check ball possession immediately
+	end
+end)
+
+-- Toggle Animation
+toggleButton.MouseButton1Click:Connect(function()
+	guiVisible = not guiVisible
+	settingsGui.Visible = true
+
+	-- Calculate positions relative to main GUI
+	local mainPos = frame.Position
+	local targetOffset = guiVisible and (mainPos.X.Offset - 200) or (mainPos.X.Offset - 400)
+	local targetPosition = UDim2.new(mainPos.X.Scale, targetOffset, mainPos.Y.Scale, mainPos.Y.Offset)
+
+	-- Create and play tween
+	local tween = tweenService:Create(settingsGui, TweenInfo.new(0.3), {
+		Position = targetPosition
+	})
+	tween:Play()
+
+	-- Cleanup previous connection
+	if settingsGuiConnection then
+		settingsGuiConnection:Disconnect()
+	end
+
+	-- Update position when main GUI moves
+	if guiVisible then
+		settingsGuiConnection = frame:GetPropertyChangedSignal("Position"):Connect(function()
+			local newPos = frame.Position
+			settingsGui.Position = UDim2.new(newPos.X.Scale, newPos.X.Offset - 200, newPos.Y.Scale, newPos.Y.Offset)
+		end)
+	else
+		tween.Completed:Connect(function()
+			settingsGui.Visible = false
+		end)
+	end
+end)
+
+-- Main Loops
+-- Add this function to handle character changes
+local charAddedConnection = nil
+local charChildAddedConnection = nil
+local charChildRemovedConnection = nil
+
+local function onCharacterAdded(newCharacter)
+    -- Disconnect old connections if they exist
+    if charChildAddedConnection then charChildAddedConnection:Disconnect() end
+    if charChildRemovedConnection then charChildRemovedConnection:Disconnect() end
+
+    Character = newCharacter
+    HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+    -- Removed originalPosition reset
+
+    -- Call this as soon as a character is added
+    updateDodgeStatus()
+
+    -- Connect to character events
+    charChildAddedConnection = Character.ChildAdded:Connect(function(child)
+        if child.Name == basketballName or child:HasTag("Ball") then
+            updateDodgeStatus()
+        end
+    end)
+    charChildRemovedConnection = Character.ChildRemoved:Connect(function(child)
+        if child.Name == basketballName or child:HasTag("Ball") then
+            updateDodgeStatus()
+        end
+    end)
+end
+
+-- Disconnect previous CharacterAdded connection if it exists
+if charAddedConnection then charAddedConnection:Disconnect() end
+
+charAddedConnection = LocalPlayer.CharacterAdded:Connect(onCharacterAdded)
+
+-- Initialize the Character and HumanoidRootPart if the character already exists
+if LocalPlayer.Character then
+	onCharacterAdded(LocalPlayer.Character)
+end
+
+-- Run a loop to monitor ball possession
+spawn(function()
+	while true do
+		if autoDodgeEnabled then
+			updateDodgeStatus()
+		end
+		wait(0.2) -- Adjust polling rate
+	end
+end)
+
+spawn(function()
+	while true do
+		if Character and HumanoidRootPart then
+			-- Removed teleport logic check
+			if dodgingActive then -- This now handles both auto (if ball held) and manual
+				avoidPlayers()
+			end
+		end
+		wait(0.1)
+	end
+end)
+
+spawn(function()
+	while true do
+		updateTeamList()
+		wait(2)
+	end
+end)
+
+-- Removed offButton.MouseButton1Click connection
+
+destroyButton.MouseButton1Click:Connect(function()
+	-- Turn off all systems
+	-- Removed teleportEnabled = false
+	dodgingActive = false
+	raycastEnabled = false
+	autoDodgeEnabled = false
+
+	-- Update status displays
+	statusLabel.Text = "Status: Off"
+	statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+
+	-- Cleanup connections
+	if settingsGuiConnection then settingsGuiConnection:Disconnect() end
+    if charAddedConnection then charAddedConnection:Disconnect() end
+    if charChildAddedConnection then charChildAddedConnection:Disconnect() end
+    if charChildRemovedConnection then charChildRemovedConnection:Disconnect() end
+
+	-- Destroy GUI elements
+	screenGui:Destroy()
+	settingsGui:Destroy()
+
+	-- Removed originalPosition reset logic
+end)
+
+-- Modify the updateTeamList function (Duplicate removed, this is the correct one)
+-- (No changes needed here as the previous updateTeamList modification is correct)
+
+-- Modify the avoidPlayers function for 360-degree detection (Duplicate removed)
+-- (No changes needed here as the previous avoidPlayers modification is correct)
+
+-- Update getSafeTeleportPosition for full circle check (Duplicate removed)
+-- (No changes needed here as the previous getSafeTeleportPosition modification is correct)
