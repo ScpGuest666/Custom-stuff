@@ -476,7 +476,7 @@ local function checkPlatformProximity()
     local distance = (HumanoidRootPart.Position - oppositePlatform.Position).Magnitude
     local hasBall = checkBallPossession()
 
-    if distance <= 50 and hasBall then -- No need to check cooldownActive again here
+    if distance <= 80 and hasBall then -- No need to check cooldownActive again here
         -- Teleport to platform
         local teleportPosition = oppositePlatform.Position + Vector3.new(0, 5, 0) -- Slightly above platform
         if isSafePosition(teleportPosition) then -- Check if the target spot is safe
