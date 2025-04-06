@@ -88,7 +88,7 @@ local basketballName = "Basketball" -- Adjust based on the game's object name/ta
 local dodgePattern = "Circle" -- Can be "Circle" or "ZigZag"
 local patternInterval = 0.5 -- Time between pattern moves
 local lastPatternTime = 0
-local zigzagDirection = 1 -- Alternates between 1 and -1
+local zigzagDirection = 30 -- Alternates between 1 and -1
 local circleAngle = 0
 local surroundThreshold = 2 -- Number of enemies to trigger pattern dodge
 
@@ -222,7 +222,7 @@ local function patternDodge()
         safePosition = HumanoidRootPart.Position + forwardOffset + rightOffset
     elseif dodgePattern == "ZigZag" then
         -- Zig-zag pattern perpendicular to movement
-        zigzagDirection = zigzagDirection * -1
+        zigzagDirection = zigzagDirection * -30
         safePosition = HumanoidRootPart.Position + (rightVector * zigzagDirection)
     end
 
