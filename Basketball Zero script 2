@@ -7,12 +7,10 @@ screenGui.ResetOnSpawn = false
 local frame = Instance.new("Frame")
 frame.Parent = screenGui
 frame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-frame.Size = UDim2.new(0, 200, 0, 210)
+frame.Size = UDim2.new(0, 200, 0, 210) -- Original size, might need adjustment if team list grows
 frame.Position = UDim2.new(0.5, -100, 0.5, -150)
 frame.Active = true
 frame.Draggable = true
-
--- Removed Off Button
 
 -- Create Auto Button (Moved and Resized)
 local autoButton = Instance.new("TextButton")
@@ -62,7 +60,6 @@ teamListFrame.ScrollBarThickness = 1
 teamListFrame.ScrollingDirection = Enum.ScrollingDirection.Y
 
 -- Variables
--- Removed teleportEnabled, selectedTeam, currentFollowedPlayer, originalPosition, tpButtons
 local guiVisible = false
 local tweenService = game:GetService("TweenService")
 local settingsGuiConnection = nil
@@ -87,6 +84,14 @@ local hasBall = false
 local autoDodgeEnabled = false -- Master switch from GUI 2
 local basketballName = "Basketball" -- Adjust based on the game's object name/tag
 
+-- Add these variables for pattern dodging
+local dodgePattern = "Circle" -- Can be "Circle" or "ZigZag"
+local patternInterval = 0.5 -- Time between pattern moves
+local lastPatternTime = 0
+local zigzagDirection = 1 -- Alternates between 1 and -1
+local circleAngle = 0
+local surroundThreshold = 2 -- Number of enemies to trigger pattern dodge
+
 -- Helper Functions
 -- Improved isSafePosition Function
 local function isSafePosition(position)
@@ -103,10 +108,10 @@ local function isSafePosition(position)
 	return raycastResult and (position.Y - raycastResult.Position.Y) < 10
 end
 
--- Add to avoidPlayers()
+-- Update getSafeTeleportPosition for full circle check
 local function getSafeTeleportPosition(playerHumanoidRootPart)
 	if not Character or not HumanoidRootPart then return nil end
-	local angleIncrement = math.pi / 12 -- 30 degree increments for smoother coverage
+	local angleIncrement = math.pi/12 -- 30 degree increments for smoother coverage
 	local radius = teleportStuds
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterDescendantsInstances = {Character}
@@ -126,7 +131,7 @@ local function getSafeTeleportPosition(playerHumanoidRootPart)
 	return nil
 end
 
--- Add to avoidPlayers()
+-- Add to avoidPlayers() - Not directly used by pattern dodge but useful generally
 local function isFacingTarget(otherHumanoidRootPart)
 	if not Character or not HumanoidRootPart then return false end
 	local directionToOtherPlayer = (otherHumanoidRootPart.Position - HumanoidRootPart.Position).unit
@@ -160,51 +165,144 @@ local function updateDodgeStatus()
 	end
 end
 
+-- Add this function to check movement direction
+local function isMovingForward()
+    if not Character or not HumanoidRootPart then return false end
+    local humanoid = Character:FindFirstChild("Humanoid")
+    if not humanoid then return false end
 
--- Modify the avoidPlayers function
-local function avoidPlayers()
-	if not dodgingActive or not Character or not HumanoidRootPart then return end
-
-	local localTeam = LocalPlayer.Team
-	local teamsExist = hasTeams
-
-	for _, player in pairs(game.Players:GetPlayers()) do
-		if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-			local otherHumanoidRootPart = player.Character.HumanoidRootPart
-			local distance = (HumanoidRootPart.Position - otherHumanoidRootPart.Position).Magnitude
-
-			-- Team check logic
-			local shouldDodge = true
-			if teamsExist then
-				local playerTeam = player.Team
-				if localTeam and playerTeam then
-					shouldDodge = localTeam ~= playerTeam
-				else
-					shouldDodge = true -- Dodge if either has no team when teams exist
-				end
-			end
-
-			if shouldDodge and distance < withinStuds then
-				-- Existing dodging logic
-				local direction = (otherHumanoidRootPart.Position - HumanoidRootPart.Position).unit
-				local newPosition = HumanoidRootPart.Position - (direction * teleportStuds)
-
-				if raycastEnabled then
-					newPosition = getSafeTeleportPosition(otherHumanoidRootPart)
-				end
-
-				if newPosition and isSafePosition(newPosition) then
-					HumanoidRootPart.CFrame = CFrame.new(newPosition)
-				end
-			end
-		end
-	end
+    -- Compare movement direction to character facing
+    local moveDirection = humanoid.MoveDirection
+    if moveDirection.Magnitude < 0.1 then return false end -- Not moving significantly
+    local lookVector = HumanoidRootPart.CFrame.LookVector
+    return moveDirection:Dot(lookVector) > 0.7 -- Moving mostly forward
 end
 
--- Helper Functions
--- Removed teleportToRandomPlayerOnTeam
--- Removed followPlayer
--- Removed createTpButton
+-- Add this function to check enemy density
+local function countNearbyEnemies()
+    if not Character or not HumanoidRootPart then return 0 end
+    local count = 0
+    local myTeam = LocalPlayer.Team
+
+    for _, player in pairs(game.Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            local hrp = player.Character.HumanoidRootPart
+            local distance = (HumanoidRootPart.Position - hrp.Position).Magnitude
+
+            if distance <= withinStuds then
+                local isEnemy = true
+                if hasTeams and myTeam and player.Team == myTeam then
+                    isEnemy = false -- Skip teammates if teams exist and player is on same team
+                end
+                if isEnemy then
+                    count += 1
+                end
+            end
+        end
+    end
+    return count
+end
+
+-- Modified dodging function with patterns
+local function patternDodge()
+    if not Character or not HumanoidRootPart then return end
+    if tick() - lastPatternTime < patternInterval then return end
+
+    local safePosition = nil
+    local rightVector = HumanoidRootPart.CFrame.RightVector * teleportStuds
+
+    if dodgePattern == "Circle" then
+        -- Circular motion around current position
+        circleAngle = (circleAngle + 45) % 360 -- Increment angle
+        local radius = teleportStuds
+        local radAngle = math.rad(circleAngle)
+        -- Calculate offset relative to character's facing direction
+        local forwardOffset = HumanoidRootPart.CFrame.LookVector * math.sin(radAngle) * radius
+        local rightOffset = HumanoidRootPart.CFrame.RightVector * math.cos(radAngle) * radius
+        safePosition = HumanoidRootPart.Position + forwardOffset + rightOffset
+    elseif dodgePattern == "ZigZag" then
+        -- Zig-zag pattern perpendicular to movement
+        zigzagDirection = zigzagDirection * -1
+        safePosition = HumanoidRootPart.Position + (rightVector * zigzagDirection)
+    end
+
+    -- Verify safety before teleporting
+    if safePosition and isSafePosition(safePosition) then
+        HumanoidRootPart.CFrame = CFrame.new(safePosition)
+        lastPatternTime = tick()
+    else
+        -- If calculated pattern position is unsafe, try a simple backward dodge as fallback
+        local fallbackPosition = HumanoidRootPart.Position - (HumanoidRootPart.CFrame.LookVector * teleportStuds)
+        if isSafePosition(fallbackPosition) then
+             HumanoidRootPart.CFrame = CFrame.new(fallbackPosition)
+             lastPatternTime = tick()
+        end
+    end
+end
+
+-- Updated avoidPlayers function
+local function avoidPlayers()
+    if not dodgingActive or not Character or not HumanoidRootPart then return end
+
+    -- Check conditions for pattern dodging
+    local nearbyEnemyCount = countNearbyEnemies()
+    local movingForward = isMovingForward()
+
+    -- Only activate pattern dodging when:
+    -- 1. Moving forward
+    -- 2. Surrounded by enough enemies (>= threshold)
+    -- 3. Has the ball (implicitly handled by dodgingActive check in auto mode)
+    if movingForward and nearbyEnemyCount >= surroundThreshold then
+        patternDodge()
+    else
+        -- Original dodging logic for single/fewer enemies or not moving forward
+        local enemies = {}
+        local myTeam = LocalPlayer.Team
+
+        -- Collect nearby enemies
+        for _, player in pairs(game.Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                local hrp = player.Character.HumanoidRootPart
+                local distance = (HumanoidRootPart.Position - hrp.Position).Magnitude
+
+                if distance <= withinStuds then
+                    local isEnemy = true
+                    if hasTeams and myTeam and player.Team == myTeam then
+                         isEnemy = false -- Skip teammates if teams exist and player is on same team
+                    end
+                    if isEnemy then
+                        table.insert(enemies, hrp)
+                    end
+                end
+            end
+        end
+
+        -- Dodge nearest enemy if any exist
+        if #enemies > 0 then
+            table.sort(enemies, function(a, b)
+                return (a.Position - HumanoidRootPart.Position).Magnitude <
+                       (b.Position - HumanoidRootPart.Position).Magnitude
+            end)
+
+            local nearestEnemy = enemies[1]
+            local newPosition = nil
+
+            if raycastEnabled then
+                -- Use safe teleport position finding (checks multiple directions)
+                newPosition = getSafeTeleportPosition(nearestEnemy)
+            else
+                 -- Simple backward dodge from the nearest enemy
+                local direction = (nearestEnemy.Position - HumanoidRootPart.Position).unit
+                newPosition = HumanoidRootPart.Position - (direction * teleportStuds)
+            end
+
+            if newPosition and isSafePosition(newPosition) then
+                HumanoidRootPart.CFrame = CFrame.new(newPosition)
+            end
+        end
+    end
+end
+
 
 -- Modify the updateTeamList function
 local function updateTeamList()
@@ -214,7 +312,6 @@ local function updateTeamList()
 		end
 	end
 
-	-- Removed tpButtons table initialization
 	local teams = game:GetService("Teams"):GetTeams()
 	hasTeams = #teams > 0 -- Update team existence check
 	local yPosition = 0
@@ -262,8 +359,6 @@ local function updateTeamList()
 			border.Parent = teamLabel
 		end
 
-		-- Removed TP button creation
-
 		yPosition += 25
 	end
 
@@ -274,7 +369,7 @@ end
 local settingsGui = Instance.new("Frame")
 settingsGui.Parent = screenGui
 settingsGui.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-settingsGui.Size = UDim2.new(0, 200, 0, 210)
+settingsGui.Size = UDim2.new(0, 200, 0, 300) -- Increased height for new controls
 settingsGui.Visible = false
 
 -- Create GUI 2 Title
@@ -361,6 +456,8 @@ local function createStudsControl(yPosition, labelText, isWithinStuds)
 	valueBox.Position = UDim2.new(0, 110, 0, 0) -- Position after minus button
 	valueBox.Text = "10"
 	valueBox.TextScaled = true
+	valueBox.TextEditable = true -- Ensure it's editable
+	valueBox.ClearTextOnFocus = false
 
 	-- Plus button
 	local plusButton = Instance.new("TextButton")
@@ -372,7 +469,7 @@ local function createStudsControl(yPosition, labelText, isWithinStuds)
 
 	-- Add button functionality
 	local function updateValue(newValue)
-		newValue = math.clamp(tonumber(newValue) or 10, 1, 100)
+		newValue = math.clamp(tonumber(newValue) or 10, 1, 100) -- Ensure value is number and clamped
 		valueBox.Text = tostring(newValue)
 		if isWithinStuds then
 			withinStuds = newValue
@@ -389,9 +486,23 @@ local function createStudsControl(yPosition, labelText, isWithinStuds)
 		updateValue((tonumber(valueBox.Text) or 10) + 1)
 	end)
 
-	valueBox.FocusLost:Connect(function()
-		updateValue(valueBox.Text)
+	-- Update value when Enter is pressed or focus is lost
+	valueBox.FocusLost:Connect(function(enterPressed)
+		if enterPressed then
+			updateValue(valueBox.Text)
+		else
+			-- Optional: Update even if focus is lost without pressing Enter
+			updateValue(valueBox.Text)
+		end
 	end)
+
+	-- Initialize the value
+	if isWithinStuds then
+		valueBox.Text = tostring(withinStuds)
+	else
+		valueBox.Text = tostring(teleportStuds)
+	end
+
 
 	return container
 end
@@ -404,21 +515,50 @@ createStudsControl(100, "Away studs:", false)
 local enableRaycastLabel = Instance.new("TextLabel", settingsGui)
 enableRaycastLabel.Size = UDim2.new(0, 100, 0, 30)
 enableRaycastLabel.Position = UDim2.new(0, 20, 0, 140) -- Y=140
-enableRaycastLabel.Text = "Dodging Mode: Off"
+enableRaycastLabel.Text = "Safe Dodge: Off" -- Renamed for clarity
 enableRaycastLabel.TextScaled = true
 
 local enableRaycastButton = Instance.new("TextButton", settingsGui)
 enableRaycastButton.Size = UDim2.new(0, 100, 0, 30)
 enableRaycastButton.Position = UDim2.new(0, 20, 0, 170) -- Y=170
-enableRaycastButton.Text = "Toggle Dodging"
+enableRaycastButton.Text = "Toggle Safe" -- Renamed for clarity
 enableRaycastButton.BackgroundColor3 = Color3.new(1, 0, 0)
 enableRaycastButton.TextScaled = true
 
 enableRaycastButton.MouseButton1Click:Connect(function()
 	raycastEnabled = not raycastEnabled
 	enableRaycastButton.BackgroundColor3 = raycastEnabled and Color3.new(0, 1, 0) or Color3.new(1, 0, 0)
-	enableRaycastLabel.Text = "Dodging Mode: " .. (raycastEnabled and "On" or "Off")
+	enableRaycastLabel.Text = "Safe Dodge: " .. (raycastEnabled and "On" or "Off")
 end)
+
+-- Add Pattern Selection Controls
+local patternLabel = Instance.new("TextLabel", settingsGui)
+patternLabel.Size = UDim2.new(0, 160, 0, 30)
+patternLabel.Position = UDim2.new(0, 20, 0, 200) -- Position below raycast toggle
+patternLabel.Text = "Dodge Pattern: " .. dodgePattern
+patternLabel.TextScaled = true
+patternLabel.BackgroundTransparency = 1
+patternLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local patternButton = Instance.new("TextButton", settingsGui)
+patternButton.Size = UDim2.new(0, 160, 0, 30)
+patternButton.Position = UDim2.new(0, 20, 0, 230) -- Position below pattern label
+patternButton.Text = "Switch Pattern"
+patternButton.TextScaled = true
+
+patternButton.MouseButton1Click:Connect(function()
+    dodgePattern = (dodgePattern == "Circle") and "ZigZag" or "Circle"
+    patternLabel.Text = "Dodge Pattern: " .. dodgePattern
+end)
+
+-- Add Surround Threshold Label (Value is currently hardcoded in countNearbyEnemies check)
+local surroundLabel = Instance.new("TextLabel", settingsGui)
+surroundLabel.Size = UDim2.new(0, 160, 0, 30)
+surroundLabel.Position = UDim2.new(0, 20, 0, 260) -- Position below pattern button
+surroundLabel.Text = "Surround Threshold: " .. surroundThreshold
+surroundLabel.TextScaled = true
+surroundLabel.BackgroundTransparency = 1
+surroundLabel.TextXAlignment = Enum.TextXAlignment.Left
 
 
 -- Add Auto Button functionality
@@ -428,12 +568,20 @@ autoButton.MouseButton1Click:Connect(function()
 		autoButton.Text = "Auto: Off"
 		autoButton.BackgroundColor3 = Color3.fromRGB(255, 165, 0) -- Orange
 		autoDodgeEnabled = false
-		dodgingActive = false -- Turn off manual dodging too when Auto is off
+		-- When turning Auto OFF, check the manual dodge buttons in GUI 2 to set dodgingActive state
+		if settingsDodgeOnButton.BackgroundColor3 == Color3.new(0, 1, 0) then
+			dodgingActive = true
+		else
+			dodgingActive = false
+		end
 		updateDodgeStatus() -- Update status based on manual state
 	else
 		autoButton.Text = "Auto: On"
 		autoButton.BackgroundColor3 = Color3.fromRGB(0, 255, 0) -- Green
 		autoDodgeEnabled = true
+		-- Turn off manual dodging buttons visually when Auto is ON
+		settingsDodgeOnButton.BackgroundColor3 = Color3.new(1, 0, 0)
+		settingsDodgeOffButton.BackgroundColor3 = Color3.new(0, 1, 0)
 		updateDodgeStatus() -- Check ball possession immediately
 	end
 end)
@@ -441,33 +589,52 @@ end)
 -- Toggle Animation
 toggleButton.MouseButton1Click:Connect(function()
 	guiVisible = not guiVisible
-	settingsGui.Visible = true
-
-	-- Calculate positions relative to main GUI
 	local mainPos = frame.Position
-	local targetOffset = guiVisible and (mainPos.X.Offset - 200) or (mainPos.X.Offset - 400)
-	local targetPosition = UDim2.new(mainPos.X.Scale, targetOffset, mainPos.Y.Scale, mainPos.Y.Offset)
+	local settingsCurrentPos = settingsGui.Position
 
-	-- Create and play tween
-	local tween = tweenService:Create(settingsGui, TweenInfo.new(0.3), {
-		Position = targetPosition
-	})
-	tween:Play()
-
-	-- Cleanup previous connection
-	if settingsGuiConnection then
-		settingsGuiConnection:Disconnect()
-	end
-
-	-- Update position when main GUI moves
 	if guiVisible then
+		settingsGui.Visible = true
+		-- Calculate target position to the left of the main GUI
+		local targetPosition = UDim2.new(mainPos.X.Scale, mainPos.X.Offset - settingsGui.Size.X.Offset, mainPos.Y.Scale, mainPos.Y.Offset)
+
+		-- Create and play tween
+		local tween = tweenService:Create(settingsGui, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Position = targetPosition
+		})
+		tween:Play()
+
+		-- Cleanup previous connection
+		if settingsGuiConnection then
+			settingsGuiConnection:Disconnect()
+			settingsGuiConnection = nil
+		end
+
+		-- Update position when main GUI moves
 		settingsGuiConnection = frame:GetPropertyChangedSignal("Position"):Connect(function()
 			local newPos = frame.Position
-			settingsGui.Position = UDim2.new(newPos.X.Scale, newPos.X.Offset - 200, newPos.Y.Scale, newPos.Y.Offset)
+			settingsGui.Position = UDim2.new(newPos.X.Scale, newPos.X.Offset - settingsGui.Size.X.Offset, newPos.Y.Scale, newPos.Y.Offset)
 		end)
 	else
-		tween.Completed:Connect(function()
-			settingsGui.Visible = false
+		-- Calculate target position to hide it further left
+		local targetPosition = UDim2.new(mainPos.X.Scale, mainPos.X.Offset - settingsGui.Size.X.Offset - 9000, mainPos.Y.Scale, mainPos.Y.Offset) -- Hide slightly further
+
+		-- Create and play tween
+		local tween = tweenService:Create(settingsGui, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+			Position = targetPosition
+		})
+		tween:Play()
+
+		-- Disconnect the tracking connection
+		if settingsGuiConnection then
+			settingsGuiConnection:Disconnect()
+			settingsGuiConnection = nil
+		end
+
+		-- Hide the GUI after the tween completes
+		tween.Completed:Connect(function(state)
+            if state == Enum.TweenStatus.Completed then
+			    settingsGui.Visible = false
+            end
 		end)
 	end
 end)
@@ -477,15 +644,17 @@ end)
 local charAddedConnection = nil
 local charChildAddedConnection = nil
 local charChildRemovedConnection = nil
+local humanoidDiedConnection = nil
 
 local function onCharacterAdded(newCharacter)
     -- Disconnect old connections if they exist
     if charChildAddedConnection then charChildAddedConnection:Disconnect() end
     if charChildRemovedConnection then charChildRemovedConnection:Disconnect() end
+    if humanoidDiedConnection then humanoidDiedConnection:Disconnect() end
 
     Character = newCharacter
     HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
-    -- Removed originalPosition reset
+    local humanoid = Character:WaitForChild("Humanoid")
 
     -- Call this as soon as a character is added
     updateDodgeStatus()
@@ -501,6 +670,16 @@ local function onCharacterAdded(newCharacter)
             updateDodgeStatus()
         end
     end)
+    humanoidDiedConnection = humanoid.Died:Connect(function()
+        -- Optionally reset states on death
+        dodgingActive = false
+        if autoDodgeEnabled then -- If auto was on, turn it off visually too
+             autoButton.Text = "Auto: Off"
+		     autoButton.BackgroundColor3 = Color3.fromRGB(255, 165, 0)
+             autoDodgeEnabled = false
+        end
+        updateDodgeStatus()
+    end)
 end
 
 -- Disconnect previous CharacterAdded connection if it exists
@@ -513,40 +692,47 @@ if LocalPlayer.Character then
 	onCharacterAdded(LocalPlayer.Character)
 end
 
--- Run a loop to monitor ball possession
+-- Run a loop to monitor ball possession (only needed for Auto mode)
 spawn(function()
-	while true do
+	while task.wait(0.2) do -- Use task.wait
 		if autoDodgeEnabled then
 			updateDodgeStatus()
 		end
-		wait(0.2) -- Adjust polling rate
 	end
 end)
 
+-- Main dodging/logic loop
 spawn(function()
-	while true do
-		if Character and HumanoidRootPart then
-			-- Removed teleport logic check
-			if dodgingActive then -- This now handles both auto (if ball held) and manual
+	while task.wait(0.1) do -- Use task.wait
+		if Character and HumanoidRootPart and Character.Parent and HumanoidRootPart.Parent then -- Ensure character exists
+			if dodgingActive then -- This handles both auto (if ball held) and manual
 				avoidPlayers()
 			end
+		else
+			-- Attempt to re-establish character if lost
+			if LocalPlayer.Character then
+				onCharacterAdded(LocalPlayer.Character)
+			else
+				-- Character doesn't exist, reset relevant states
+				dodgingActive = false
+				Character = nil
+				HumanoidRootPart = nil
+				updateDodgeStatus()
+			end
 		end
-		wait(0.1)
 	end
 end)
 
+-- Team list update loop
 spawn(function()
-	while true do
+	while task.wait(2) do -- Use task.wait
 		updateTeamList()
-		wait(2)
 	end
 end)
 
--- Removed offButton.MouseButton1Click connection
 
 destroyButton.MouseButton1Click:Connect(function()
 	-- Turn off all systems
-	-- Removed teleportEnabled = false
 	dodgingActive = false
 	raycastEnabled = false
 	autoDodgeEnabled = false
@@ -560,19 +746,17 @@ destroyButton.MouseButton1Click:Connect(function()
     if charAddedConnection then charAddedConnection:Disconnect() end
     if charChildAddedConnection then charChildAddedConnection:Disconnect() end
     if charChildRemovedConnection then charChildRemovedConnection:Disconnect() end
+    if humanoidDiedConnection then humanoidDiedConnection:Disconnect() end
 
 	-- Destroy GUI elements
 	screenGui:Destroy()
-	settingsGui:Destroy()
+	-- No need to destroy settingsGui separately, it's parented to screenGui
 
-	-- Removed originalPosition reset logic
+	-- Stop loops by breaking (more robust way would be flags, but this works for simple cases)
+    -- Note: Cannot directly break loops started with spawn(), they run until script termination or error.
+    -- Setting flags like `script_running = false` and checking them in loops is better practice.
 end)
 
--- Modify the updateTeamList function (Duplicate removed, this is the correct one)
--- (No changes needed here as the previous updateTeamList modification is correct)
-
--- Modify the avoidPlayers function for 360-degree detection (Duplicate removed)
--- (No changes needed here as the previous avoidPlayers modification is correct)
-
--- Update getSafeTeleportPosition for full circle check (Duplicate removed)
--- (No changes needed here as the previous getSafeTeleportPosition modification is correct)
+-- Initial setup
+updateTeamList()
+updateDodgeStatus() -- Set initial status based on default states
