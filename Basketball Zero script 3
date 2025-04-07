@@ -100,13 +100,13 @@ local platformSize = Vector3.new(5, 1, 5) -- Adjust size as needed
 
 -- *** NEW: Updated platform configurations ***
 local homePlatforms = {
-    {Position = Vector3.new(137.9130859375, 2.472541332244873, -297.4322509765625), Instance = nil},
+    {Position = Vector3.new(141.77706909179688, 17.926847457885743, -297.4322509765625), Instance = nil},
     {Position = Vector3.new(106.58293914794922, 2.480555534362793, -314.4117431640625), Instance = nil},
     {Position = Vector3.new(107.68716430664063, 2.486267566680908, -281.5829162597656), Instance = nil}
 }
 
 local awayPlatforms = {
-    {Position = Vector3.new(-133.74105834960938, 2.463141918182373, -296.72076416015627), Instance = nil},
+    {Position = Vector3.new(-141.66673278808595, 17.985946655273439, -296.72076416015627), Instance = nil},
     {Position = Vector3.new(-109.0948486328125, 2.4640417098999025, -280.7749328613281), Instance = nil},
     {Position = Vector3.new(-107.55609130859375, 2.4786033630371095, -313.7596740722656), Instance = nil}
 }
@@ -481,7 +481,7 @@ local function countEnemiesNearPlatform(platform)
                 isEnemy = false
             end
 
-            if isEnemy and distanceToPlatform <= 10 then -- Enemy within 10 studs of platform
+            if isEnemy and distanceToPlatform <= 5 then -- Enemy within 5 studs of platform ✅ 
                 enemyCount += 1
             end
         end
