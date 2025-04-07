@@ -1,0 +1,399 @@
+-- Create ScreenGui ✅ ✅ ✅ 
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+screenGui.ResetOnSpawn = false
+
+-- Create Frame
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+frame.Size = UDim2.new(0, 200, 0, 160) -- Height adjusted for Grab button
+frame.Position = UDim2.new(0.5, -100, 0.5, -80) -- Y position adjusted
+frame.Active = true
+frame.Draggable = true
+
+-- Create On Button (Auto Teleport)
+local onButton = Instance.new("TextButton")
+onButton.Parent = frame
+onButton.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+onButton.Size = UDim2.new(0, 60, 0, 30)
+onButton.Position = UDim2.new(0, 20, 0, 20)
+onButton.Text = "On"
+onButton.TextScaled = true
+
+-- Create Off Button (Auto Teleport)
+local offButton = Instance.new("TextButton")
+offButton.Parent = frame
+offButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+offButton.Size = UDim2.new(0, 60, 0, 30)
+offButton.Position = UDim2.new(0, 120, 0, 20)
+offButton.Text = "Off"
+offButton.TextScaled = true
+
+-- Create Grab Button
+local grabButton = Instance.new("TextButton")
+grabButton.Parent = frame
+grabButton.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+grabButton.Size = UDim2.new(0, 160, 0, 30)
+grabButton.Position = UDim2.new(0, 20, 0, 60)
+grabButton.Text = "Grab: Off"
+grabButton.TextColor3 = Color3.fromRGB(255, 0, 0)
+grabButton.TextScaled = true
+
+-- Create Destroy Button
+local destroyButton = Instance.new("TextButton")
+destroyButton.Parent = frame
+destroyButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+destroyButton.Size = UDim2.new(0, 160, 0, 30)
+destroyButton.Position = UDim2.new(0, 20, 0, 100)
+destroyButton.Text = "Destroy"
+destroyButton.TextScaled = true
+
+-- Create Status Indicator
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = frame
+statusLabel.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+statusLabel.Size = UDim2.new(0, 200, 0, 30)
+statusLabel.Position = UDim2.new(0, 0, 0, -30)
+statusLabel.Text = "Status: Off"
+statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+statusLabel.TextScaled = true
+
+-- Script Variables
+local teleportEnabled = false
+local grabEnabled = false
+local Players = game:GetService("Players")
+local localPlayer = Players.LocalPlayer
+local basketballName = "Basketball" -- Adjust if your ball has a different exact name
+local hasTeams = false
+local RunService = game:GetService("RunService")
+
+-- Ball possession check functions
+local function hasBall(character)
+    if not character then return false end
+    if character:FindFirstChild(basketballName) then
+        return true
+    end
+    local humanoid = character:FindFirstChildWhichIsA("Humanoid")
+    if humanoid and humanoid:GetState() ~= Enum.HumanoidStateType.Dead then
+        if character:FindFirstChildWhichIsA("Tool") then
+            return true
+        end
+    end
+    return false
+end
+
+local function localPlayerHasBall()
+    local character = localPlayer.Character
+    return character and hasBall(character)
+end
+
+-- Function to find the nearest enemy WITH the ball (for teleport attack)
+local function findNearestEnemyWithBall()
+    local localCharacter = localPlayer.Character
+    if not localCharacter then return nil end
+    local localRoot = localCharacter:FindFirstChild("HumanoidRootPart")
+    if not localRoot then return nil end
+
+    hasTeams = #game:GetService("Teams"):GetTeams() > 0
+    local myTeam = hasTeams and localPlayer.Team or nil
+
+    local closestPlayer = nil
+    local closestDistanceSqr = 10 * 10 -- (10 studs range)^2
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == localPlayer or not player.Character then continue end
+
+        local isEnemy = true
+        if hasTeams and myTeam and player.Team then
+             if player.Team == myTeam then isEnemy = false end
+        end
+
+        if isEnemy then
+            local character = player.Character
+            local humanoidRoot = character:FindFirstChild("HumanoidRootPart")
+            local humanoid = character:FindFirstChildWhichIsA("Humanoid")
+
+            if humanoid and humanoid.Health > 0 and humanoidRoot and hasBall(character) then
+                local diff = localRoot.Position - humanoidRoot.Position
+                local distanceSqr = diff.Magnitude * diff.Magnitude
+                if distanceSqr <= closestDistanceSqr then
+                    if closestPlayer == nil or distanceSqr < closestDistanceSqr then
+                         closestDistanceSqr = distanceSqr
+                         closestPlayer = player
+                    end
+                end
+            end
+        end
+    end
+    return closestPlayer
+end
+
+-- Function to find a loose ball (not held by anyone) - Modified to just return the ball instance or its Handle if it's a Tool
+local function findFreeBall()
+    if not basketballName or basketballName == "" then return nil end
+
+    local ballInstance = workspace:FindFirstChild(basketballName)
+
+    if ballInstance then
+        local ballPart = nil -- The part we can get the position from
+        if ballInstance:IsA("BasePart") then
+            ballPart = ballInstance
+        elseif ballInstance:IsA("Tool") and ballInstance:FindFirstChild("Handle") and ballInstance.Handle:IsA("BasePart") then
+             ballPart = ballInstance.Handle
+        end
+
+        -- If we found a part to get position from, check if it's held
+        if ballPart then
+            local held = false
+            if ballInstance.Parent and ballInstance.Parent:IsA("Model") and Players:GetPlayerFromCharacter(ballInstance.Parent) then
+                held = true
+            else
+               for _, player in ipairs(Players:GetPlayers()) do
+                    if player.Character and hasBall(player.Character) then
+                         if player.Character:FindFirstChild(basketballName) == ballInstance then
+                              held = true
+                              break
+                         end
+                    end
+               end
+            end
+
+            if not held then
+                -- Return the part whose position we can use
+                return ballPart
+            end
+        end
+    end
+    return nil -- Return nil if no valid, free ball part found
+end
+
+
+-- Teleport function (for attacking enemy with ball)
+local function autoTeleport()
+    local localCharacter = localPlayer.Character
+    if not localCharacter or not localCharacter:FindFirstChildWhichIsA("Humanoid") or localCharacter.Humanoid.Health <= 0 then
+        if statusLabel.Text ~= "Status: Cannot TP (Dead)" then statusLabel.Text = "Status: Cannot TP (Dead)" end
+        return false
+    end
+
+    if localPlayerHasBall() then
+        if statusLabel.Text ~= "Status: Ball Obtained" then
+            statusLabel.Text = "Status: Ball Obtained"
+            statusLabel.TextColor3 = Color3.fromRGB(0, 200, 0)
+        end
+        return false
+    end
+
+    local targetPlayer = findNearestEnemyWithBall()
+    if not targetPlayer then
+        -- Only update status if grab isn't active or didn't set a specific grab status
+        local currentStatus = statusLabel.Text
+        if not grabEnabled and currentStatus ~= "Status: Searching..." then
+            statusLabel.Text = "Status: Searching..."
+            statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+        elseif grabEnabled and currentStatus ~= "Status: Ball not found" and currentStatus ~= "Status: Grabbing Ball" then
+            -- If grab is on but didn't find a ball, let that status persist or update to searching if needed
+             if currentStatus ~= "Status: Searching..." then
+                  statusLabel.Text = "Status: Searching..."
+                  statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+             end
+        end
+        return false
+    end
+
+    local targetCharacter = targetPlayer.Character
+    local targetRoot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
+    local localRoot = localCharacter:FindFirstChild("HumanoidRootPart")
+
+    if targetRoot and localRoot then
+        local distance = 5 -- Reduced distance for attack TP
+        local desiredPosition = (targetRoot.CFrame * CFrame.new(0, 0, -distance)).Position
+        local lookAtPosition = targetRoot.Position
+        local newCFrame = CFrame.lookAt(desiredPosition, lookAtPosition)
+
+        local verticalOffset = Vector3.new(0, 0.5, 0)
+        localRoot.CFrame = newCFrame + verticalOffset
+
+        if statusLabel.Text ~= "Status: Attacking!" then
+            statusLabel.Text = "Status: Attacking!"
+            statusLabel.TextColor3 = Color3.fromRGB(0, 180, 0)
+        end
+        return true
+    else
+        if statusLabel.Text ~= "Status: Target Invalid" then
+            statusLabel.Text = "Status: Target Invalid"
+            statusLabel.TextColor3 = Color3.fromRGB(255, 100, 0)
+        end
+        return false
+    end
+end
+
+-- SIMPLIFIED grabBall function without safety checks (REPLACED)
+local function grabBall()
+    -- Initial checks: Enabled, doesn't have ball, player alive
+    if not grabEnabled then return false end
+    if localPlayerHasBall() then return false end
+    local localCharacter = localPlayer.Character
+    if not localCharacter or not localCharacter:FindFirstChildWhichIsA("Humanoid") or localCharacter.Humanoid.Health <= 0 then
+         return false -- Can't grab if dead
+    end
+    local localRoot = localCharacter:FindFirstChild("HumanoidRootPart")
+	if not localRoot then return false end
+
+    -- Find the ball part (BasePart or Handle)
+    local ballPart = findFreeBall() -- Returns the BasePart/Handle or nil
+
+    -- If no free ball found
+    if not ballPart then
+        -- Update status only if appropriate
+        local currentStatus = statusLabel.Text
+        if currentStatus ~= "Status: Ball not found" and currentStatus ~= "Status: Attacking!" and currentStatus ~= "Status: Target Invalid" then
+            statusLabel.Text = "Status: Ball not found"
+            statusLabel.TextColor3 = Color3.fromRGB(255, 150, 0) -- Orange-ish
+        end
+        return false
+    end
+
+    -- Ball found, teleport directly
+    local ballPosition = ballPart.Position
+    -- Directly teleport slightly above the ball, facing the ball
+    local targetPosition = ballPosition + Vector3.new(0, 3, 0) -- 3 studs above
+    localRoot.CFrame = CFrame.new(targetPosition, ballPosition) -- Position near ball, look at ball
+
+    -- Update status
+    if statusLabel.Text ~= "Status: Grabbing Ball" then
+         statusLabel.Text = "Status: Grabbing Ball"
+         statusLabel.TextColor3 = Color3.fromRGB(0, 200, 255) -- Light blue
+    end
+    return true -- Grab attempt initiated
+end
+
+
+-- Main loop using RunService.Heartbeat (Updated with Priority)
+local connection = nil
+local function startLoop()
+    if connection then connection:Disconnect() end
+    connection = RunService.Heartbeat:Connect(function(deltaTime)
+        if not screenGui or not screenGui.Parent then
+             if connection then connection:Disconnect() end
+             teleportEnabled = false
+             grabEnabled = false
+             return
+        end
+
+        if not teleportEnabled and not grabEnabled then return end
+
+        -- Priority 1: Attack enemies with balls (if teleport is enabled)
+        if teleportEnabled then
+            if autoTeleport() then return end -- If attack TP happens, skip grab
+        end
+
+        -- Priority 2: Grab free balls (if grab is enabled)
+        if grabEnabled then
+            if grabBall() then return end -- If grab TP happens, frame is done
+        end
+
+        -- Fallback Status Update (if no action taken but should be searching)
+        if (teleportEnabled or grabEnabled) and not localPlayerHasBall() then
+             local currentStatus = statusLabel.Text
+             if currentStatus ~= "Status: Searching..." and
+                currentStatus ~= "Status: Ball not found" and
+                currentStatus ~= "Status: Attacking!" and
+                currentStatus ~= "Status: Grabbing Ball" and
+                currentStatus ~= "Status: Target Invalid" and
+                currentStatus ~= "Status: Cannot TP (Dead)" then
+                 statusLabel.Text = "Status: Searching..."
+                 statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+             end
+        end
+    end)
+end
+
+local function stopLoop()
+     if connection then connection:Disconnect() end
+     connection = nil
+end
+
+
+-- Button Handlers (Remain the same)
+onButton.MouseButton1Click:Connect(function()
+    if not teleportEnabled then
+        teleportEnabled = true
+        onButton.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
+        offButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+        if not connection then startLoop() end
+    end
+end)
+
+offButton.MouseButton1Click:Connect(function()
+    if teleportEnabled then
+        teleportEnabled = false
+        onButton.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+        offButton.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+        if not grabEnabled then
+            stopLoop()
+            statusLabel.Text = "Status: Off"
+            statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+        else
+             local currentStatus = statusLabel.Text
+             if currentStatus == "Status: Attacking!" or currentStatus == "Status: Target Invalid" then
+                   statusLabel.Text = "Status: Ball Search"
+                   statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+             end
+        end
+    end
+end)
+
+grabButton.MouseButton1Click:Connect(function()
+    grabEnabled = not grabEnabled
+
+    if grabEnabled then
+        grabButton.Text = "Grab: On"
+        grabButton.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
+        grabButton.TextColor3 = Color3.fromRGB(0, 255, 0)
+        if not connection then startLoop() end
+        if not localPlayerHasBall() and (statusLabel.Text == "Status: Off" or statusLabel.Text == "Status: Searching...") then
+             statusLabel.Text = "Status: Ball Search"
+             statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+        end
+    else
+        grabButton.Text = "Grab: Off"
+        grabButton.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+        grabButton.TextColor3 = Color3.fromRGB(255, 0, 0)
+        if not teleportEnabled then
+            stopLoop()
+            statusLabel.Text = "Status: Off"
+            statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+        else
+             local currentStatus = statusLabel.Text
+             if currentStatus == "Status: Grabbing Ball" or currentStatus == "Status: Ball not found" or currentStatus == "Status: Ball Search" then
+                 statusLabel.Text = "Status: Searching..."
+                 statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+            end
+        end
+    end
+end)
+
+destroyButton.MouseButton1Click:Connect(function()
+    teleportEnabled = false
+    grabEnabled = false
+    stopLoop()
+    if screenGui and screenGui.Parent then
+       screenGui:Destroy()
+    end
+end)
+
+-- Clean up connection if script is removed unexpectedly
+if script:IsA("Script") or script:IsA("LocalScript") then
+    script.Destroying:Connect(function()
+        teleportEnabled = false
+        grabEnabled = false
+        stopLoop()
+        if screenGui and screenGui.Parent then
+            screenGui:Destroy()
+        end
+    end)
+end
+
+-- print("Basketball Auto-Teleport & Simplified Grab Script Loaded")
