@@ -94,11 +94,25 @@ local surroundThreshold = 2 -- Number of enemies to trigger pattern dodge
 
 -- Add these variables for Dunk functionality
 local dunkEnabled = false
-local homePlatform = nil
-local awayPlatform = nil
+-- local homePlatform = nil -- REMOVED
+-- local awayPlatform = nil -- REMOVED
 local platformSize = Vector3.new(5, 1, 5) -- Adjust size as needed
 
--- Add these variables for Teleport functionality <<< NEW >>>
+-- *** NEW: Updated platform configurations ***
+local homePlatforms = {
+    {Position = Vector3.new(137.9130859375, 2.472541332244873, -297.4322509765625), Instance = nil},
+    {Position = Vector3.new(106.58293914794922, 2.480555534362793, -314.4117431640625), Instance = nil},
+    {Position = Vector3.new(107.68716430664063, 2.486267566680908, -281.5829162597656), Instance = nil}
+}
+
+local awayPlatforms = {
+    {Position = Vector3.new(-133.74105834960938, 2.463141918182373, -296.72076416015627), Instance = nil},
+    {Position = Vector3.new(-109.0948486328125, 2.4640417098999025, -280.7749328613281), Instance = nil},
+    {Position = Vector3.new(-107.55609130859375, 2.4786033630371095, -313.7596740722656), Instance = nil}
+}
+
+
+-- Add these variables for Teleport functionality
 local lastTeleportTime = 0
 local cooldownDuration = 5
 local cooldownActive = false
@@ -377,45 +391,66 @@ local function updateTeamList()
 	teamListFrame.CanvasSize = UDim2.new(0, 0, 0, yPosition)
 end
 
--- Function to create dunk platforms
+-- *** NEW: Modified platform creation function ***
 local function createDunkPlatforms()
-    if homePlatform and homePlatform.Parent then homePlatform:Destroy() end
-    if awayPlatform and awayPlatform.Parent then awayPlatform:Destroy() end
+    -- Clear existing platforms
+    for _, platformData in ipairs(homePlatforms) do
+        if platformData.Instance and platformData.Instance.Parent then
+            platformData.Instance:Destroy()
+            platformData.Instance = nil -- Clear reference
+        end
+    end
+    for _, platformData in ipairs(awayPlatforms) do
+        if platformData.Instance and platformData.Instance.Parent then
+            platformData.Instance:Destroy()
+            platformData.Instance = nil -- Clear reference
+        end
+    end
 
     -- Find team colors
     local homeTeamColor = Color3.new(1, 0, 0) -- Default red
     local awayTeamColor = Color3.new(0, 0, 1) -- Default blue
 
-    for _, team in pairs(game:GetService("Teams"):GetTeams()) do
-        if team.Name:lower() == "home" then
-            homeTeamColor = team.TeamColor.Color
-        elseif team.Name:lower() == "away" then
-            awayTeamColor = team.TeamColor.Color
+    local teamsService = game:GetService("Teams")
+    local currentTeams = teamsService:GetTeams()
+    if #currentTeams > 0 then
+        for _, team in pairs(currentTeams) do
+            if team.Name:lower() == "home" then
+                homeTeamColor = team.TeamColor.Color
+            elseif team.Name:lower() == "away" then
+                awayTeamColor = team.TeamColor.Color
+            end
         end
     end
 
-    -- Create Home Platform (Left)
-    homePlatform = Instance.new("Part")
-    homePlatform.Name = "HomeDunkPlatform"
-    homePlatform.Size = platformSize
-    homePlatform.Position = Vector3.new(137.9130859375, 2.472541332244873, -297.4322509765625)
-    homePlatform.Anchored = true
-    homePlatform.CanCollide = true
-    homePlatform.Color = homeTeamColor
-    homePlatform.Parent = workspace
+    -- Create home platforms
+    for i, platformData in ipairs(homePlatforms) do
+        local platform = Instance.new("Part")
+        platform.Name = "HomeDunkPlatform_" .. i
+        platform.Size = platformSize
+        platform.Position = platformData.Position
+        platform.Anchored = true
+        platform.CanCollide = true
+        platform.Color = homeTeamColor
+        platform.Parent = workspace
+        platformData.Instance = platform -- Store reference
+    end
 
-    -- Create Away Platform (Right)
-    awayPlatform = Instance.new("Part")
-    awayPlatform.Name = "AwayDunkPlatform"
-    awayPlatform.Size = platformSize
-    awayPlatform.Position = Vector3.new(-133.74105834960938, 2.463141918182373, -296.72076416015627)
-    awayPlatform.Anchored = true
-    awayPlatform.CanCollide = true
-    awayPlatform.Color = awayTeamColor
-    awayPlatform.Parent = workspace
+    -- Create away platforms
+    for i, platformData in ipairs(awayPlatforms) do
+        local platform = Instance.new("Part")
+        platform.Name = "AwayDunkPlatform_" .. i
+        platform.Size = platformSize
+        platform.Position = platformData.Position
+        platform.Anchored = true
+        platform.CanCollide = true
+        platform.Color = awayTeamColor
+        platform.Parent = workspace
+        platformData.Instance = platform -- Store reference
+    end
 end
 
--- Function to create the countdown label <<< NEW >>>
+-- Function to create the countdown label
 local function createCountdownLabel()
     countdownLabel.Name = "CooldownLabel" -- Give it a name
     countdownLabel.Parent = screenGui
@@ -429,35 +464,57 @@ local function createCountdownLabel()
     countdownLabel.ZIndex = 10 -- Ensure it's visible above other UI potentially
 end
 
--- Function to get the opposite platform <<< NEW >>>
-local function getOppositePlatform()
-    if not LocalPlayer.Team then return nil end
-    if not homePlatform or not awayPlatform then return nil end -- Ensure platforms exist
+-- Function to count enemies near a specific platform
+local function countEnemiesNearPlatform(platform)
+    if not platform or not platform.Parent then return 0 end
+    local enemyCount = 0
+    local myTeam = LocalPlayer.Team
 
-    local myTeamName = LocalPlayer.Team.Name:lower()
+    for _, player in pairs(game.Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            local hrp = player.Character.HumanoidRootPart
+            local distanceToPlatform = (hrp.Position - platform.Position).Magnitude
 
-    if myTeamName == "home" then
-        return awayPlatform
-    elseif myTeamName == "away" then
-        return homePlatform
+            -- Check if player is enemy and within camping range
+            local isEnemy = true
+            if hasTeams and myTeam and player.Team == myTeam then
+                isEnemy = false
+            end
+
+            if isEnemy and distanceToPlatform <= 10 then -- Enemy within 10 studs of platform
+                enemyCount += 1
+            end
+        end
     end
-    return nil
+    return enemyCount
 end
 
--- Function to handle platform teleportation <<< NEW >>>
+-- *** NEW: Updated platform selection logic ***
+local function getAvailablePlatform(platformList)
+    for i, platformData in ipairs(platformList) do
+        -- Check if instance exists and is in the workspace
+        if platformData.Instance and platformData.Instance.Parent then
+            -- Check for nearby enemies
+            if countEnemiesNearPlatform(platformData.Instance) == 0 then
+                return platformData.Instance -- Return the first available platform Part
+            end
+        end
+    end
+    return nil -- No available platform found
+end
+
+-- *** NEW: Updated Teleportation Check ***
 local function checkPlatformProximity()
-    -- Ensure basic requirements are met
     if not Character or not HumanoidRootPart then return end
     if not dunkEnabled then return end
     if not LocalPlayer.Team then return end
 
-    -- Check cooldown state first
     local currentTime = tick()
     if cooldownActive then
         local remaining = cooldownDuration - (currentTime - lastTeleportTime)
         if remaining > 0 then
             countdownLabel.Text = string.format("TP Cooldown: %.1fs", remaining)
-            countdownLabel.Visible = true -- Ensure visibility during cooldown
+            countdownLabel.Visible = true
         else
             cooldownActive = false
             countdownLabel.Visible = false
@@ -466,19 +523,39 @@ local function checkPlatformProximity()
         return -- Don't check for teleport if cooldown is active or just ended this tick
     end
 
-    -- Get the platform to teleport to
-    local oppositePlatform = getOppositePlatform()
-    if not oppositePlatform or not oppositePlatform.Parent then -- Also check if platform exists in workspace
-        return
+    -- Determine which list of platforms to check based on player's team
+    local oppositePlatformsList = nil
+    if LocalPlayer.Team.Name:lower() == "home" then
+        oppositePlatformsList = awayPlatforms
+    elseif LocalPlayer.Team.Name:lower() == "away" then
+        oppositePlatformsList = homePlatforms
+    else
+        return -- Player not on home or away team?
     end
 
-    -- Check conditions for teleportation
-    local distance = (HumanoidRootPart.Position - oppositePlatform.Position).Magnitude
+    -- Find the first available platform from the list
+    local targetPlatform = getAvailablePlatform(oppositePlatformsList)
+
+    -- Handle case where no platform is available
+    if not targetPlatform then
+        countdownLabel.Text = "All platforms occupied!"
+        countdownLabel.Visible = true
+        return
+    else
+         -- If a platform IS available and cooldown ended, hide the label (unless cooldown starts again)
+        if not cooldownActive then
+           countdownLabel.Visible = false
+           countdownLabel.Text = ""
+        end
+    end
+
+    -- Check conditions for teleportation (only if an available platform was found)
+    local distance = (HumanoidRootPart.Position - targetPlatform.Position).Magnitude
     local hasBall = checkBallPossession()
 
-    if distance <= 200 and hasBall then -- No need to check cooldownActive again here
-        -- Teleport to platform
-        local teleportPosition = oppositePlatform.Position + Vector3.new(0, 5, 0) -- Slightly above platform
+    if distance <= 200 and hasBall then
+        -- Teleport to the selected platform
+        local teleportPosition = targetPlatform.Position + Vector3.new(0, 5, 0) -- Slightly above platform
         if isSafePosition(teleportPosition) then -- Check if the target spot is safe
             HumanoidRootPart.CFrame = CFrame.new(teleportPosition)
             lastTeleportTime = currentTime
@@ -493,7 +570,7 @@ end
 local settingsGui = Instance.new("Frame")
 settingsGui.Parent = screenGui
 settingsGui.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-settingsGui.Size = UDim2.new(0, 200, 0, 300) -- Height is okay for now
+settingsGui.Size = UDim2.new(0, 200, 0, 300) -- Height adjusted slightly for new controls
 settingsGui.Visible = false
 
 -- Create GUI 2 Title
@@ -703,8 +780,19 @@ dunkButton.MouseButton1Click:Connect(function()
     if dunkEnabled then
         pcall(createDunkPlatforms) -- Use pcall in case teams haven't loaded yet
     else
-        if homePlatform and homePlatform.Parent then homePlatform:Destroy() end
-        if awayPlatform and awayPlatform.Parent then awayPlatform:Destroy() end
+		-- Destroy platforms when dunk is disabled
+		for _, platformData in ipairs(homePlatforms) do
+			if platformData.Instance and platformData.Instance.Parent then
+				platformData.Instance:Destroy()
+				platformData.Instance = nil
+			end
+		end
+		for _, platformData in ipairs(awayPlatforms) do
+			if platformData.Instance and platformData.Instance.Parent then
+				platformData.Instance:Destroy()
+				platformData.Instance = nil
+			end
+		end
         -- Reset cooldown if dunk is disabled
         cooldownActive = false
         if countdownLabel then countdownLabel.Visible = false; countdownLabel.Text = "" end
@@ -838,15 +926,25 @@ local function onCharacterAdded(newCharacter)
 		     autoButton.BackgroundColor3 = Color3.fromRGB(255, 165, 0)
              autoDodgeEnabled = false
         end
-        -- Destroy dunk platforms on death if they exist
-        if homePlatform and homePlatform.Parent then homePlatform:Destroy() end
-		if awayPlatform and awayPlatform.Parent then awayPlatform:Destroy() end
+        -- *** NEW: Destroy all dunk platforms on death ***
+        for _, platformData in ipairs(homePlatforms) do
+            if platformData.Instance and platformData.Instance.Parent then
+                platformData.Instance:Destroy()
+                platformData.Instance = nil
+            end
+        end
+        for _, platformData in ipairs(awayPlatforms) do
+            if platformData.Instance and platformData.Instance.Parent then
+                platformData.Instance:Destroy()
+                platformData.Instance = nil
+            end
+        end
         dunkEnabled = false -- Reset dunk state
         if dunkButton then -- Update dunk button visual state
             dunkButton.Text = "Dunk: Off"
             dunkButton.BackgroundColor3 = Color3.new(1, 0, 0)
         end
-        -- Reset cooldown on death <<< NEW >>>
+        -- Reset cooldown on death
         cooldownActive = false
         if countdownLabel then countdownLabel.Visible = false; countdownLabel.Text = "" end
         lastTeleportTime = 0
@@ -890,15 +988,25 @@ spawn(function()
 				dodgingActive = false
 				Character = nil
 				HumanoidRootPart = nil
-				-- Destroy dunk platforms if character lost
-                if homePlatform and homePlatform.Parent then homePlatform:Destroy() end
-                if awayPlatform and awayPlatform.Parent then awayPlatform:Destroy() end
+				-- *** NEW: Destroy all dunk platforms if character lost ***
+                for _, platformData in ipairs(homePlatforms) do
+                    if platformData.Instance and platformData.Instance.Parent then
+                        platformData.Instance:Destroy()
+                        platformData.Instance = nil
+                    end
+                end
+                for _, platformData in ipairs(awayPlatforms) do
+                    if platformData.Instance and platformData.Instance.Parent then
+                        platformData.Instance:Destroy()
+                        platformData.Instance = nil
+                    end
+                end
                 dunkEnabled = false -- Reset dunk state
                 if dunkButton then -- Update dunk button visual state
                     dunkButton.Text = "Dunk: Off"
                     dunkButton.BackgroundColor3 = Color3.new(1, 0, 0)
                 end
-                -- Reset cooldown if character lost <<< NEW >>>
+                -- Reset cooldown if character lost
                 cooldownActive = false
                 if countdownLabel then countdownLabel.Visible = false; countdownLabel.Text = "" end
                 lastTeleportTime = 0
@@ -920,7 +1028,7 @@ spawn(function()
 	end
 end)
 
--- Teleportation check loop <<< NEW >>>
+-- Teleportation check loop
 spawn(function()
     pcall(createCountdownLabel) -- Initialize the countdown label safely
     while task.wait(0.1) do
@@ -937,17 +1045,27 @@ destroyButton.MouseButton1Click:Connect(function()
 	raycastEnabled = false
 	autoDodgeEnabled = false
     dunkEnabled = false
-    cooldownActive = false -- <<< NEW >>>
+    cooldownActive = false
 
 	-- Update status displays
 	statusLabel.Text = "Status: Off"
 	statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
 
-	-- Destroy dunk platforms
-	if homePlatform and homePlatform.Parent then homePlatform:Destroy() end
-	if awayPlatform and awayPlatform.Parent then awayPlatform:Destroy() end
+	-- *** NEW: Destroy all dunk platforms ***
+    for _, platformData in ipairs(homePlatforms) do
+        if platformData.Instance and platformData.Instance.Parent then
+            platformData.Instance:Destroy()
+            platformData.Instance = nil
+        end
+    end
+    for _, platformData in ipairs(awayPlatforms) do
+        if platformData.Instance and platformData.Instance.Parent then
+            platformData.Instance:Destroy()
+            platformData.Instance = nil
+        end
+    end
 
-    -- Destroy countdown label <<< NEW >>>
+    -- Destroy countdown label
     if countdownLabel and countdownLabel.Parent then countdownLabel:Destroy() end
 
 	-- Cleanup connections
@@ -967,4 +1085,4 @@ end)
 -- Initial setup
 updateTeamList()
 updateDodgeStatus() -- Set initial status based on default states
--- No need to create platforms initially, wait for user interaction
+-- No need to create platforms initially, wait for user interaction (Dunk button)
