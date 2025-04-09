@@ -100,15 +100,15 @@ local platformSize = Vector3.new(5, 1, 5) -- Adjust size as needed
 
 -- *** NEW: Updated platform configurations ***
 local homePlatforms = {
-    {Position = Vector3.new(141.77706909179688, 17.926847457885743, -297.4322509765625), Instance = nil},
-    {Position = Vector3.new(106.58293914794922, 2.480555534362793, -314.4117431640625), Instance = nil},
-    {Position = Vector3.new(107.68716430664063, 2.486267566680908, -281.5829162597656), Instance = nil}
+    {Position = Vector3.new(141.77706909179688, 17.926847457885743, -297.4322509765625), Instance = nil, TouchDetector = nil}, -- Added TouchDetector field
+    {Position = Vector3.new(106.58293914794922, 2.480555534362793, -314.4117431640625), Instance = nil, TouchDetector = nil},
+    {Position = Vector3.new(107.68716430664063, 2.486267566680908, -281.5829162597656), Instance = nil, TouchDetector = nil}
 }
 
 local awayPlatforms = {
-    {Position = Vector3.new(-141.66673278808595, 17.985946655273439, -296.72076416015627), Instance = nil},
-    {Position = Vector3.new(-109.0948486328125, 2.4640417098999025, -280.7749328613281), Instance = nil},
-    {Position = Vector3.new(-107.55609130859375, 2.4786033630371095, -313.7596740722656), Instance = nil}
+    {Position = Vector3.new(-141.66673278808595, 17.985946655273439, -296.72076416015627), Instance = nil, TouchDetector = nil}, -- Added TouchDetector field
+    {Position = Vector3.new(-109.0948486328125, 2.4640417098999025, -280.7749328613281), Instance = nil, TouchDetector = nil},
+    {Position = Vector3.new(-107.55609130859375, 2.4786033630371095, -313.7596740722656), Instance = nil, TouchDetector = nil}
 }
 
 
@@ -117,6 +117,10 @@ local lastTeleportTime = 0
 local cooldownDuration = 5
 local cooldownActive = false
 local countdownLabel = Instance.new("TextLabel")
+
+-- *** NEW: Add collision control variables at the top ***
+local collisionConnections = {}
+local COLLISION_THRESHOLD_OFFSET = 0.5
 
 -- Helper Functions
 -- Improved isSafePosition Function
@@ -391,19 +395,66 @@ local function updateTeamList()
 	teamListFrame.CanvasSize = UDim2.new(0, 0, 0, yPosition)
 end
 
--- *** NEW: Modified platform creation function ***
+-- *** NEW: Add new collision management functions ***
+local function managePlatformCollision(platformData)
+    if not platformData.Instance or not platformData.TouchDetector then return end
+
+    -- Check if a connection already exists for this platform and disconnect it
+    if collisionConnections[platformData.Instance] then
+        collisionConnections[platformData.Instance]:Disconnect()
+        collisionConnections[platformData.Instance] = nil
+    end
+
+    collisionConnections[platformData.Instance] = game:GetService("RunService").Heartbeat:Connect(function()
+        -- Ensure Character and HumanoidRootPart are still valid within the Heartbeat connection
+        if not Character or not HumanoidRootPart or not Character.Parent or not HumanoidRootPart.Parent then
+            -- If character is invalid, try to disconnect and stop the check for this platform
+            if collisionConnections[platformData.Instance] then
+                 collisionConnections[platformData.Instance]:Disconnect()
+                 collisionConnections[platformData.Instance] = nil
+            end
+            return
+        end
+
+        -- Get detector position
+        local detectorPos = platformData.TouchDetector.Position
+        local thresholdY = detectorPos.Y + COLLISION_THRESHOLD_OFFSET
+
+        -- Toggle collision based on player position
+        local shouldCollide = HumanoidRootPart.Position.Y > thresholdY
+        if platformData.Instance.CanCollide ~= shouldCollide then -- Only update if state changes
+            platformData.Instance.CanCollide = shouldCollide
+
+            -- Visual feedback (optional) - Update transparency based on collision state
+            platformData.Instance.Transparency = platformData.Instance.CanCollide and 0.2 or 0.5
+        end
+    end)
+end
+
+local function stopAllCollisionChecks()
+    for platform, connection in pairs(collisionConnections) do
+        connection:Disconnect()
+    end
+    collisionConnections = {} -- Clear the table after disconnecting all
+end
+
+
+-- *** NEW: Update platform creation in `createDunkPlatforms()` ***
 local function createDunkPlatforms()
-    -- Clear existing platforms
+    -- Clear existing platforms AND collision connections
+    stopAllCollisionChecks() -- Stop checks before potentially destroying platforms they monitor
     for _, platformData in ipairs(homePlatforms) do
         if platformData.Instance and platformData.Instance.Parent then
-            platformData.Instance:Destroy()
-            platformData.Instance = nil -- Clear reference
+            platformData.Instance:Destroy() -- This should also destroy the child TouchDetector
+            platformData.Instance = nil
+            platformData.TouchDetector = nil -- Clear reference
         end
     end
     for _, platformData in ipairs(awayPlatforms) do
         if platformData.Instance and platformData.Instance.Parent then
             platformData.Instance:Destroy()
-            platformData.Instance = nil -- Clear reference
+            platformData.Instance = nil
+            platformData.TouchDetector = nil -- Clear reference
         end
     end
 
@@ -430,10 +481,24 @@ local function createDunkPlatforms()
         platform.Size = platformSize
         platform.Position = platformData.Position
         platform.Anchored = true
-        platform.CanCollide = true
+        platform.CanCollide = false -- Start with collision disabled
+        platform.Transparency = 0.5 -- Makes platform semi-transparent
         platform.Color = homeTeamColor
         platform.Parent = workspace
         platformData.Instance = platform -- Store reference
+
+        -- Add touch detector
+        local touchDetector = Instance.new("Part")
+        touchDetector.Name = "TouchDetector"
+        touchDetector.Size = Vector3.new(platformSize.X, 1, platformSize.Z) -- Detector size
+        touchDetector.Position = platform.Position + Vector3.new(0, platformSize.Y / 2 + 0.5, 0) -- Position slightly above platform center (Y/2 + half detector height)
+        touchDetector.Anchored = true
+        touchDetector.CanCollide = false
+        touchDetector.Transparency = 1 -- Invisible
+        touchDetector.Parent = platform -- Parent detector to platform for easier cleanup
+
+        -- Store both parts in platform data
+        platformData.TouchDetector = touchDetector
     end
 
     -- Create away platforms
@@ -443,10 +508,24 @@ local function createDunkPlatforms()
         platform.Size = platformSize
         platform.Position = platformData.Position
         platform.Anchored = true
-        platform.CanCollide = true
+        platform.CanCollide = false -- Start with collision disabled
+        platform.Transparency = 0.5 -- Makes platform semi-transparent
         platform.Color = awayTeamColor
         platform.Parent = workspace
         platformData.Instance = platform -- Store reference
+
+         -- Add touch detector
+        local touchDetector = Instance.new("Part")
+        touchDetector.Name = "TouchDetector"
+        touchDetector.Size = Vector3.new(platformSize.X, 1, platformSize.Z) -- Detector size
+        touchDetector.Position = platform.Position + Vector3.new(0, platformSize.Y / 2 + 0.5, 0) -- Position slightly above platform center (Y/2 + half detector height)
+        touchDetector.Anchored = true
+        touchDetector.CanCollide = false
+        touchDetector.Transparency = 1 -- Invisible
+        touchDetector.Parent = platform -- Parent detector to platform for easier cleanup
+
+        -- Store both parts in platform data
+        platformData.TouchDetector = touchDetector
     end
 end
 
@@ -481,7 +560,7 @@ local function countEnemiesNearPlatform(platform)
                 isEnemy = false
             end
 
-            if isEnemy and distanceToPlatform <= 5 then -- Enemy within 5 studs of platform ✅ 
+            if isEnemy and distanceToPlatform <= 5 then -- Enemy within 5 studs of platform ✅
                 enemyCount += 1
             end
         end
@@ -772,32 +851,53 @@ dunkButton.Text = "Dunk: Off"
 dunkButton.TextScaled = true
 dunkButton.BackgroundColor3 = Color3.new(1, 0, 0)
 
+-- *** NEW: Update the dunk toggle button ***
 dunkButton.MouseButton1Click:Connect(function()
     dunkEnabled = not dunkEnabled
     dunkButton.Text = "Dunk: " .. (dunkEnabled and "On" or "Off")
     dunkButton.BackgroundColor3 = dunkEnabled and Color3.new(0, 1, 0) or Color3.new(1, 0, 0)
 
     if dunkEnabled then
-        pcall(createDunkPlatforms) -- Use pcall in case teams haven't loaded yet
+        pcall(function() -- Wrap in pcall for safety
+            createDunkPlatforms()
+            -- Start collision management for all platforms
+            for _, platformData in ipairs(homePlatforms) do
+                if platformData.Instance then -- Check if platform was successfully created
+                    managePlatformCollision(platformData)
+                end
+            end
+            for _, platformData in ipairs(awayPlatforms) do
+                 if platformData.Instance then -- Check if platform was successfully created
+                    managePlatformCollision(platformData)
+                 end
+            end
+        end)
     else
-		-- Destroy platforms when dunk is disabled
-		for _, platformData in ipairs(homePlatforms) do
-			if platformData.Instance and platformData.Instance.Parent then
-				platformData.Instance:Destroy()
-				platformData.Instance = nil
-			end
-		end
-		for _, platformData in ipairs(awayPlatforms) do
-			if platformData.Instance and platformData.Instance.Parent then
-				platformData.Instance:Destroy()
-				platformData.Instance = nil
-			end
-		end
+        stopAllCollisionChecks() -- Stop collision checks *before* destroying platforms
+        -- Destroy platforms when dunk is disabled
+        for _, platformData in ipairs(homePlatforms) do
+            if platformData.Instance and platformData.Instance.Parent then -- Check if instance exists before destroying
+                platformData.Instance:Destroy()
+            end
+             platformData.Instance = nil -- Clear references regardless
+             platformData.TouchDetector = nil
+        end
+        for _, platformData in ipairs(awayPlatforms) do
+            if platformData.Instance and platformData.Instance.Parent then -- Check if instance exists before destroying
+                platformData.Instance:Destroy()
+            end
+             platformData.Instance = nil -- Clear references regardless
+             platformData.TouchDetector = nil
+        end
         -- Reset cooldown if dunk is disabled
         cooldownActive = false
-        if countdownLabel then countdownLabel.Visible = false; countdownLabel.Text = "" end
+        if countdownLabel then
+            countdownLabel.Visible = false
+            countdownLabel.Text = ""
+        end
     end
 end)
+
 
 -- Add Surround Threshold Label (Positioned below Dunk)
 local surroundLabel = Instance.new("TextLabel", settingsGui)
@@ -859,12 +959,15 @@ toggleButton.MouseButton1Click:Connect(function()
 
 		-- Update position when main GUI moves
 		settingsGuiConnection = frame:GetPropertyChangedSignal("Position"):Connect(function()
-			local newPos = frame.Position
-			settingsGui.Position = UDim2.new(newPos.X.Scale, newPos.X.Offset - settingsGui.Size.X.Offset, newPos.Y.Scale, newPos.Y.Offset)
+            if settingsGui.Visible then -- Only update if visible
+			    local newPos = frame.Position
+			    settingsGui.Position = UDim2.new(newPos.X.Scale, newPos.X.Offset - settingsGui.Size.X.Offset, newPos.Y.Scale, newPos.Y.Offset)
+            end
 		end)
 	else
-		-- Calculate target position to hide it further left
-		local targetPosition = UDim2.new(mainPos.X.Scale, mainPos.X.Offset - settingsGui.Size.X.Offset - 9000, mainPos.Y.Scale, mainPos.Y.Offset) -- Hide slightly further
+		-- Calculate target position to hide it based on current main GUI position
+        local currentMainPos = frame.Position
+		local targetPosition = UDim2.new(currentMainPos.X.Scale, currentMainPos.X.Offset - settingsGui.Size.X.Offset - settingsGui.Size.X.Offset, currentMainPos.Y.Scale, currentMainPos.Y.Offset) -- Animate off-screen relative to current main GUI
 
 		-- Create and play tween
 		local tween = tweenService:Create(settingsGui, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
@@ -880,7 +983,7 @@ toggleButton.MouseButton1Click:Connect(function()
 
 		-- Hide the GUI after the tween completes
 		tween.Completed:Connect(function(state)
-            if state == Enum.TweenStatus.Completed then
+            if state == Enum.TweenStatus.Completed and not guiVisible then -- Check guiVisible state again in case it was toggled back quickly
 			    settingsGui.Visible = false
             end
 		end)
@@ -926,18 +1029,22 @@ local function onCharacterAdded(newCharacter)
 		     autoButton.BackgroundColor3 = Color3.fromRGB(255, 165, 0)
              autoDodgeEnabled = false
         end
-        -- *** NEW: Destroy all dunk platforms on death ***
+
+        -- *** NEW: Stop collision checks and destroy all dunk platforms on death ***
+        stopAllCollisionChecks() -- Stop heartbeat loops first
         for _, platformData in ipairs(homePlatforms) do
             if platformData.Instance and platformData.Instance.Parent then
                 platformData.Instance:Destroy()
-                platformData.Instance = nil
             end
+            platformData.Instance = nil
+            platformData.TouchDetector = nil
         end
         for _, platformData in ipairs(awayPlatforms) do
             if platformData.Instance and platformData.Instance.Parent then
                 platformData.Instance:Destroy()
-                platformData.Instance = nil
             end
+             platformData.Instance = nil
+             platformData.TouchDetector = nil
         end
         dunkEnabled = false -- Reset dunk state
         if dunkButton then -- Update dunk button visual state
@@ -988,18 +1095,21 @@ spawn(function()
 				dodgingActive = false
 				Character = nil
 				HumanoidRootPart = nil
-				-- *** NEW: Destroy all dunk platforms if character lost ***
+				-- *** NEW: Stop collision checks and destroy all dunk platforms if character lost ***
+                stopAllCollisionChecks() -- Stop heartbeat loops first
                 for _, platformData in ipairs(homePlatforms) do
                     if platformData.Instance and platformData.Instance.Parent then
                         platformData.Instance:Destroy()
-                        platformData.Instance = nil
                     end
+                    platformData.Instance = nil
+                    platformData.TouchDetector = nil
                 end
                 for _, platformData in ipairs(awayPlatforms) do
                     if platformData.Instance and platformData.Instance.Parent then
                         platformData.Instance:Destroy()
-                        platformData.Instance = nil
                     end
+                    platformData.Instance = nil
+                    platformData.TouchDetector = nil
                 end
                 dunkEnabled = false -- Reset dunk state
                 if dunkButton then -- Update dunk button visual state
@@ -1023,7 +1133,16 @@ spawn(function()
 		updateTeamList()
 		-- Optionally recreate platforms if teams/colors change and dunk is enabled
 		if dunkEnabled then
-			pcall(createDunkPlatforms) -- Use pcall in case teams service/teams are unavailable temporarily
+			pcall(function() -- Use pcall in case teams service/teams are unavailable temporarily
+                createDunkPlatforms()
+                -- Restart collision management for newly created platforms
+                for _, platformData in ipairs(homePlatforms) do
+                    if platformData.Instance then managePlatformCollision(platformData) end
+                end
+                for _, platformData in ipairs(awayPlatforms) do
+                    if platformData.Instance then managePlatformCollision(platformData) end
+                end
+            end)
 		end
 	end
 end)
@@ -1051,18 +1170,21 @@ destroyButton.MouseButton1Click:Connect(function()
 	statusLabel.Text = "Status: Off"
 	statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
 
-	-- *** NEW: Destroy all dunk platforms ***
+	-- *** NEW: Stop collision checks and destroy all dunk platforms ***
+    stopAllCollisionChecks() -- Stop heartbeat loops first
     for _, platformData in ipairs(homePlatforms) do
         if platformData.Instance and platformData.Instance.Parent then
             platformData.Instance:Destroy()
-            platformData.Instance = nil
         end
+        platformData.Instance = nil
+        platformData.TouchDetector = nil
     end
     for _, platformData in ipairs(awayPlatforms) do
         if platformData.Instance and platformData.Instance.Parent then
             platformData.Instance:Destroy()
-            platformData.Instance = nil
         end
+        platformData.Instance = nil
+        platformData.TouchDetector = nil
     end
 
     -- Destroy countdown label
@@ -1079,7 +1201,7 @@ destroyButton.MouseButton1Click:Connect(function()
 	screenGui:Destroy()
 	-- No need to destroy settingsGui separately, it's parented to screenGui
 
-	-- Stop loops implicitly by script destruction
+	-- Stop loops implicitly by script destruction (though connections are explicitly cleaned now)
 end)
 
 -- Initial setup
