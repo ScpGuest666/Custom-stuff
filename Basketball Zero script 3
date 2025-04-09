@@ -938,7 +938,7 @@ end)
 toggleButton.MouseButton1Click:Connect(function()
 	guiVisible = not guiVisible
 	local mainPos = frame.Position
-	local settingsCurrentPos = settingsGui.Position
+	--local settingsCurrentPos = settingsGui.Position -- No longer needed for hiding calculation
 
 	if guiVisible then
 		settingsGui.Visible = true
@@ -965,9 +965,9 @@ toggleButton.MouseButton1Click:Connect(function()
             end
 		end)
 	else
-		-- Calculate target position to hide it based on current main GUI position
-        local currentMainPos = frame.Position
-		local targetPosition = UDim2.new(currentMainPos.X.Scale, currentMainPos.X.Offset - settingsGui.Size.X.Offset - settingsGui.Size.X.Offset, currentMainPos.Y.Scale, currentMainPos.Y.Offset) -- Animate off-screen relative to current main GUI
+        -- *** START OF CORRECTED HIDING LOGIC ***
+		-- Calculate target position to hide it completely off-screen
+		local targetPosition = UDim2.new(0, -settingsGui.AbsoluteSize.X - 50, mainPos.Y.Scale, mainPos.Y.Offset)
 
 		-- Create and play tween
 		local tween = tweenService:Create(settingsGui, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
@@ -983,10 +983,11 @@ toggleButton.MouseButton1Click:Connect(function()
 
 		-- Hide the GUI after the tween completes
 		tween.Completed:Connect(function(state)
-            if state == Enum.TweenStatus.Completed and not guiVisible then -- Check guiVisible state again in case it was toggled back quickly
-			    settingsGui.Visible = false
-            end
+			if state == Enum.TweenStatus.Completed and not guiVisible then -- Check guiVisible state again
+				settingsGui.Visible = false
+			end
 		end)
+        -- *** END OF CORRECTED HIDING LOGIC ***
 	end
 end)
 
