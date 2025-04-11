@@ -122,6 +122,86 @@ local function cleanupPlatform(platform)
     end
 end
 
+local function createConfirmationDialog(message, parentGui)
+    local dialogGui = Instance.new("ScreenGui")
+    dialogGui.Name = "ConfirmationDialog"
+    dialogGui.Parent = parentGui
+    dialogGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    dialogGui.ResetOnSpawn = false
+
+    local background = Instance.new("Frame")
+    background.Size = UDim2.new(0.3, 0, 0.15, 0)
+    background.Position = UDim2.new(0.35, 0, 0.425, 0)
+    background.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    background.BorderSizePixel = 0
+    background.Parent = dialogGui
+
+    local messageLabel = Instance.new("TextLabel")
+    messageLabel.Size = UDim2.new(1, -20, 0.6, -10)
+    messageLabel.Position = UDim2.new(0, 10, 0, 5)
+    messageLabel.BackgroundTransparency = 1
+    messageLabel.Text = message
+    messageLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    messageLabel.TextScaled = true
+    messageLabel.Parent = background
+
+    local buttonFrame = Instance.new("Frame")
+    buttonFrame.Size = UDim2.new(1, -20, 0.4, -10)
+    buttonFrame.Position = UDim2.new(0, 10, 0.6, 5)
+    buttonFrame.BackgroundTransparency = 1
+    buttonFrame.Parent = background
+
+    local yesButton = Instance.new("TextButton")
+    yesButton.Size = UDim2.new(0.4, 0, 1, 0)
+    yesButton.Position = UDim2.new(0, 0, 0, 0)
+    yesButton.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+    yesButton.Text = "Yes"
+    yesButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    yesButton.TextScaled = true
+    yesButton.Parent = buttonFrame
+
+    local noButton = Instance.new("TextButton")
+    noButton.Size = UDim2.new(0.4, 0, 1, 0)
+    noButton.Position = UDim2.new(0.6, 0, 0, 0)
+    noButton.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+    noButton.Text = "No"
+    noButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    noButton.TextScaled = true
+    noButton.Parent = buttonFrame
+
+    local timeout = 3 -- Seconds
+    local chosen = false
+    local connection
+
+    local function cleanup()
+        chosen = true
+        if connection then
+            connection:Disconnect()
+        end
+        dialogGui:Destroy()
+    end
+
+    connection = game:GetService("RunService").Heartbeat:Connect(function(deltaTime)
+        if not chosen then
+            timeout = timeout - deltaTime
+            if timeout <= 0 then
+                cleanup()
+            end
+        end
+    end)
+
+    yesButton.MouseButton1Click:Connect(function()
+        cleanup()
+        -- Yes callback will be added here later
+    end)
+
+    noButton.MouseButton1Click:Connect(function()
+        cleanup()
+    end)
+
+    return yesButton
+end
+
 local function addPlatformToScrollFrame(platformName)
     local button = Instance.new("TextButton")
     button.Parent = scrollFrame
@@ -130,7 +210,7 @@ local function addPlatformToScrollFrame(platformName)
     button.TextScaled = true
     button.BackgroundColor3 = Color3.fromRGB(150, 150, 255)
 
-    -- New minus button
+    -- Minus button
     local minusButton = Instance.new("TextButton")
     minusButton.Parent = button
     minusButton.Size = UDim2.new(0, 20, 1, 0)
@@ -139,7 +219,7 @@ local function addPlatformToScrollFrame(platformName)
     minusButton.TextScaled = true
     minusButton.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
 
-    -- New plus button
+    -- Plus button
     local plusButton = Instance.new("TextButton")
     plusButton.Parent = button
     plusButton.Size = UDim2.new(0, 20, 1, 0)
@@ -148,6 +228,7 @@ local function addPlatformToScrollFrame(platformName)
     plusButton.TextScaled = true
     plusButton.BackgroundColor3 = Color3.fromRGB(100, 255, 100)
 
+    -- Existing play button (unchanged)
     local playButton = Instance.new("TextButton")
     playButton.Parent = button
     playButton.Size = UDim2.new(0, 50, 1, 0)
@@ -155,6 +236,24 @@ local function addPlatformToScrollFrame(platformName)
     playButton.Text = "Play"
     playButton.TextScaled = true
     playButton.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+
+    -- Minus button click handler
+    minusButton.MouseButton1Click:Connect(function()
+        local platformNumber = button.Text:match("%d+")
+        local yesButton = createConfirmationDialog(
+            "Are you sure you want to remove Platform "..platformNumber.."?", 
+            screenGui
+        )
+    end)
+
+    -- Plus button click handler
+    plusButton.MouseButton1Click:Connect(function()
+        local platformNumber = button.Text:match("%d+")
+        local yesButton = createConfirmationDialog(
+            "Are you sure you want to add a new platform from Platform "..platformNumber.."?", 
+            screenGui
+        )
+    end)
 
     playButton.MouseButton1Click:Connect(function()
         if replaying then return end
@@ -535,7 +634,7 @@ recordButton.MouseButton1Click:Connect(function()
                     humanoid.MoveToFinished:Wait()
                 end
             else
-                -- Handle cases where humanoid or rootPart are missing or invalid
+                -- Handle cases where humanoid or HumanoidRootPart are missing or invalid
                 warn("Humanoid or HumanoidRootPart is missing or invalid.")
             end
         else
