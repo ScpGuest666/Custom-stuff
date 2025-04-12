@@ -86,7 +86,6 @@ local humanoid = character:WaitForChild("Humanoid") -- Get the Humanoid
 local platforms = {}
 local yellowPlatforms = {}
 local platformData = {}
-local platformCounter = 0
 local lastPosition = nil
 local replayThread
 local yellowToRedMapping = {} -- Mapping of yellow platforms to red platforms
@@ -172,9 +171,31 @@ end
 local function deletePlatformAtIndex(index)
     if index < 1 or index > #platforms then return end
     
+    -- Store reference before removal
     local platform = platforms[index]
+    
+    -- Cleanup before removing from array
     cleanupPlatform(platform, index)
-    refreshPlatformNumbers()
+    
+    -- Rebuild scroll frame with proper indices
+    scrollFrame:ClearAllChildren()
+    local uiListLayout = Instance.new("UIListLayout")
+    uiListLayout.Parent = scrollFrame
+    uiListLayout.Padding = UDim.new(0, 5)
+    
+    -- Rebuild buttons with correct numbering
+    for i, plat in ipairs(platforms) do
+        addPlatformToScrollFrame("Platform "..i)
+    end
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, #platforms * 30)
+    
+    -- Update all platform labels
+    for i, p in ipairs(platforms) do
+        local billboard = p:FindFirstChildOfClass("BillboardGui")
+        if billboard then
+            billboard.TextLabel.Text = tostring(i)
+        end
+    end
 end
 
 local function cleanupPlatform(platform)
@@ -412,140 +433,139 @@ local function addPlatformToScrollFrame(platformName)
         replaying = true
         shouldStopReplay = false
 
-        -- Extract platform number safely
-        local platformNumber = tonumber(button.Text:match("%d+"))
-        if not platformNumber or platformNumber < 1 or platformNumber > #platforms then
-            statusLabel.Text = "Status: Invalid platform index"
-            statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
-            return
-        end
+        -- Get position in array from button order
+        local buttonIndex = table.find(scrollFrame:GetChildren(), button)
+        local platformIndex = buttonIndex - 1  -- Account for UIListLayout
 
-        local platform = platforms[platformNumber]
+        if platformIndex > 0 and platformIndex <= #platforms then
+            -- Use platformIndex instead of parsed number
+            local platform = platforms[platformIndex]
 
-        -- Update initial status
-        statusLabel.Text = string.format("Starting playback from Platform %d", platformNumber)
-        statusLabel.TextColor3 = Color3.fromRGB(0, 0, 255)
+            -- Update initial status
+            statusLabel.Text = string.format("Starting playback from Platform %d", platformIndex)
+            statusLabel.TextColor3 = Color3.fromRGB(0, 0, 255)
 
-        -- Walk to the platform before replaying (Pathfinding Integrated)
-        local function walkToPlatform(destination)
-            local humanoid = character:WaitForChild("Humanoid")
-            local rootPart = character:WaitForChild("HumanoidRootPart")
+            -- Walk to the platform before replaying (Pathfinding Integrated)
+            local function walkToPlatform(destination)
+                local humanoid = character:WaitForChild("Humanoid")
+                local rootPart = character:WaitForChild("HumanoidRootPart")
 
-            -- Ensure the Humanoid is alive and can move
-            if not humanoid or humanoid.Health <= 0 then
-                return
-            end
+                -- Ensure the Humanoid is alive and can move
+                if not humanoid or humanoid.Health <= 0 then
+                    return
+                end
 
-            local path = PathfindingService:CreatePath()
-            path:ComputeAsync(rootPart.Position, destination)
+                local path = PathfindingService:CreatePath()
+                path:ComputeAsync(rootPart.Position, destination)
 
-            if path.Status == Enum.PathStatus.Success then
-                local waypoints = path:GetWaypoints()
-                for _, waypoint in ipairs(waypoints) do
-                    if shouldStopReplay then break end
-                    humanoid:MoveTo(waypoint.Position)
-                    if waypoint.Action == Enum.PathWaypointAction.Jump then
-                        humanoid.Jump = true
+                if path.Status == Enum.PathStatus.Success then
+                    local waypoints = path:GetWaypoints()
+                    for _, waypoint in ipairs(waypoints) do
+                        if shouldStopReplay then break end
+                        humanoid:MoveTo(waypoint.Position)
+                        if waypoint.Action == Enum.PathWaypointAction.Jump then
+                            humanoid.Jump = true
+                        end
+                        humanoid.MoveToFinished:Wait()
                     end
+                else
+                    -- Fallback: Directly move to the destination if pathfinding fails
+                    humanoid:MoveTo(destination)
                     humanoid.MoveToFinished:Wait()
                 end
-            else
-                -- Fallback: Directly move to the destination if pathfinding fails
-                humanoid:MoveTo(destination)
-                humanoid.MoveToFinished:Wait()
             end
-        end
 
-        -- Replay logic for sequential platforms (Improved)
-        local function replayPlatforms(startIndex)
-            totalPlatformsToPlay = #platforms -- Total platforms
-            currentPlatformIndex = startIndex -- Starting point
+            -- Replay logic for sequential platforms (Improved)
+            local function replayPlatforms(startIndex)
+                totalPlatformsToPlay = #platforms -- Total platforms
+                currentPlatformIndex = startIndex -- Starting point
 
-            for i = startIndex, #platforms do
-                if shouldStopReplay then break end
-                
-                -- Update status with absolute position
-                statusLabel.Text = string.format("Playing from Platform %d/%d", currentPlatformIndex, totalPlatformsToPlay)
-                statusLabel.TextColor3 = Color3.fromRGB(0, 0, 255)
-                
-                local platform = platforms[i]
-                -- Walk to platform using pathfinding
-                walkToPlatform(platform.Position + Vector3.new(0, 3, 0))
-                local movements = platformData[platform]
-                if movements then
-                    --print("Movement data type check:", typeof(movements[1].position), typeof(movements[1].orientation)) -- Debug print
-                    for j = 1, #movements - 1 do
-                        if shouldStopReplay then break end
-
-                        local startMovement = movements[j]
-                        local endMovement = movements[j + 1]
-                        endMovement.isJumping = startMovement.isJumping
-
-                        local startTime = tick()
-
-                        -- Calculate duration based on distance and a speed factor
-                        local distance = (endMovement.position - startMovement.position).magnitude
-                        local speedFactor = 0.01  -- Adjust this for desired replay speed (higher = faster)
-                        local duration = distance * speedFactor
-
-                        -- Minimum duration to prevent division by zero or extremely fast replays
-                        duration = math.max(duration, 0.01)
-
-                        local endTime = startTime + duration
-
-                        while tick() < endTime do
+                for i = startIndex, #platforms do
+                    if shouldStopReplay then break end
+                    
+                    -- Update status with absolute position
+                    statusLabel.Text = string.format("Playing from Platform %d/%d", currentPlatformIndex, totalPlatformsToPlay)
+                    statusLabel.TextColor3 = Color3.fromRGB(0, 0, 255)
+                    
+                    local platform = platforms[i]
+                    -- Walk to platform using pathfinding
+                    walkToPlatform(platform.Position + Vector3.new(0, 3, 0))
+                    local movements = platformData[platform]
+                    if movements then
+                        --print("Movement data type check:", typeof(movements[1].position), typeof(movements[1].orientation)) -- Debug print
+                        for j = 1, #movements - 1 do
                             if shouldStopReplay then break end
-                            local alpha = (tick() - startTime) / duration
-                            alpha = math.min(alpha, 1)
 
-                            local interpolatedPosition = startMovement.position:Lerp(endMovement.position, alpha)
-                            
-                            -- Fixed orientation interpolation
-                            local interpolatedOrientation = CFrame.fromEulerAnglesXYZ(
-                                math.rad(startMovement.orientation.X), 
-                                math.rad(startMovement.orientation.Y), 
-                                math.rad(startMovement.orientation.Z)
-                            ):Lerp(
-                                CFrame.fromEulerAnglesXYZ(
-                                    math.rad(endMovement.orientation.X),
-                                    math.rad(endMovement.orientation.Y),
-                                    math.rad(endMovement.orientation.Z)
-                                ), 
-                                alpha
-                            )
+                            local startMovement = movements[j]
+                            local endMovement = movements[j + 1]
+                            endMovement.isJumping = startMovement.isJumping
 
-                            character:SetPrimaryPartCFrame(
-                                CFrame.new(interpolatedPosition) * interpolatedOrientation
-                            )
+                            local startTime = tick()
 
-                            if endMovement.isJumping then
-                                humanoid.Jump = true
+                            -- Calculate duration based on distance and a speed factor
+                            local distance = (endMovement.position - startMovement.position).magnitude
+                            local speedFactor = 0.01  -- Adjust this for desired replay speed (higher = faster)
+                            local duration = distance * speedFactor
+
+                            -- Minimum duration to prevent division by zero or extremely fast replays
+                            duration = math.max(duration, 0.01)
+
+                            local endTime = startTime + duration
+
+                            while tick() < endTime do
+                                if shouldStopReplay then break end
+                                local alpha = (tick() - startTime) / duration
+                                alpha = math.min(alpha, 1)
+
+                                local interpolatedPosition = startMovement.position:Lerp(endMovement.position, alpha)
+                                
+                                -- Fixed orientation interpolation
+                                local interpolatedOrientation = CFrame.fromEulerAnglesXYZ(
+                                    math.rad(startMovement.orientation.X), 
+                                    math.rad(startMovement.orientation.Y), 
+                                    math.rad(startMovement.orientation.Z)
+                                ):Lerp(
+                                    CFrame.fromEulerAnglesXYZ(
+                                        math.rad(endMovement.orientation.X),
+                                        math.rad(endMovement.orientation.Y),
+                                        math.rad(endMovement.orientation.Z)
+                                    ), 
+                                    alpha
+                                )
+
+                                character:SetPrimaryPartCFrame(
+                                    CFrame.new(interpolatedPosition) * interpolatedOrientation
+                                )
+
+                                if endMovement.isJumping then
+                                    humanoid.Jump = true
+                                end
+
+                                RunService.Heartbeat:Wait()
                             end
-
-                            RunService.Heartbeat:Wait()
                         end
                     end
+                    
+                    currentPlatformIndex += 1 -- Move to next platform index
+                end
+                -- Final status update
+                if not shouldStopReplay then
+                    statusLabel.Text = "Status: Completed all platforms"
+                    statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+                    task.wait(1)
                 end
                 
-                currentPlatformIndex += 1 -- Move to next platform index
+                statusLabel.Text = "Status: Idle"
+                statusLabel.TextColor3 = Color3.fromRGB(0, 0, 0)
+                replaying = false
             end
-            -- Final status update
-            if not shouldStopReplay then
-                statusLabel.Text = "Status: Completed all platforms"
-                statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
-                task.wait(1)
-            end
-            
-            statusLabel.Text = "Status: Idle"
-            statusLabel.TextColor3 = Color3.fromRGB(0, 0, 0)
-            replaying = false
-        end
 
-        -- Start new replay in a tracked thread
-        currentReplayThread = task.spawn(function()
-            replayPlatforms(platformNumber)
-            currentReplayThread = nil
-        end)
+            -- Start new replay in a tracked thread
+            currentReplayThread = task.spawn(function()
+                replayPlatforms(platformIndex)
+                currentReplayThread = nil
+            end)
+        end
     end)
 end
 
@@ -648,7 +668,6 @@ local function deserializePlatformData(jsonData)
     platforms = {}
     yellowPlatforms = {}
     yellowToRedMapping = {}
-    platformCounter = 0
 
     -- Clear scroll frame and recreate UIListLayout
     scrollFrame:ClearAllChildren()
@@ -657,7 +676,7 @@ local function deserializePlatformData(jsonData)
     uiListLayout.Padding = UDim.new(0, 5)
 
     -- Load red platforms (updated movement processing)
-    for _, platformInfo in ipairs(data.redPlatforms) do
+    for i, platformInfo in ipairs(data.redPlatforms) do
         local platform = Instance.new("Part")
         platform.Size = Vector3.new(5, 1, 5)
         platform.Position = Vector3.new(platformInfo.position.X, platformInfo.position.Y, platformInfo.position.Z)
@@ -680,11 +699,10 @@ local function deserializePlatformData(jsonData)
 
         platformData[platform] = restoredMovements  -- Store converted movements
 
-        addTextLabelToPlatform(platform, #platforms + 1)
+        addTextLabelToPlatform(platform, i)
         table.insert(platforms, platform)
 
-        platformCounter += 1
-        addPlatformToScrollFrame("Platform " .. platformCounter)
+        addPlatformToScrollFrame("Platform " .. i)
     end
 
     -- Load yellow platforms and mappings
@@ -697,7 +715,7 @@ local function deserializePlatformData(jsonData)
         yellowPlatform.CanCollide = false
         yellowPlatform.Parent = workspace
 
-        addTextLabelToPlatform(yellowPlatform, data.mappings[i])
+        addTextLabelToPlatform(yellowPlatform, data.mappings[i], platforms)
         table.insert(yellowPlatforms, yellowPlatform)
 
         -- Rebuild yellowToRedMapping
@@ -720,7 +738,6 @@ player.CharacterAdded:Connect(function(newCharacter)
     statusLabel.TextColor3 = Color3.fromRGB(0, 0, 0)
 
     if recording then
-        platformCounter = 0
         platforms = {}
         yellowPlatforms = {}
         platformData = {}
@@ -744,6 +761,24 @@ local function calculatePath(start, goal)
     local path = PathfindingService:CreatePath()
     path:ComputeAsync(start, goal)
     return path
+end
+
+-- Function to add text label to a platform (with platforms table passed)
+local function addTextLabelToPlatform(platform, platformNumber, platforms)
+    local billboardGui = Instance.new("BillboardGui")
+    billboardGui.Size = UDim2.new(1, 0, 0.5, 0)
+    billboardGui.StudsOffset = Vector3.new(0, 3, 0)
+    billboardGui.AlwaysOnTop = true
+
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Size = UDim2.new(1, 0, 1, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    textLabel.TextScaled = true
+    textLabel.Text = tostring(platformNumber)
+    textLabel.Parent = billboardGui
+
+    billboardGui.Parent = platform
 end
 
 -- Button Functions
@@ -785,9 +820,10 @@ recordButton.MouseButton1Click:Connect(function()
            character:SetPrimaryPartCFrame(CFrame.new(character.PrimaryPart.Position)) -- Added to prevent errors when no yellow platforms available
         end
 
-        platformCounter += 1
+        local platformNumber = #platforms + 1  -- Use array length instead of counter
+
         local platform = Instance.new("Part")
-        platform.Name = "Platform " .. platformCounter
+        platform.Name = "Platform " .. platformNumber
         platform.Size = Vector3.new(5, 1, 5)
         platform.Position = character.PrimaryPart.Position - Vector3.new(0, 3, 0)
         platform.Anchored = true
@@ -796,12 +832,12 @@ recordButton.MouseButton1Click:Connect(function()
         platform.Parent = workspace
 
         -- Add text label to the platform
-        addTextLabelToPlatform(platform, platformCounter)
+        addTextLabelToPlatform(platform, platformNumber)
 
         table.insert(platforms, platform)
         platformData[platform] = {}
 
-        addPlatformToScrollFrame("Platform " .. platformCounter)
+        addPlatformToScrollFrame("Platform " .. platformNumber)
         scrollFrame.CanvasSize = UDim2.new(0, 0, 0, #platforms * 30)
 
         -- Start recording movement, orientation, and jump state
@@ -835,7 +871,8 @@ stopRecordButton.MouseButton1Click:Connect(function()
         yellowPlatform.Parent = workspace
 
         -- Add text label to the yellow platform
-        addTextLabelToPlatform(yellowPlatform, platformCounter)
+        local platformNumber = #platforms
+        addTextLabelToPlatform(yellowPlatform, platformNumber)
 
         table.insert(yellowPlatforms, yellowPlatform)
         yellowToRedMapping[yellowPlatform] = platforms[#platforms] -- Map yellow platform to the last red platform
@@ -864,12 +901,22 @@ destroyButton.MouseButton1Click:Connect(function()
     for _, yellowPlatform in ipairs(yellowPlatforms) do
         yellowPlatform:Destroy()
     end
+
+    -- Reset all counters and data
     platforms = {}
     yellowPlatforms = {}
     platformData = {}
     yellowToRedMapping = {}
-    platformCounter = 0
-    screenGui:Destroy()
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+
+    -- Clear and reset scroll frame
+    scrollFrame:ClearAllChildren()
+    local uiListLayout = Instance.new("UIListLayout")
+    uiListLayout.Parent = scrollFrame
+    uiListLayout.Padding = UDim.new(0, 5)
+
+    statusLabel.Text = "Status: All platforms destroyed"
+    statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
 end)
 
 -- Modified delete button to only handle last platform
@@ -935,7 +982,7 @@ local ALLOWED_HOSTS = {
 
 loadButton.MouseButton1Click:Connect(function()
     local input = pasteTextBox.Text
-    
+
     -- Clear existing platforms FIRST
     if #platforms > 0 or #yellowPlatforms > 0 then
         -- Destroy physical parts
@@ -945,21 +992,20 @@ loadButton.MouseButton1Click:Connect(function()
         for _, yellowPlatform in ipairs(yellowPlatforms) do
             yellowPlatform:Destroy()
         end
-        
+
         -- Reset all data structures
         platforms = {}
         yellowPlatforms = {}
         platformData = {}
         yellowToRedMapping = {}
-        platformCounter = 0
-        
+
         -- Clear scroll list
         scrollFrame:ClearAllChildren()
         local uiListLayout = Instance.new("UIListLayout")
         uiListLayout.Parent = scrollFrame
         uiListLayout.Padding = UDim.new(0, 5)
         scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
-        
+
         statusLabel.Text = "Status: Cleared old platforms"
         statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
         wait(0.5) -- Give visual feedback
