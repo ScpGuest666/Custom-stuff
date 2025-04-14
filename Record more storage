@@ -777,42 +777,11 @@ loadButton.Position = UDim2.new(0, 10, 0, 230) -- Adjust position as needed
 loadButton.Text = "Load"
 loadButton.TextScaled = true
 
--- Add a new button to combine chunks
-local combineChunksButton = Instance.new("TextButton")
-combineChunksButton.Parent = screenGui
-combineChunksButton.BackgroundColor3 = Color3.fromRGB(150, 150, 255)
-combineChunksButton.Size = UDim2.new(0, 90, 0, 30)
-combineChunksButton.Position = UDim2.new(0, 120, 0, 230)  -- Next to the load button
-combineChunksButton.Text = "Add Chunk"
-combineChunksButton.TextScaled = true
-
--- Create a storage for chunks being loaded
-local loadingChunks = {}
-
-combineChunksButton.MouseButton1Click:Connect(function()
-    local input = pasteTextBox.Text
-    if input ~= "" then
-        local success, chunk = pcall(function()
-            return HttpService:JSONDecode(input)
-        end)
-        
-        if success and type(chunk) == "table" and chunk.redPlatforms then
-            table.insert(loadingChunks, chunk)
-            statusLabel.Text = string.format("Added chunk %d. Add more or press Load to combine", #loadingChunks)
-            statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
-            pasteTextBox.Text = ""  -- Clear the text box for next chunk
-        else
-            statusLabel.Text = "Invalid chunk data format"
-            statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
-        end
-    else
-        statusLabel.Text = "Please paste chunk data first"
-        statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
-    end
-end)
-
 -- Modify the load button to handle combined chunks and URL loading
 loadButton.MouseButton1Click:Connect(function()
+
+    local loadingChunks = {}
+
     -- If we have loading chunks, combine them
     if #loadingChunks > 0 then
         -- Combine all chunks into one data structure
@@ -848,7 +817,7 @@ loadButton.MouseButton1Click:Connect(function()
         -- Clear the loading chunks
         loadingChunks = {}
         statusLabel.Text = "Combined chunks loaded successfully"
-        statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+        statusLabel.TextColor3 = Color3.fromRGB(0, 255,0)
     else
         -- Handle stacked JSON objects
         local input = pasteTextBox.Text
@@ -1016,19 +985,4 @@ loadButton.MouseButton1Click:Connect(function()
             end
         end
     end
-end)
-
--- Add a clear chunks button
-local clearChunksButton = Instance.new("TextButton")
-clearChunksButton.Parent = screenGui
-clearChunksButton.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
-clearChunksButton.Size = UDim2.new(0, 90, 0, 30)
-clearChunksButton.Position = UDim2.new(0, 220, 0, 230)  -- Next to combine button
-clearChunksButton.Text = "Clear Chunks"
-clearChunksButton.TextScaled = true
-
-clearChunksButton.MouseButton1Click:Connect(function()
-    loadingChunks = {}
-    statusLabel.Text = "Loading chunks cleared"
-    statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
 end)
