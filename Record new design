@@ -1,0 +1,1337 @@
+-- Services (from original script, may overlap with target, keep original structure)
+local Players = game:GetService("Players")
+local PathfindingService = game:GetService("PathfindingService")
+local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+-- NOTE: UserInputService was in target script's header but not used by original logic, so omitting for clarity unless needed later.
+
+-- Variables for recording and platforms (from original script)
+local recording = false
+local replaying = false
+local player = game.Players.LocalPlayer -- Using original reference
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid") -- Get the Humanoid
+-- NOTE: rootPart was defined in target script header, adding here for consistency if original logic implicitly uses it via character.PrimaryPart
+local rootPart = character:WaitForChild("HumanoidRootPart")
+local platforms = {}
+local yellowPlatforms = {}
+local platformData = {}
+local platformCounter = 0
+local lastPosition = nil
+-- local replayThread -- Original name, replaced by currentReplayCoroutine in target UI block, but logic uses currentReplayThread
+local yellowToRedMapping = {} -- Mapping of yellow platforms to red platforms
+
+-- Add these variables at the top with other declarations (from original script)
+local currentReplayThread = nil -- Using original name expected by logic
+local shouldStopReplay = false
+local currentPlatformIndex = 0
+local totalPlatformsToPlay = 0
+local charAddedConnection -- Define connection variable outside
+
+
+-- ##################################################################
+-- # UI CREATION SECTION FROM THE *SECOND* SCRIPT (TARGET LOOK)     #
+-- ##################################################################
+
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "PlatformRecorderUI"
+screenGui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui") -- Consistent parenting
+screenGui.ResetOnSpawn = false -- Keep original setting
+
+-- UI Elements
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(50, 50, 50) -- Darker background
+frame.BorderColor3 = Color3.fromRGB(200, 200, 200)
+frame.BorderSizePixel = 1
+frame.Size = UDim2.new(0, 240, 0, 300) -- Slightly larger
+frame.Position = UDim2.new(0.5, -120, 0.5, -150)
+frame.Active = true
+frame.Draggable = true
+
+local titleLabel = Instance.new("TextLabel") -- Added from target script
+titleLabel.Parent = frame
+titleLabel.Size = UDim2.new(1, 0, 0, 25)
+titleLabel.Position = UDim2.new(0, 0, 0, -25)
+titleLabel.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+titleLabel.BorderColor3 = Color3.fromRGB(200, 200, 200)
+titleLabel.BorderSizePixel = 1
+titleLabel.Text = "Platform Recorder"
+titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleLabel.Font = Enum.Font.SourceSansBold
+titleLabel.TextScaled = true
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = frame
+statusLabel.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+statusLabel.Size = UDim2.new(1, -10, 0, 25)
+statusLabel.Position = UDim2.new(0, 5, 0, 5)
+statusLabel.Text = "Status: Idle" -- Initial text from original
+statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+statusLabel.Font = Enum.Font.SourceSans
+statusLabel.TextScaled = true
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.TextWrapped = true
+
+local recordButton = Instance.new("TextButton")
+recordButton.Parent = frame
+recordButton.BackgroundColor3 = Color3.fromRGB(0, 180, 0) -- Green for record
+recordButton.Size = UDim2.new(0.3, -5, 0, 30)
+recordButton.Position = UDim2.new(0, 5, 0, 35)
+recordButton.Text = "Record" -- Original Text
+recordButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+recordButton.Font = Enum.Font.SourceSansBold
+recordButton.TextScaled = true
+
+local stopRecordButton = Instance.new("TextButton")
+stopRecordButton.Parent = frame
+stopRecordButton.BackgroundColor3 = Color3.fromRGB(255, 80, 80) -- Red for stop
+stopRecordButton.Size = UDim2.new(0.3, -5, 0, 30)
+stopRecordButton.Position = UDim2.new(0.3, 0, 0, 35)
+stopRecordButton.Text = "Stop Record" -- Original Text
+stopRecordButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+stopRecordButton.Font = Enum.Font.SourceSansBold
+stopRecordButton.TextScaled = true
+stopRecordButton.Visible = false -- Initially hidden (as per target style)
+
+local stopReplayButton = Instance.new("TextButton")
+stopReplayButton.Parent = frame
+stopReplayButton.BackgroundColor3 = Color3.fromRGB(255, 120, 0) -- Orange for stop replay
+stopReplayButton.Size = UDim2.new(0.4, -5, 0, 30)
+stopReplayButton.Position = UDim2.new(0.6, 5, 0, 35)
+stopReplayButton.Text = "Stop Replay" -- Original Text
+stopReplayButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+stopReplayButton.Font = Enum.Font.SourceSansBold
+stopReplayButton.TextScaled = true
+stopReplayButton.Visible = false -- Initially hidden (as per target style)
+
+local scrollFrame = Instance.new("ScrollingFrame")
+scrollFrame.Parent = frame
+scrollFrame.Size = UDim2.new(1, -10, 1, -145) -- Adjusted size from target
+scrollFrame.Position = UDim2.new(0, 5, 0, 70)
+scrollFrame.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+scrollFrame.BorderColor3 = Color3.fromRGB(200, 200, 200)
+scrollFrame.BorderSizePixel = 1
+scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+scrollFrame.ScrollBarThickness = 6
+scrollFrame.ScrollBarImageColor3 = Color3.fromRGB(150, 150, 150)
+
+local uiListLayout = Instance.new("UIListLayout")
+uiListLayout.Parent = scrollFrame
+uiListLayout.Padding = UDim.new(0, 5)
+uiListLayout.SortOrder = Enum.SortOrder.LayoutOrder -- Added from target
+
+local saveButton = Instance.new("TextButton")
+saveButton.Parent = frame
+saveButton.BackgroundColor3 = Color3.fromRGB(50, 150, 255) -- Blueish
+saveButton.Size = UDim2.new(0.5, -7.5, 0, 30)
+saveButton.Position = UDim2.new(0, 5, 1, -70) -- Bottom area
+saveButton.Text = "Save" -- Original Text
+saveButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+saveButton.Font = Enum.Font.SourceSansBold
+saveButton.TextScaled = true
+
+local loadButton = Instance.new("TextButton")
+loadButton.Parent = frame
+loadButton.BackgroundColor3 = Color3.fromRGB(255, 180, 50) -- Goldish
+loadButton.Size = UDim2.new(0.5, -7.5, 0, 30)
+loadButton.Position = UDim2.new(0.5, 2.5, 1, -70) -- Bottom area
+loadButton.Text = "Load" -- Original Text
+loadButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+loadButton.Font = Enum.Font.SourceSansBold
+loadButton.TextScaled = true
+
+local deleteButton = Instance.new("TextButton")
+deleteButton.Parent = frame
+deleteButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50) -- Darker red
+deleteButton.Size = UDim2.new(0.5, -7.5, 0, 30)
+deleteButton.Position = UDim2.new(0, 5, 1, -35) -- Bottom area
+deleteButton.Text = "Delete Last" -- Text from target style (original was "Delete")
+deleteButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+deleteButton.Font = Enum.Font.SourceSansBold
+deleteButton.TextScaled = true
+
+local destroyButton = Instance.new("TextButton")
+destroyButton.Parent = frame
+destroyButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100) -- Gray
+destroyButton.Size = UDim2.new(0.5, -7.5, 0, 30)
+destroyButton.Position = UDim2.new(0.5, 2.5, 1, -35) -- Bottom area
+destroyButton.Text = "Destroy All" -- Text from target style (original was "Destroy")
+destroyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+destroyButton.Font = Enum.Font.SourceSansBold
+destroyButton.TextScaled = true
+
+local pasteTextBox = Instance.new("TextBox")
+pasteTextBox.Parent = frame -- Parent to frame (as per target style)
+pasteTextBox.BackgroundColor3 = Color3.fromRGB(230, 230, 230)
+pasteTextBox.TextColor3 = Color3.fromRGB(0,0,0)
+pasteTextBox.Size = UDim2.new(1, -10, 0, 35)
+pasteTextBox.Position = UDim2.new(0, 5, 1, -110) -- Above save/load
+pasteTextBox.Text = "" -- Original initial state
+pasteTextBox.PlaceholderText = "Paste JSON data/URL here to Load" -- Placeholder from target
+pasteTextBox.ClearTextOnFocus = false -- Original setting
+pasteTextBox.MultiLine = true -- Original setting (and target)
+pasteTextBox.Font = Enum.Font.SourceSans -- Font from target
+pasteTextBox.TextScaled = true -- Enable scaling for multi-line (original had this too)
+
+-- ##################################################################
+-- # END OF UI CREATION SECTION                                     #
+-- ##################################################################
+
+
+-- ##################################################################
+-- # ALL HELPER FUNCTIONS AND LOGIC FROM THE *FIRST* SCRIPT BELOW   #
+-- ##################################################################
+
+-- Helper Functions (from original script)
+local function isCharacterMoving()
+	-- Using rootPart consistently as PrimaryPart might change
+	if not character or not rootPart or not rootPart.Parent then return false end
+	local currentPosition = rootPart.Position
+	if lastPosition then
+		local distance = (currentPosition - lastPosition).magnitude
+		lastPosition = currentPosition
+		return distance > 0.05 -- Original threshold
+	end
+	lastPosition = currentPosition
+	return false
+end
+
+local function cleanupPlatform(platform)
+	if not platform then return false end -- Safety check
+	local index = table.find(platforms, platform)
+	if index then
+		table.remove(platforms, index)
+		platformData[platform] = nil
+		-- Also check yellow platforms mapping to this red one
+		local yellowToRemove = nil
+		for yellow, red in pairs(yellowToRedMapping) do
+			if red == platform then
+				yellowToRemove = yellow
+				break
+			end
+		end
+		if yellowToRemove then
+			local yellowIndex = table.find(yellowPlatforms, yellowToRemove)
+			if yellowIndex then
+				table.remove(yellowPlatforms, yellowIndex)
+			end
+			yellowToRedMapping[yellowToRemove] = nil
+			pcall(function() if yellowToRemove.Parent then yellowToRemove:Destroy() end end) -- Wrap destroy in pcall
+		end
+		pcall(function() if platform.Parent then platform:Destroy() end end) -- Destroy red last, wrap in pcall
+		return true -- Indicate success
+	end
+	return false -- Indicate platform not found in main list
+end
+
+-- Function to add text label to a platform (from original script)
+local function addTextLabelToPlatform(platform, platformNumber)
+    local billboardGui = platform:FindFirstChildOfClass("BillboardGui")
+    if not billboardGui then
+        billboardGui = Instance.new("BillboardGui")
+        billboardGui.Name = "PlatformLabelGui"
+        billboardGui.Size = UDim2.new(1, 0, 0.5, 0)
+        billboardGui.StudsOffset = Vector3.new(0, 3, 0)
+        billboardGui.AlwaysOnTop = true
+        billboardGui.Parent = platform -- Parent before setting children
+    end
+
+    local textLabel = billboardGui:FindFirstChildOfClass("TextLabel")
+    if not textLabel then
+        textLabel = Instance.new("TextLabel")
+        textLabel.Name = "PlatformNumber"
+        textLabel.Size = UDim2.new(1, 0, 1, 0)
+        textLabel.BackgroundTransparency = 1
+        textLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+        textLabel.TextScaled = true
+        textLabel.Parent = billboardGui -- Parent after setup
+    end
+    textLabel.Text = tostring(platformNumber) -- Always update text
+end
+
+
+local function addPlatformToScrollFrame(platformName)
+    -- Slightly adapted to match target style's entry structure if needed, but keeping core logic
+    local button = Instance.new("TextButton")
+    button.Parent = scrollFrame
+    button.Size = UDim2.new(1, -65, 0, 25) -- Make space for play button
+    button.Text = platformName
+    button.TextScaled = true
+    button.BackgroundColor3 = Color3.fromRGB(150, 150, 255) -- Original color
+    button.TextColor3 = Color3.fromRGB(0,0,0) -- Ensure text visible
+    button.TextXAlignment = Enum.TextXAlignment.Left
+    button.Name = platformName -- Use name for easier lookup if needed
+
+    local playButton = Instance.new("TextButton")
+    playButton.Parent = button -- Parent play button TO the platform button
+    playButton.Size = UDim2.new(0, 50, 1, 0)
+    playButton.Position = UDim2.new(1, -55, 0, 0) -- Position relative to the main button
+    playButton.AnchorPoint = Vector2.new(0, 0) -- Adjust anchor if needed
+    playButton.Text = "Play"
+    playButton.TextScaled = true
+    playButton.BackgroundColor3 = Color3.fromRGB(0, 255, 0) -- Original color
+    playButton.ZIndex = button.ZIndex + 1 -- Ensure it's clickable on top
+	playButton.Name = "Play_" .. platformName -- Give play button a distinct name
+
+	-- *** CRITICAL: Reattach the ORIGINAL play button logic ***
+	playButton.MouseButton1Click:Connect(function()
+		if replaying then
+			statusLabel.Text = "Status: Already replaying"
+			statusLabel.TextColor3 = Color3.fromRGB(255,165,0)
+			return
+		end
+		if recording then
+			statusLabel.Text = "Status: Stop recording first"
+			statusLabel.TextColor3 = Color3.fromRGB(255,165,0)
+			return
+		end
+
+		-- Stop any existing replay first
+		if currentReplayThread then
+			shouldStopReplay = true
+			task.wait(0.1) -- Allow cancellation to propagate slightly
+		end
+
+		-- Reset control flags
+		replaying = true
+		shouldStopReplay = false
+		stopReplayButton.Visible = true -- Show stop replay button
+
+		-- Extract platform number safely (from the PARENT button's text)
+		local platformNumber = tonumber(button.Text:match("%d+"))
+		if not platformNumber or platformNumber < 1 or platformNumber > #platforms then
+			statusLabel.Text = "Status: Invalid platform index " .. tostring(platformNumber)
+			statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+			replaying = false -- Reset state
+			stopReplayButton.Visible = false
+			return
+		end
+
+		local platform = platforms[platformNumber]
+		if not platform or not platform.Parent then
+			statusLabel.Text = "Status: Platform " .. platformNumber .. " not found in workspace."
+			statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+			replaying = false
+			stopReplayButton.Visible = false
+			return
+		end
+
+
+		-- Update initial status
+		statusLabel.Text = string.format("Starting playback from Platform %d", platformNumber)
+		statusLabel.TextColor3 = Color3.fromRGB(0, 0, 255)
+
+		-- Walk to the platform before replaying (Pathfinding Integrated - Original Logic)
+		local function walkToPlatform(destination)
+			-- Ensure character components are valid
+			local currentHumanoid = character:FindFirstChildOfClass("Humanoid")
+			local currentRootPart = character:FindFirstChild("HumanoidRootPart")
+			if not currentHumanoid or currentHumanoid.Health <= 0 or not currentRootPart then
+				warn("Cannot walk: Humanoid or RootPart invalid.")
+				return false -- Indicate failure
+			end
+
+			local path = PathfindingService:CreatePath()
+			-- Use pcall for safety during ComputeAsync
+			local success, err = pcall(function()
+				path:ComputeAsync(currentRootPart.Position, destination)
+			end)
+
+			if not success then
+				warn("Path computation failed: ", err)
+				currentHumanoid:MoveTo(destination) -- Fallback to direct move
+				local finished = currentHumanoid.MoveToFinished:Wait(5) -- 5 sec timeout
+				return finished
+			end
+
+			if path.Status == Enum.PathStatus.Success then
+				local waypoints = path:GetWaypoints()
+				for _, waypoint in ipairs(waypoints) do
+					if shouldStopReplay then return false end -- Check for stop signal
+
+					currentHumanoid:MoveTo(waypoint.Position)
+					if waypoint.Action == Enum.PathWaypointAction.Jump then
+						currentHumanoid.Jump = true
+					end
+					local finished = currentHumanoid.MoveToFinished:Wait(8) -- 8 sec timeout per waypoint
+					if not finished then
+						warn("MoveTo waypoint timed out.")
+						-- Optional: Try moving to next waypoint or stop? For now, continue might be okay.
+					end
+                    if shouldStopReplay then return false end -- Check again within loop
+				end
+				return true -- Reached destination via path
+			else
+				warn("Path status not successful: ", path.Status.Name, ". Falling back to direct MoveTo.")
+				-- Fallback: Directly move to the destination if pathfinding fails
+				currentHumanoid:MoveTo(destination)
+				local finished = currentHumanoid.MoveToFinished:Wait(5) -- 5 sec timeout
+				return finished
+			end
+		end
+
+		-- Replay logic for sequential platforms (Improved - Original Logic)
+		local function replayPlatforms(startIndex)
+			totalPlatformsToPlay = #platforms -- Total platforms
+			currentPlatformIndex = startIndex -- Starting point
+
+			for i = startIndex, totalPlatformsToPlay do -- Use totalPlatformsToPlay consistent with updateStatus
+				if shouldStopReplay then break end
+
+				-- Update status with absolute position
+				currentPlatformIndex = i -- Update index before processing
+				statusLabel.Text = string.format("Playing from Platform %d/%d", i, totalPlatformsToPlay) -- Use 'i' for current
+				statusLabel.TextColor3 = Color3.fromRGB(0, 0, 255)
+
+				local currentPlatform = platforms[i]
+				if not currentPlatform or not currentPlatform.Parent then
+					statusLabel.Text = string.format("Platform %d missing, skipping.", i)
+					statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+					task.wait(0.5)
+					continue -- Skip to next platform
+				end
+
+				-- Walk to platform using pathfinding
+				local walkTarget = currentPlatform.Position + Vector3.new(0, 3, 0) -- Target slightly above
+				local walkSuccess = walkToPlatform(walkTarget)
+
+				if not walkSuccess then
+					statusLabel.Text = string.format("Failed to reach Platform %d. Stopping replay.", i)
+					statusLabel.TextColor3 = Color3.fromRGB(255,0,0)
+					shouldStopReplay = true -- Force stop
+					break
+				end
+				if shouldStopReplay then break end -- Check again after potentially long walk
+
+				local movements = platformData[currentPlatform]
+				if movements and #movements > 1 then -- Need at least 2 points to interpolate
+					for j = 1, #movements - 1 do
+						if shouldStopReplay then break end
+
+						local startMovement = movements[j]
+						local endMovement = movements[j + 1]
+
+						local startTime = os.clock() -- Use os.clock for better precision
+
+						-- Calculate duration based on distance and a speed factor
+						local distance = (endMovement.position - startMovement.position).magnitude
+						local speedFactor = 0.01  -- Original speed factor
+						local duration = distance * speedFactor
+
+						-- Minimum duration to prevent division by zero or extremely fast replays
+						duration = math.max(duration, 0.01)
+
+						local endTime = startTime + duration
+						local currentHumanoid = character:FindFirstChildOfClass("Humanoid") -- Get humanoid inside loop if needed
+
+						while os.clock() < endTime do
+							if shouldStopReplay then break end
+							local alpha = (os.clock() - startTime) / duration
+							alpha = math.min(alpha, 1) -- Clamp alpha to 0-1
+
+							local interpolatedPosition = startMovement.position:Lerp(endMovement.position, alpha)
+
+							-- Fixed orientation interpolation (Original Logic)
+							local startOrientationCFrame = CFrame.fromOrientation(math.rad(startMovement.orientation.X), math.rad(startMovement.orientation.Y), math.rad(startMovement.orientation.Z))
+							local endOrientationCFrame = CFrame.fromOrientation(math.rad(endMovement.orientation.X), math.rad(endMovement.orientation.Y), math.rad(endMovement.orientation.Z))
+							local interpolatedOrientationCFrame = startOrientationCFrame:Lerp(endOrientationCFrame, alpha)
+
+							if rootPart and rootPart.Parent then
+								rootPart.CFrame = CFrame.new(interpolatedPosition) * interpolatedOrientationCFrame
+							else
+								warn("RootPart lost during replay interpolation")
+								shouldStopReplay = true; break
+							end
+
+							if endMovement.isJumping and currentHumanoid and not currentHumanoid.Jump then
+								currentHumanoid.Jump = true
+							end
+
+							RunService.Heartbeat:Wait()
+						end
+						if shouldStopReplay then break end -- Check after inner loop
+
+						-- Snap to final position/orientation of the segment
+						if rootPart and rootPart.Parent then
+						    rootPart.CFrame = CFrame.new(endMovement.position) * CFrame.fromOrientation(math.rad(endMovement.orientation.X), math.rad(endMovement.orientation.Y), math.rad(endMovement.orientation.Z))
+                        else
+                             warn("RootPart lost at end of segment")
+                             shouldStopReplay = true; break
+                        end
+					end
+				elseif movements and #movements == 1 then
+					-- Handle case with only one point (teleport to it)
+					local point = movements[1]
+                    if rootPart and rootPart.Parent then
+                        rootPart.CFrame = CFrame.new(point.position) * CFrame.fromOrientation(math.rad(point.orientation.X), math.rad(point.orientation.Y), math.rad(point.orientation.Z))
+                    else
+                         warn("RootPart lost before single point teleport")
+                         shouldStopReplay = true; break
+                    end
+					task.wait(0.1) -- Small delay
+				else
+					statusLabel.Text = string.format("No movement data for Platform %d", i)
+					statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+					task.wait(0.5)
+				end
+			end
+			-- Final status update logic from original
+			if not shouldStopReplay then
+				statusLabel.Text = "Status: Completed all platforms"
+				statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+				task.wait(1)
+			end
+
+			statusLabel.Text = "Status: Idle"
+			statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255) -- Idle text color from target style
+			replaying = false
+			stopReplayButton.Visible = false -- Hide button after completion/stop
+		end
+
+		-- Start new replay in a tracked thread (Using original variable name)
+		currentReplayThread = task.spawn(function()
+			replayPlatforms(platformNumber)
+			currentReplayThread = nil -- Clear when done
+		end)
+	end)
+
+    -- Update CanvasSize using original logic
+    local currentItemCount = 0
+    for _, child in ipairs(scrollFrame:GetChildren()) do
+         -- Count only the main platform button/label, not the child play button
+        if child:IsA("TextButton") and child.Name:match("^Platform %d+") then
+            currentItemCount = currentItemCount + 1
+        end
+    end
+    -- Assuming each item takes ~30 pixels height + padding
+    local padding = uiListLayout and uiListLayout.Padding.Offset or 5 -- Default padding
+    local itemHeight = 25 -- Height of the button we created
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, currentItemCount * (itemHeight + padding))
+end
+
+
+-- Function to serialize platform data to JSON (from original script)
+local function serializePlatformData()
+	local data = {
+		redPlatforms = {},
+		yellowPlatforms = {},
+		mappings = {}
+	}
+
+	-- Save red platforms
+	for i, platform in ipairs(platforms) do
+		if platform and platform.Parent then -- Check existence
+			local movementsData = {}
+			local recordedMovements = platformData[platform] or {} -- Handle nil case
+			for _, movement in ipairs(recordedMovements) do
+				-- Ensure data is valid before adding
+				if movement and movement.position and movement.orientation then
+					-- Convert Vector3 orientation to table for JSON
+					local orientationTable = {X = movement.orientation.X, Y = movement.orientation.Y, Z = movement.orientation.Z}
+					table.insert(movementsData, {
+						position = {X = movement.position.X, Y = movement.position.Y, Z = movement.position.Z},
+						orientation = orientationTable,
+						isJumping = movement.isJumping or false -- Default to false if nil
+					})
+				else
+					warn("Skipping invalid movement data point during serialization for platform ", i)
+				end
+			end
+			table.insert(data.redPlatforms, {
+                index = i, -- Store index for reliable reconstruction (though deserialize doesn't strictly need it now)
+				position = {X = platform.Position.X, Y = platform.Position.Y, Z = platform.Position.Z},
+				movements = movementsData
+			})
+		else
+			warn("Skipping non-existent red platform at index ", i, " during serialization.")
+		end
+	end
+
+	-- Save yellow platforms and their mappings
+	for i, yellowPlatform in ipairs(yellowPlatforms) do
+		if yellowPlatform and yellowPlatform.Parent and yellowToRedMapping[yellowPlatform] then -- Check existence and mapping
+			local mappedRedPlatform = yellowToRedMapping[yellowPlatform]
+			local redIndex = table.find(platforms, mappedRedPlatform) -- Find the index of the mapped red platform
+			if redIndex then -- Only save if the mapped red platform exists in the current 'platforms' list
+				table.insert(data.yellowPlatforms, {
+					position = {X = yellowPlatform.Position.X, Y = yellowPlatform.Position.Y, Z = yellowPlatform.Position.Z}
+				})
+				table.insert(data.mappings, redIndex) -- Store the index
+			else
+				warn("Skipping yellow platform ", i, " during serialization as its mapped red platform (", tostring(mappedRedPlatform), ") is no longer in the main list.")
+			end
+		else
+			warn("Skipping non-existent or unmapped yellow platform at index ", i, " during serialization.")
+		end
+	end
+
+	local success, rawData = pcall(HttpService.JSONEncode, HttpService, data)
+	if success then
+		return rawData
+	else
+		warn("JSON Encode failed: ", rawData) -- rawData is error msg on failure
+		statusLabel.Text = "Status: Error serializing data"
+		statusLabel.TextColor3 = Color3.fromRGB(255,0,0)
+		return nil
+	end
+end
+
+-- #############################################
+-- # REVISED deserializePlatformData FUNCTION  #
+-- #############################################
+-- Function to deserialize platform data from JSON (Revised Red Platform Loading)
+local function deserializePlatformData(jsonData)
+	local success, data = pcall(HttpService.JSONDecode, HttpService, jsonData)
+
+	if not success then
+		warn("Failed to decode JSON data:", data)
+		statusLabel.Text = "Status: Invalid JSON data"
+		statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+		return
+	end
+
+	-- Ensure basic structure exists before proceeding
+	if not data or type(data) ~= "table" or type(data.redPlatforms) ~= "table" or type(data.yellowPlatforms) ~= "table" or type(data.mappings) ~= "table" then
+		warn("Invalid data format after decoding JSON. Expected redPlatforms, yellowPlatforms, mappings tables.")
+		statusLabel.Text = "Status: Invalid data format"
+		statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+		return
+	end
+
+	-- Clear existing data FIRST
+	statusLabel.Text = "Status: Clearing old platforms..."
+	statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+	for _, p in ipairs(platforms) do if p and p.Parent then pcall(function() p:Destroy() end) end end
+	for _, yp in ipairs(yellowPlatforms) do if yp and yp.Parent then pcall(function() yp:Destroy() end) end end
+	platforms = {}
+	yellowPlatforms = {}
+	platformData = {}
+	yellowToRedMapping = {}
+	platformCounter = 0
+	scrollFrame:ClearAllChildren()
+	-- Re-add UIListLayout if cleared
+	if not scrollFrame:FindFirstChildOfClass("UIListLayout") then
+		local newUiListLayout = Instance.new("UIListLayout")
+		newUiListLayout.Parent = scrollFrame
+		newUiListLayout.Padding = UDim.new(0, 5)
+		newUiListLayout.SortOrder = Enum.SortOrder.LayoutOrder -- From target style
+	end
+    task.wait(0.1) -- Short wait for visual feedback
+
+	statusLabel.Text = "Status: Loading data..."
+	statusLabel.TextColor3 = Color3.fromRGB(255, 180, 50) -- Loading color
+
+	-- Load red platforms (Simplified logic closer to original script)
+	for i, platformInfo in ipairs(data.redPlatforms) do
+		-- Basic validation (position is key)
+        if type(platformInfo) ~= "table" or not platformInfo.position then
+             warn("Skipping invalid red platform entry in JSON (entry #" .. i .. "). Missing position.")
+             continue
+        end
+
+		local platform = Instance.new("Part")
+		platform.Size = Vector3.new(5, 1, 5)
+		-- Position validation
+        if type(platformInfo.position) == "table" and platformInfo.position.X and platformInfo.position.Y and platformInfo.position.Z then
+            platform.Position = Vector3.new(platformInfo.position.X, platformInfo.position.Y, platformInfo.position.Z)
+        else
+            warn("Invalid position data for red platform (entry #" .. i .. "). Skipping.")
+            platform:Destroy() -- Clean up the created part
+            continue
+        end
+		platform.Anchored = true
+		platform.BrickColor = BrickColor.Red()
+		platform.CanCollide = false
+		platform.Parent = workspace -- Parent to workspace *before* adding to table/UI
+        platform.Name = "Platform_" .. (#platforms + 1) -- Name based on count before adding
+
+		-- Convert serialized movement data back to proper Vector3 formats
+		local restoredMovements = {}
+		if platformInfo.movements and type(platformInfo.movements) == "table" then
+			for movIdx, movement in ipairs(platformInfo.movements) do
+                -- Movement point validation
+                if type(movement) == "table" and movement.position and movement.orientation and
+                   type(movement.position) == "table" and movement.position.X and movement.position.Y and movement.position.Z and
+                   type(movement.orientation) == "table" and movement.orientation.X and movement.orientation.Y and movement.orientation.Z then
+                    table.insert(restoredMovements, {
+                        position = Vector3.new(movement.position.X, movement.position.Y, movement.position.Z),
+                        -- Convert Orientation table back to Vector3
+                        orientation = Vector3.new(movement.orientation.X, movement.orientation.Y, movement.orientation.Z),
+                        isJumping = movement.isJumping or false
+                    })
+                else
+                    warn("Invalid movement data at point ", movIdx, " for platform (entry #" .. i .. "). Skipping point.")
+                end
+			end
+		end
+
+		platformData[platform] = restoredMovements  -- Store converted movements
+
+        -- Add label using the current count + 1 (representing the index it will have)
+		addTextLabelToPlatform(platform, #platforms + 1)
+
+        -- Insert into the main table *after* setting up
+		table.insert(platforms, platform)
+
+        -- Add UI element using the new platform count
+		addPlatformToScrollFrame("Platform " .. #platforms) -- Use current count
+	end
+    -- Update platformCounter after the loop based on final count
+    platformCounter = #platforms
+
+	-- Load yellow platforms and mappings (This logic should be okay as it relies on the final 'platforms' table)
+	for i, yellowInfo in ipairs(data.yellowPlatforms) do
+        -- Basic validation
+        if type(yellowInfo) ~= "table" or not yellowInfo.position then
+             warn("Skipping invalid yellow platform entry ", i, " in JSON.")
+             continue
+        end
+		local mappedRedIndex = data.mappings[i]
+        -- Index validation
+        if type(mappedRedIndex) ~= "number" or mappedRedIndex < 1 or mappedRedIndex > #platforms then
+            warn("Invalid or out-of-bounds mapping index (", tostring(mappedRedIndex), ") for yellow platform ", i, ". Skipping.")
+            continue
+        end
+		local mappedRedPlatform = platforms[mappedRedIndex] -- Get the actual platform instance
+		if not mappedRedPlatform then
+			-- This could happen if the red platform it mapped to failed validation earlier
+			warn("Mapped red platform at index ", mappedRedIndex, " not found for yellow platform ", i, ". Skipping.")
+			continue
+		end
+
+		local yellowPlatform = Instance.new("Part")
+		yellowPlatform.Size = Vector3.new(5, 1, 5)
+        -- Position validation
+        if type(yellowInfo.position) == "table" and yellowInfo.position.X and yellowInfo.position.Y and yellowInfo.position.Z then
+            yellowPlatform.Position = Vector3.new(yellowInfo.position.X, yellowInfo.position.Y, yellowInfo.position.Z)
+        else
+            warn("Invalid position data for yellow platform ", i, ". Skipping.")
+            yellowPlatform:Destroy()
+            continue
+        end
+		yellowPlatform.Anchored = true
+		yellowPlatform.BrickColor = BrickColor.Yellow()
+		yellowPlatform.CanCollide = false
+		yellowPlatform.Parent = workspace
+        yellowPlatform.Name = "YellowPlatform_MappedTo_" .. mappedRedIndex
+
+		addTextLabelToPlatform(yellowPlatform, mappedRedIndex) -- Show the index it maps to
+		table.insert(yellowPlatforms, yellowPlatform)
+
+		-- Rebuild yellowToRedMapping
+		yellowToRedMapping[yellowPlatform] = mappedRedPlatform
+	end
+
+    -- Final update to canvas size after adding all UI items
+    local finalItemCount = 0
+    for _, child in ipairs(scrollFrame:GetChildren()) do
+        -- Count the primary button/label element added by addPlatformToScrollFrame
+        if child:IsA("TextButton") and child.Name:match("^Platform %d+") then
+            finalItemCount = finalItemCount + 1
+        end
+    end
+    local itemHeight = 25 -- Match the height set in addPlatformToScrollFrame
+    local padding = uiListLayout and uiListLayout.Padding.Offset or 5 -- Default padding
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, finalItemCount * (itemHeight + padding))
+
+	if #platforms > 0 then
+		statusLabel.Text = "Status: Platform data loaded"
+		statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0) -- Green success
+	else
+		statusLabel.Text = "Status: Loaded data, but no valid platforms found."
+		statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0) -- Orange warning
+		warn("Deserialization finished, but the 'platforms' table is empty. Check input data and warnings.")
+	end
+end
+-- #############################################
+-- # END OF REVISED deserializePlatformData    #
+-- #############################################
+
+
+-- Handle character respawn or reset (from original script)
+charAddedConnection = player.CharacterAdded:Connect(function(newCharacter)
+	character = newCharacter
+	humanoid = newCharacter:WaitForChild("Humanoid") -- Get Humanoid for new character
+	rootPart = newCharacter:WaitForChild("HumanoidRootPart") -- Update rootPart reference
+	lastPosition = nil
+	statusLabel.Text = "Status: Idle"
+	statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255) -- Idle color
+
+	-- Stop recording/replaying if active on respawn
+	if recording then
+		recording = false -- Important: Set flag first
+		recordButton.Visible = true -- Show record button again
+		stopRecordButton.Visible = false
+		statusLabel.Text = "Status: Recording stopped due to respawn"
+        statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+        task.wait(1.5)
+        statusLabel.Text = "Status: Idle"
+		statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	end
+	if replaying then
+		shouldStopReplay = true -- Important: Set flag first
+		replaying = false
+		if currentReplayThread then
+			task.cancel(currentReplayThread) -- Attempt to cancel
+			currentReplayThread = nil
+		end
+		stopReplayButton.Visible = false
+        statusLabel.Text = "Status: Replay stopped due to respawn"
+		statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+        task.wait(1.5)
+        statusLabel.Text = "Status: Idle"
+		statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	end
+    -- Re-attach Died event to the new humanoid
+    if humanoid then
+        humanoid.Died:Connect(function()
+            -- Simplified Died logic for the new humanoid instance
+        	statusLabel.Text = "Status: Character died."
+        	statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        	if recording then recording = false; recordButton.Visible = true; stopRecordButton.Visible = false; end
+        	if replaying then shouldStopReplay = true; replaying = false; stopReplayButton.Visible = false; end
+            if currentReplayThread then task.cancel(currentReplayThread); currentReplayThread = nil; end
+        end)
+    end
+end)
+
+-- Connect Died event for initial humanoid
+if humanoid then
+    humanoid.Died:Connect(function()
+        statusLabel.Text = "Status: Character died."
+        statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        if recording then recording = false; recordButton.Visible = true; stopRecordButton.Visible = false; end
+        if replaying then shouldStopReplay = true; replaying = false; stopReplayButton.Visible = false; end
+        if currentReplayThread then task.cancel(currentReplayThread); currentReplayThread = nil; end
+    end)
+end
+
+
+-- Function to calculate path (from original script, can be merged/simplified with walkToPlatform's logic)
+local function calculatePath(start, goal)
+	local path = PathfindingService:CreatePath()
+	local success, err = pcall(function() path:ComputeAsync(start, goal) end)
+	if success and path.Status == Enum.PathStatus.Success then
+		return path
+	else
+		warn("Path calculation failed or no path found: ", err or path.Status.Name)
+		return nil
+	end
+end
+
+-- #############################################
+-- # REVISED recordButton Click Handler        #
+-- #############################################
+recordButton.MouseButton1Click:Connect(function()
+	if recording or replaying then return end -- Prevent starting if busy
+	if not character or not rootPart or not rootPart.Parent or not humanoid or humanoid.Health <= 0 then
+		statusLabel.Text = "Status: Character invalid for recording"
+		statusLabel.TextColor3 = Color3.fromRGB(255,0,0)
+		return
+	end
+
+	-- Set recording state and UI immediately
+	recording = true
+	recordButton.Visible = false -- Hide record button
+	stopRecordButton.Visible = true -- Show stop button
+	statusLabel.Text = "Status: Preparing..."
+	statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0) -- Orange preparing color
+
+	local walkSuccess = true -- Assume success if no walk needed
+	local walkTimedOut = false
+
+	-- Walk to last yellow platform logic (with timeout)
+	if #yellowPlatforms > 0 then
+		local lastYellowPlatform = yellowPlatforms[#yellowPlatforms]
+		if lastYellowPlatform and lastYellowPlatform.Parent then
+			statusLabel.Text = "Status: Moving to start point (5s)..."
+			statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+
+			local targetPos = lastYellowPlatform.Position + Vector3.new(0, 3, 0)
+			local walkCoroutine = nil
+			local walkFinished = false
+			local walkResult = false
+
+			-- Reusable walk logic within this scope
+			local function walkTo(destination)
+				local currentHumanoid = character:FindFirstChildOfClass("Humanoid")
+				local currentRootPart = character:FindFirstChild("HumanoidRootPart")
+				if not currentHumanoid or currentHumanoid.Health <= 0 or not currentRootPart then return false end
+
+				local path = calculatePath(currentRootPart.Position, destination)
+				if path then
+					local waypoints = path:GetWaypoints()
+					for i, waypoint in ipairs(waypoints) do
+						-- Check if recording was cancelled externally (e.g., player died/reset)
+						if not recording then return false end
+						currentHumanoid:MoveTo(waypoint.Position)
+						if waypoint.Action == Enum.PathWaypointAction.Jump then currentHumanoid.Jump = true end
+
+						local moveStartTime = os.clock()
+						local moveSuccess = false
+						while os.clock() - moveStartTime < 8 and not moveSuccess do -- 8 sec timeout per waypoint
+							moveSuccess = currentHumanoid.MoveToFinished:Wait(0.1)
+							if not recording then return false end -- Check again inside wait loop
+						end
+
+						if not moveSuccess then
+							warn("Waypoint " .. i .. " move failed or timed out during initial walk.")
+							return false -- Abort walk if stuck
+						end
+                        if not recording then return false end -- Check again after waypoint wait
+					end
+					return true -- Walk successful
+				else -- Fallback direct move
+					currentHumanoid:MoveTo(destination)
+					-- Wait for MoveToFinished with a shorter timeout for direct move fallback
+					local moveStartTime = os.clock()
+					local moveSuccess = false
+					while os.clock() - moveStartTime < 5 and not moveSuccess do
+						moveSuccess = currentHumanoid.MoveToFinished:Wait(0.1)
+						if not recording then return false end
+					end
+					return moveSuccess
+				end
+			end
+
+			-- Start the walk in a coroutine
+			walkCoroutine = task.spawn(function()
+				walkResult = walkTo(targetPos)
+				walkFinished = true
+			end)
+
+			-- Wait for walk completion or timeout
+			local startTime = os.clock()
+			local timeout = 5 -- 5 seconds
+
+			while not walkFinished and (os.clock() - startTime) < timeout do
+				-- Update countdown visually (optional)
+				local timeLeft = math.max(0, timeout - (os.clock() - startTime))
+				statusLabel.Text = string.format("Status: Moving... (%.1fs)", timeLeft)
+				-- Check if recording was cancelled externally while waiting
+				if not recording then
+					statusLabel.Text = "Status: Recording cancelled during walk."
+					statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+					recordButton.Visible = true
+					stopRecordButton.Visible = false
+					-- Attempt to cancel the walk coroutine (may not always stop instantly)
+					if walkCoroutine then task.cancel(walkCoroutine) end
+					return -- Exit the function
+				end
+				task.wait(0.1)
+			end
+
+			-- Check results after loop
+			if not walkFinished then
+				walkTimedOut = true
+				walkSuccess = false
+				statusLabel.Text = "Status: Timed out moving to start point!"
+				statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+				if walkCoroutine then task.cancel(walkCoroutine) end -- Attempt to cancel leftover walk
+			elseif not walkResult then
+				walkSuccess = false
+				statusLabel.Text = "Status: Failed to reach start point."
+				statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+			else
+				-- Walk finished successfully within time
+				walkSuccess = true
+			end
+
+		else
+			-- Last yellow platform doesn't exist or was destroyed
+			walkSuccess = true -- No walk required, proceed directly
+		end
+	else
+		-- No yellow platforms exist
+		walkSuccess = true -- No walk required, proceed directly
+	end
+
+	-- Check if still recording and walk was successful
+	if not recording then
+		-- Recording was likely cancelled externally during the walk/wait phase
+		-- Status should already be set, ensure buttons are correct
+		recordButton.Visible = true
+		stopRecordButton.Visible = false
+		return
+	end
+
+	if not walkSuccess then
+		-- Walk failed or timed out, reset state
+		recording = false
+		recordButton.Visible = true
+		stopRecordButton.Visible = false
+		task.wait(1.5) -- Show failure message briefly
+		statusLabel.Text = "Status: Idle"
+		statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+		return
+	end
+
+	-- ##### If walk was successful and we are still recording, proceed: #####
+
+	statusLabel.Text = "Status: Recording..." -- Set final recording status
+	statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0) -- Red recording color
+
+	-- Create platform AFTER walking (if walk occurred)
+	platformCounter += 1
+	local platform = Instance.new("Part")
+	platform.Name = "Platform_" .. platformCounter -- Consistent naming
+	platform.Size = Vector3.new(5, 1, 5)
+	-- Place platform below current character position
+	if not rootPart or not rootPart.Parent or not humanoid then -- Final check before using refs
+		statusLabel.Text = "Status: Character invalid before platform creation."
+		statusLabel.TextColor3 = Color3.fromRGB(255,0,0)
+		recording = false
+		recordButton.Visible = true
+		stopRecordButton.Visible = false
+		pcall(function() platform:Destroy() end) -- Destroy incomplete platform
+		platformCounter -= 1 -- Decrement counter
+		return
+	end
+	-- #########################################
+	-- # USE OLD POSITIONING LOGIC HERE        #
+	-- #########################################
+	platform.Position = rootPart.Position - Vector3.new(0, 3, 0) -- Use old fixed offset
+	platform.Anchored = true
+	platform.BrickColor = BrickColor.Red()
+	platform.CanCollide = false
+	platform.Parent = workspace
+
+	-- Add text label to the platform
+	addTextLabelToPlatform(platform, platformCounter)
+
+	table.insert(platforms, platform)
+	platformData[platform] = {} -- Initialize data table
+
+	addPlatformToScrollFrame("Platform " .. platformCounter) -- Add UI entry
+
+	-- Start recording movement, orientation, and jump state (Original logic)
+	task.spawn(function()
+		while recording do
+            -- Check validity inside the loop too
+            if not character or not rootPart or not rootPart.Parent or not humanoid or humanoid.Health <= 0 then
+                warn("Character became invalid during recording loop.")
+                recording = false -- Stop if character dies/leaves
+                break
+            end
+            -- Using isCharacterMoving function from original
+			if isCharacterMoving() or humanoid.Jump then -- Record if moving OR jumping
+				table.insert(platformData[platform], {
+					position = rootPart.Position,
+					orientation = rootPart.Orientation, -- Keep as Vector3
+					isJumping = humanoid.Jump -- Record jump state
+				})
+			end
+			RunService.Heartbeat:Wait() -- Use Heartbeat for recording
+		end
+        -- UI update after loop finishes *only if recording wasn't stopped by external means*
+		-- Check if stopRecordButton is visible, means we stopped it manually
+		if not stopRecordButton.Visible then
+			recordButton.Visible = true -- Show record button again
+		end
+		-- Reset status to Idle only if not stopped manually and not replaying
+		if not stopRecordButton.Visible and not replaying then
+			statusLabel.Text = "Status: Idle"
+			statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+		end
+	end)
+end)
+-- #############################################
+-- # END OF REVISED recordButton Click Handler #
+-- #############################################
+
+
+-- #############################################
+-- # REVISED stopRecordButton Click Handler    #
+-- #############################################
+stopRecordButton.MouseButton1Click:Connect(function()
+	-- Only proceed if we are actually recording when the button is clicked
+	if not recording then
+		-- Status might already indicate why recording stopped (timeout, death, etc.)
+		-- Ensure buttons are in the correct state
+		recordButton.Visible = true
+		stopRecordButton.Visible = false
+		return
+	end
+
+	-- If we got here, the recording was active, so this click is a valid stop
+	recording = false -- Signal the recording loop to stop *first*
+	recordButton.Visible = true -- Show record button immediately
+	stopRecordButton.Visible = false -- Hide stop button immediately
+
+	statusLabel.Text = "Status: Stopped Recording. Creating end point..."
+	statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+
+	-- Now perform checks needed to create the yellow platform
+	if not character or not rootPart or not rootPart.Parent or not humanoid or humanoid.Health <= 0 then
+		statusLabel.Text = "Status: Character invalid, cannot create end point."
+		statusLabel.TextColor3 = Color3.fromRGB(255,0,0)
+		task.wait(1.5)
+		statusLabel.Text = "Status: Idle"
+		statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+		return
+	end
+	if #platforms == 0 then
+		statusLabel.Text = "Status: No platform recorded to end."
+		statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+		 task.wait(1.5)
+		statusLabel.Text = "Status: Idle"
+		statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+		return
+	end
+
+	-- Create the yellow platform
+	local yellowPlatform = Instance.new("Part")
+	yellowPlatform.Size = Vector3.new(5, 1, 5)
+	-- Place below current character position
+	-- #########################################
+	-- # USE OLD POSITIONING LOGIC HERE        #
+	-- #########################################
+	yellowPlatform.Position = rootPart.Position - Vector3.new(0, 3, 0) -- Use old fixed offset
+	yellowPlatform.Anchored = true
+	yellowPlatform.BrickColor = BrickColor.Yellow()
+	yellowPlatform.CanCollide = false
+	yellowPlatform.Parent = workspace
+	yellowPlatform.Name = "YellowPlatform_MappedTo_" .. #platforms
+
+	-- Add text label to the yellow platform showing mapping
+	addTextLabelToPlatform(yellowPlatform, #platforms) -- Label shows index of red platform it ends
+
+	table.insert(yellowPlatforms, yellowPlatform)
+	yellowToRedMapping[yellowPlatform] = platforms[#platforms] -- Map yellow platform to the last red platform
+
+	statusLabel.Text = "Status: End point created for Platform " .. #platforms
+	statusLabel.TextColor3 = Color3.fromRGB(0,200,0)
+	task.wait(1.5)
+	statusLabel.Text = "Status: Idle"
+	statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+end)
+-- #############################################
+-- # END OF REVISED stopRecordButton Handler   #
+-- #############################################
+
+
+-- Modify the stopReplayButton click handler (Original Logic, adapted for target UI)
+stopReplayButton.MouseButton1Click:Connect(function()
+	if replaying then
+		shouldStopReplay = true
+		replaying = false -- Set state immediately
+        stopReplayButton.Visible = false -- Hide button immediately
+        -- Use currentPlatformIndex which is more reliable than currentPlatformIndex-1 in edge cases
+		statusLabel.Text = string.format("Stopped replay near Platform %d/%d", currentPlatformIndex, totalPlatformsToPlay)
+		statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+
+		-- Cancel any ongoing movement
+        local currentHumanoid = character:FindFirstChildOfClass("Humanoid")
+        local currentRootPart = character:FindFirstChild("HumanoidRootPart")
+		if currentHumanoid and currentRootPart then
+			currentHumanoid:MoveTo(currentRootPart.Position) -- Stop current pathfinding/moveto
+		end
+	end
+end)
+
+-- #############################################
+-- # REVISED destroyButton Click Handler       #
+-- #############################################
+destroyButton.MouseButton1Click:Connect(function()
+    if recording or replaying then
+        statusLabel.Text = "Status: Stop action before destroying."
+        statusLabel.TextColor3 = Color3.fromRGB(255,165,0)
+        return
+    end
+
+    statusLabel.Text = "Status: Destroying all..."
+    statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100) -- Indicate destruction
+
+    -- Disconnect CharacterAdded connection first to prevent errors during cleanup
+    if charAddedConnection then
+        charAddedConnection:Disconnect()
+        charAddedConnection = nil
+    end
+
+    -- Cancel any running replay thread
+	if currentReplayThread then
+        shouldStopReplay = true -- Signal stop just in case
+		task.cancel(currentReplayThread) -- Attempt cancel
+        currentReplayThread = nil
+	end
+	-- Signal recording thread to stop (if somehow active)
+	recording = false
+	replaying = false
+
+	-- Destroy platforms and clear data
+	for _, platform in ipairs(platforms) do
+		if platform and platform.Parent then pcall(function() platform:Destroy() end) end
+	end
+	for _, yellowPlatform in ipairs(yellowPlatforms) do
+		if yellowPlatform and yellowPlatform.Parent then pcall(function() yellowPlatform:Destroy() end) end
+	end
+	platforms = {}
+	yellowPlatforms = {}
+	platformData = {}
+	yellowToRedMapping = {}
+	platformCounter = 0
+
+	-- Destroy the GUI itself
+    pcall(function() screenGui:Destroy() end) -- Use pcall for safety
+
+    -- Script will stop executing after screenGui:Destroy() if it's the parent of the script.
+    -- No need for further status updates.
+end)
+-- #############################################
+-- # END OF REVISED destroyButton Handler      #
+-- #############################################
+
+
+deleteButton.MouseButton1Click:Connect(function()
+    if recording or replaying then
+        statusLabel.Text = "Status: Stop action before deleting."
+        statusLabel.TextColor3 = Color3.fromRGB(255,165,0)
+        return
+    end
+
+	-- Delete the last red platform
+	if #platforms > 0 then
+        local lastPlatformIndex = #platforms
+		local lastPlatform = platforms[lastPlatformIndex] -- Get reference before removing
+
+		-- Use cleanupPlatform function which handles table removal, data removal, and yellow platform mapping removal
+		local success = cleanupPlatform(lastPlatform)
+
+        if success then
+            -- Delete corresponding UI element (Match name "Platform X")
+            local uiNameToRemove = "Platform " .. lastPlatformIndex
+            local uiToRemove = scrollFrame:FindFirstChild(uiNameToRemove)
+            if uiToRemove then
+                -- The play button is parented to the main button, so destroying the main one gets both
+                pcall(function() uiToRemove:Destroy() end)
+            end
+
+            platformCounter = #platforms -- Update counter AFTER removal
+
+            -- Update Canvas Size
+            local finalItemCount = 0
+            for _, child in ipairs(scrollFrame:GetChildren()) do
+                if child:IsA("TextButton") and child.Name:match("^Platform %d+") then finalItemCount = finalItemCount + 1 end
+            end
+            local itemHeight = 25
+            local padding = uiListLayout and uiListLayout.Padding.Offset or 5
+            scrollFrame.CanvasSize = UDim2.new(0, 0, 0, finalItemCount * (itemHeight + padding))
+
+            statusLabel.Text = "Status: Deleted last platform ("..lastPlatformIndex..")"
+            statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+        else
+            statusLabel.Text = "Status: Failed to find/delete last platform in list."
+            statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+            -- Maybe the part existed but wasn't in the table? Force destroy just in case.
+            if lastPlatform and lastPlatform.Parent then pcall(function() lastPlatform:Destroy() end) end
+        end
+	else
+		statusLabel.Text = "Status: No platforms to delete."
+		statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+	end
+end)
+
+-- Save Button: Serialize and copy platform data to clipboard (Original logic)
+saveButton.MouseButton1Click:Connect(function()
+    if recording or replaying then
+        statusLabel.Text = "Status: Stop action before saving."
+        statusLabel.TextColor3 = Color3.fromRGB(255,165,0)
+        return
+    end
+    if #platforms == 0 then
+        statusLabel.Text = "Status: Nothing to save."
+        statusLabel.TextColor3 = Color3.fromRGB(255,165,0)
+        return
+    end
+
+	local jsonData = serializePlatformData()
+	if jsonData then
+        local success, err = pcall(setclipboard, jsonData) -- Use pcall for safety
+        if success then
+		    statusLabel.Text = "Status: Platform data copied to clipboard"
+		    statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+        else
+            warn("SetClipboard failed: ", err)
+            statusLabel.Text = "Status: Copy to clipboard failed (check console)"
+            statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+            print("--- Platform Data ---")
+            print(jsonData)
+            print("--- End Platform Data ---")
+        end
+	else
+		-- Serialization failure message already handled in serialize function
+	end
+end)
+
+-- Load Button: Paste and deserialize platform data from the TextBox (Original logic - Security Check Removed)
+loadButton.MouseButton1Click:Connect(function()
+    if recording or replaying then
+        statusLabel.Text = "Status: Stop action before loading."
+        statusLabel.TextColor3 = Color3.fromRGB(255,165,0)
+        return
+    end
+
+	local input = pasteTextBox.Text
+    if input == "" then
+        statusLabel.Text = "Status: Paste data/URL in box first."
+        statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+        return
+    end
+
+	-- Load new data
+	if input:match("^https?://") then
+		statusLabel.Text = "Status: Loading from URL..."
+		statusLabel.TextColor3 = Color3.fromRGB(50, 150, 255) -- Loading color
+		local url = input
+		-- Directly attempt HttpGet without host checking
+		local success, response = pcall(function()
+			-- HttpService:GetAsync preferred for web requests
+            -- Added loading progress callback from original script
+			return game:HttpGet(url, true, function(content, contentLength)
+                if contentLength and contentLength > 0 then -- Avoid division by zero / handle unknown length
+				    local progress = math.floor((#content/contentLength)*100)
+				    statusLabel.Text = "Loading "..progress.."%"
+                else
+                    statusLabel.Text = "Loading... (Size Unknown)"
+                end
+			end)
+		end)
+
+		if success then
+            pasteTextBox.Text = "" -- Clear box after successful fetch
+			deserializePlatformData(response) -- Deserialize function now handles clearing old data
+		else
+			statusLabel.Text = "Load failed: "..tostring(response):sub(1,100) -- Show first 100 chars of error
+			statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+		end
+	else
+		-- Assume it's raw JSON data
+        pasteTextBox.Text = "" -- Clear box after using data
+		deserializePlatformData(input) -- Deserialize function handles clearing old data
+	end
+end)
+
+-- Initial Status Message
+statusLabel.Text = "Status: Idle"
+statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255) -- Match target style idle color
+
+-- Final Cleanup on GUI destruction (This might not run fully if destroyButton calls Destroy immediately)
+screenGui.Destroying:Connect(function()
+	if charAddedConnection then
+		charAddedConnection:Disconnect()
+		charAddedConnection = nil
+	end
+	-- Cancel any running tasks
+	if currentReplayThread then
+        shouldStopReplay = true -- Signal stop
+		task.cancel(currentReplayThread) -- Attempt cancel
+        currentReplayThread = nil
+	end
+	recording = false
+	replaying = false
+    -- Destroy any remaining created parts (might be redundant if destroyButton was used)
+	for _, p in ipairs(platforms) do if p and p.Parent then pcall(function() p:Destroy() end) end end -- Add existence check and pcall
+	for _, yp in ipairs(yellowPlatforms) do if yp and yp.Parent then pcall(function() yp:Destroy() end) end end -- Add existence check and pcall
+end)
