@@ -336,7 +336,7 @@ local function serializePlatformData()
         for _, movement in ipairs(platformData[platform]) do
             table.insert(movementsData, {
                 position = {X = movement.position.X, Y = movement.position.Y, Z = movement.position.Z},
-                orientation = {X = movement.orientation.X, Y = movement.orientation.Y, Z = movement.position.Z},
+                orientation = {X = movement.orientation.X, Y = movement.orientation.Y, Z = movement.orientation.Z},
                 isJumping = movement.isJumping
             })
         end
@@ -517,7 +517,7 @@ recordButton.MouseButton1Click:Connect(function()
                     humanoid.MoveToFinished:Wait()
                 end
             else
-                -- Handle cases where humanoid or rootPart are missing or invalid
+                -- Handle cases where humanoid or HumanoidRootPart are missing or invalid
                 warn("Humanoid or HumanoidRootPart is missing or invalid.")
             end
         else
@@ -811,7 +811,7 @@ combineChunksButton.MouseButton1Click:Connect(function()
     end
 end)
 
--- Modify the load button to handle combined chunks
+-- Modify the load button to handle combined chunks and URL loading
 loadButton.MouseButton1Click:Connect(function()
     -- If we have loading chunks, combine them
     if #loadingChunks > 0 then
@@ -894,7 +894,64 @@ loadButton.MouseButton1Click:Connect(function()
             end)
 
             if success then
-                deserializePlatformData(response)
+                -- Try to handle stacked JSON objects from URL
+                local combinedData = {
+                    redPlatforms = {},
+                    yellowPlatforms = {},
+                    mappings = {}
+                }
+                
+                local redPlatformOffset = 0
+                local successfulParsing = false
+                
+                -- Split the response by lines or potential JSON objects
+                for jsonStr in response:gmatch("[^\r\n]+") do
+                    local parseSuccess, chunk = pcall(function()
+                        return HttpService:JSONDecode(jsonStr)
+                    end)
+                    
+                    if parseSuccess and type(chunk) == "table" and chunk.redPlatforms then
+                        successfulParsing = true
+                        
+                        -- Add all red platforms
+                        for _, platform in ipairs(chunk.redPlatforms) do
+                            table.insert(combinedData.redPlatforms, platform)
+                        end
+                        
+                        -- Add all yellow platforms with adjusted mappings
+                        for i, yellowPlatform in ipairs(chunk.yellowPlatforms or {}) do
+                            table.insert(combinedData.yellowPlatforms, yellowPlatform)
+                            -- Adjust the mapping to account for the offset
+                            if chunk.mappings and chunk.mappings[i] then
+                                table.insert(combinedData.mappings, chunk.mappings[i] + redPlatformOffset)
+                            end
+                        end
+                        
+                        -- Update offset for next chunk
+                        redPlatformOffset = redPlatformOffset + #chunk.redPlatforms
+                    end
+                end
+                
+                if successfulParsing then
+                    -- Convert to JSON and load the combined data
+                    local combinedJson = HttpService:JSONEncode(combinedData)
+                    deserializePlatformData(combinedJson)
+                    statusLabel.Text = "Stacked platform data from URL loaded successfully"
+                    statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+                else
+                    -- Try loading as a single JSON object as fallback
+                    local deserializeSuccess = pcall(function()
+                        deserializePlatformData(response)
+                    end)
+                    
+                    if deserializeSuccess then
+                        statusLabel.Text = "Platform data from URL loaded successfully"
+                        statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+                    else
+                        statusLabel.Text = "Failed to parse platform data from URL"
+                        statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+                    end
+                end
             else
                 statusLabel.Text = "Load failed: "..tostring(response):sub(1,50)
                 statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
