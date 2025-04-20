@@ -116,20 +116,16 @@ local function getWallRaycastResult()
             if ray.Distance < minDistance then
                 minDistance = ray.Distance
                 closestHit = ray
-                -- print("Ray hit:", ray.Instance.Name, ray.Distance) -- Debug print
             end
         end
     end
 
     -- === 2. Forward BlockCast ===
-    -- Cast a small block shape forward from slightly below the HRP center
-    local blockCastSize = Vector3.new(1.5, 1, 0.5) -- Width, Height, Depth (adjust as needed)
-    local blockCastOffset = CFrame.new(0, -1, -0.5) -- Position relative to HRP (X, Y(down), Z(forward))
+    local blockCastSize = Vector3.new(1.5, 1, 0.5) -- Width, Height, Depth
+    local blockCastOffset = CFrame.new(0, -1, -0.5) -- Position relative to HRP
     local blockCastOriginCF = hrpCF * blockCastOffset
-    local blockCastDirection = hrpCF.LookVector -- Cast directly forward
-
-    -- We only need to cast a short distance *from* the offset origin
-    local blockCastDistance = 1.5 -- How far forward to check with the block
+    local blockCastDirection = hrpCF.LookVector
+    local blockCastDistance = 1.5
 
     local blockResult = Workspace:Blockcast(
         blockCastOriginCF,
@@ -139,18 +135,12 @@ local function getWallRaycastResult()
     )
 
     if blockResult and blockResult.Instance then
-        -- Check if the block hit is closer than any line ray hit
-        -- Blockcast Distance is from the origin CFrame to the hit point
         if blockResult.Distance < minDistance then
             minDistance = blockResult.Distance
-            closestHit = blockResult -- BlockcastResult has similar properties (Instance, Position, Normal, Distance)
-            -- print("BlockCast hit:", blockResult.Instance.Name, blockResult.Distance) -- Debug print
+            closestHit = blockResult
         end
     end
 
-    -- [[ Optional: Add more BlockCasts in other directions (Left, Right, Back) if needed ]] --
-
-    -- Return the closest valid hit found by any method
     return closestHit
 end
 -- ============================================================== --
@@ -158,61 +148,93 @@ end
 -- ============================================================== --
 
 
+-- ======================================================================== --
 -- Function for the "Jump" button in GUI 2 - Uses revised getWallRaycastResult
+-- Camera influence sign CORRECTED
+-- ======================================================================== --
 local function performFaceWallJump()
     local player = Players.LocalPlayer
     local character = player.Character
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+    local camera = Workspace.CurrentCamera
 
-    if not (humanoid and rootPart and humanoid:GetState() ~= Enum.HumanoidStateType.Dead) then
-        print("Cannot perform jump: Player components missing or dead.")
+    if not (humanoid and rootPart and camera and humanoid:GetState() ~= Enum.HumanoidStateType.Dead) then
+        print("Cannot perform jump: Player components or camera missing, or player dead.")
         return
     end
 
-    local wallRayResult = getWallRaycastResult() -- Uses the NEW function
+    local wallRayResult = getWallRaycastResult()
 
     if wallRayResult then
         -- 1. Calculate Base Direction Away from Wall
         local wallNormal = wallRayResult.Normal
-        local horizontalWallNormal = Vector3.new(wallNormal.X, 0, wallNormal.Z).Unit
-        if horizontalWallNormal.Magnitude < 0.1 then
+        local baseDirectionAwayFromWall = Vector3.new(wallNormal.X, 0, wallNormal.Z).Unit
+        if baseDirectionAwayFromWall.Magnitude < 0.1 then
              local dirToHit = (wallRayResult.Position - rootPart.Position) * Vector3.new(1,0,1)
-             horizontalWallNormal = -dirToHit.Unit
-             if horizontalWallNormal.Magnitude < 0.1 then
-                 horizontalWallNormal = -rootPart.CFrame.LookVector * Vector3.new(1, 0, 1)
-                 if horizontalWallNormal.Magnitude > 0.1 then horizontalWallNormal = horizontalWallNormal.Unit end
-                 if horizontalWallNormal.Magnitude < 0.1 then horizontalWallNormal = Vector3.new(0,0,1) end
-                 print("Wall normal unclear, using fallback direction away.")
+             baseDirectionAwayFromWall = -dirToHit.Unit
+             if baseDirectionAwayFromWall.Magnitude < 0.1 then
+                 baseDirectionAwayFromWall = -rootPart.CFrame.LookVector * Vector3.new(1, 0, 1)
+                 if baseDirectionAwayFromWall.Magnitude > 0.1 then baseDirectionAwayFromWall = baseDirectionAwayFromWall.Unit end
+                 if baseDirectionAwayFromWall.Magnitude < 0.1 then baseDirectionAwayFromWall = Vector3.new(0,0,1) end
+                 print("Wall normal unclear, using fallback direction away (Button).")
              end
         end
-        local directionAwayFromWall = horizontalWallNormal
+        baseDirectionAwayFromWall = Vector3.new(baseDirectionAwayFromWall.X, 0, baseDirectionAwayFromWall.Z).Unit
+        if baseDirectionAwayFromWall.Magnitude < 0.1 then baseDirectionAwayFromWall = Vector3.new(0,0,1) end
 
-        -- 2. Rotate Character AWAY from the wall FIRST
-        rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + directionAwayFromWall)
+        -- 2. Get Camera's Horizontal Look Direction
+        local cameraLook = camera.CFrame.LookVector
+        local horizontalCameraLook = Vector3.new(cameraLook.X, 0, cameraLook.Z).Unit
+        if horizontalCameraLook.Magnitude < 0.1 then horizontalCameraLook = baseDirectionAwayFromWall end
 
-        -- 3. Wait a very short moment (one frame) for rotation to take effect
+        -- 3. Calculate Initial Rotation Target Direction (Away from wall, camera influenced)
+        local maxInfluenceAngle = math.rad(60) -- Limit camera influence
+        local dot = math.clamp(baseDirectionAwayFromWall:Dot(horizontalCameraLook), -1, 1)
+        local angleBetween = math.acos(dot)
+        local cross = baseDirectionAwayFromWall:Cross(horizontalCameraLook)
+        -- CORRECTED SIGN: Invert the sign so positive Y means rotate TOWARDS camera
+        local rotationSign = -math.sign(cross.Y)
+        if rotationSign == 0 then angleBetween = 0 end -- Handle aligned/opposite cases
+        local actualInfluenceAngle = math.min(angleBetween, maxInfluenceAngle)
+        local adjustmentRotation = CFrame.Angles(0, actualInfluenceAngle * rotationSign, 0)
+        local initialTargetLookDirection = adjustmentRotation * baseDirectionAwayFromWall
+
+        -- 4. Apply Initial Rotation AWAY FIRST (Instant LookAt)
+        rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + initialTargetLookDirection)
+        print("Rotated away from wall with camera influence (Button). Target Dir:", initialTargetLookDirection)
+
+        -- 5. Wait a frame for rotation to process before jump
         RunService.Heartbeat:Wait()
 
-        -- 4. Apply Jump
+        -- 6. Apply Jump and the Cosmetic Rotation Flick
         local didJump = false
-        if humanoid:GetState() ~= Enum.HumanoidStateType.Dead then
+        if humanoid and humanoid:GetState() ~= Enum.HumanoidStateType.Dead then
             humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
             didJump = true
             print("Performed jump away from wall (Button).")
+
+            -- === Cosmetic Rotation Flick ===
+            rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, -1, 0)
+            task.wait(0.15)
+            rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, 1, 0)
+            print("Applied cosmetic rotation flick (-1/+1 radians).")
+            -- ===============================
+
         end
 
-        -- 5. Apply Rotation BACK towards the wall IF the jump occurred
+        -- 7. Apply Rotation BACK towards the wall IF the jump occurred (Instant LookAt)
         if didJump then
-            local directionTowardsWall = -directionAwayFromWall
+            local directionTowardsWall = -baseDirectionAwayFromWall
+            task.wait(0.05) -- Wait for flick to visually finish
             rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + directionTowardsWall)
             print("Rotated back towards wall after jump (Button).")
         end
     else
         print("No nearby wall found for wall jump (Button).")
-        -- Optional: humanoid:ChangeState(Enum.HumanoidStateType.Jumping) -- Standard jump if no wall
     end
 end
+-- ======================================================================== --
 
 
 -- Button Functions
@@ -255,7 +277,7 @@ additionButton.MouseButton1Click:Connect(function()
             jumpButtonInAddition.TextScaled = true
             jumpButtonInAddition.Active = true
 
-            jumpButtonInAddition.MouseButton1Click:Connect(performFaceWallJump)
+            jumpButtonInAddition.MouseButton1Click:Connect(performFaceWallJump) -- Connects to the CORRECTED function
 
             print("Addition Frame and Jump Button Created")
         end
@@ -284,7 +306,10 @@ destroyButton.MouseButton1Click:Connect(function()
     print("GUI Destroyed.")
 end)
 
--- Main Wallhop Function (Activated by Spacebar via JumpRequest) - Uses revised getWallRaycastResult
+-- ======================================================================== --
+-- Main Wallhop Function (Activated by Spacebar via JumpRequest)
+-- Camera influence sign CORRECTED
+-- ======================================================================== --
 jumpConnection = UserInputService.JumpRequest:Connect(function()
     if not wallhopToggle or not InfiniteJumpEnabled then return end
 
@@ -296,40 +321,49 @@ jumpConnection = UserInputService.JumpRequest:Connect(function()
 
     if not (humanoid and rootPart and camera and humanoid:GetState() ~= Enum.HumanoidStateType.Dead) then return end
 
-    local wallRayResult = getWallRaycastResult() -- Uses the NEW function
+    local wallRayResult = getWallRaycastResult()
 
     if wallRayResult then
         InfiniteJumpEnabled = false -- Start debounce
 
         -- 1. Calculate Base Direction Away from Wall
         local wallNormal = wallRayResult.Normal
-        local horizontalWallNormal = Vector3.new(wallNormal.X, 0, wallNormal.Z).Unit
-        if horizontalWallNormal.Magnitude < 0.1 then
-             horizontalWallNormal = (rootPart.CFrame.LookVector * Vector3.new(1,0,1)).Unit
-             if horizontalWallNormal.Magnitude < 0.1 then horizontalWallNormal = Vector3.new(0,0,-1) end
+        local baseDirectionAwayFromWall = Vector3.new(wallNormal.X, 0, wallNormal.Z).Unit
+        if baseDirectionAwayFromWall.Magnitude < 0.1 then
+             local dirToHit = (wallRayResult.Position - rootPart.Position) * Vector3.new(1,0,1)
+             baseDirectionAwayFromWall = -dirToHit.Unit
+             if baseDirectionAwayFromWall.Magnitude < 0.1 then
+                 baseDirectionAwayFromWall = -rootPart.CFrame.LookVector * Vector3.new(1, 0, 1)
+                 if baseDirectionAwayFromWall.Magnitude > 0.1 then baseDirectionAwayFromWall = baseDirectionAwayFromWall.Unit end
+                 if baseDirectionAwayFromWall.Magnitude < 0.1 then baseDirectionAwayFromWall = Vector3.new(0,0,1) end
+                 print("Wall normal unclear, using fallback direction away (Main).")
+             end
         end
-        local baseDirectionAwayFromWall = horizontalWallNormal
+        baseDirectionAwayFromWall = Vector3.new(baseDirectionAwayFromWall.X, 0, baseDirectionAwayFromWall.Z).Unit
+        if baseDirectionAwayFromWall.Magnitude < 0.1 then baseDirectionAwayFromWall = Vector3.new(0,0,1) end
 
         -- 2. Get Camera's Horizontal Look Direction
         local cameraLook = camera.CFrame.LookVector
         local horizontalCameraLook = Vector3.new(cameraLook.X, 0, cameraLook.Z).Unit
         if horizontalCameraLook.Magnitude < 0.1 then horizontalCameraLook = baseDirectionAwayFromWall end
 
-        -- 3. Calculate Initial Rotation (Away from Wall, Camera Influenced)
-        local maxInfluenceAngle = math.rad(40)
+        -- 3. Calculate Initial Rotation Target Direction (Away from wall, camera influenced)
+        local maxInfluenceAngle = math.rad(40) -- Limit camera influence
         local dot = math.clamp(baseDirectionAwayFromWall:Dot(horizontalCameraLook), -1, 1)
         local angleBetween = math.acos(dot)
         local cross = baseDirectionAwayFromWall:Cross(horizontalCameraLook)
-        local rotationSign = math.sign(cross.Y)
-        if rotationSign == 0 then angleBetween = 0 end
+         -- CORRECTED SIGN: Invert the sign so positive Y means rotate TOWARDS camera
+        local rotationSign = -math.sign(cross.Y)
+        if rotationSign == 0 then angleBetween = 0 end -- Handle aligned/opposite cases
         local actualInfluenceAngle = math.min(angleBetween, maxInfluenceAngle)
         local adjustmentRotation = CFrame.Angles(0, actualInfluenceAngle * rotationSign, 0)
         local initialTargetLookDirection = adjustmentRotation * baseDirectionAwayFromWall
 
-        -- 4. Apply Initial Rotation AWAY FIRST (with camera influence)
+        -- 4. Apply Initial Rotation AWAY FIRST (Instant LookAt)
         rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + initialTargetLookDirection)
+        print("Rotated away from wall with camera influence (Main). Target Dir:", initialTargetLookDirection)
 
-        -- 5. Wait a very short moment (one frame)
+        -- 5. Wait a frame for rotation to process before jump
         RunService.Heartbeat:Wait()
 
         -- 6. Apply Jump
@@ -340,7 +374,7 @@ jumpConnection = UserInputService.JumpRequest:Connect(function()
              print("Performed jump away from wall (Main).")
         end
 
-        -- 7. Apply Rotation BACK towards the wall IF the jump occurred
+        -- 7. Apply Rotation BACK towards the wall IF the jump occurred (Instant LookAt)
         if didJump then
              local directionTowardsWall = -baseDirectionAwayFromWall
              rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + directionTowardsWall)
@@ -352,5 +386,6 @@ jumpConnection = UserInputService.JumpRequest:Connect(function()
         InfiniteJumpEnabled = true -- End debounce
     end
 end)
+-- ======================================================================== --
 
-print("WallHop GUI Loaded (Enhanced Raycasting: 8 Rays + Blockcast)")
+print("WallHop GUI Loaded (Enhanced Raycasting) [Jump Button Flick] [Rotation Sign Corrected]")
