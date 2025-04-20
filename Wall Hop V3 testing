@@ -79,6 +79,7 @@ local UserInputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService") -- Added TweenService
 
 local raycastParams = RaycastParams.new()
 raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
@@ -93,7 +94,7 @@ local function getWallRaycastResult()
     local character = player.Character
     if not character then return nil end
     local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-    if not humanoidRootPart then return nil end -- Fixed typo here
+    if not humanoidRootPart then return nil end
 
     raycastParams.FilterDescendantsInstances = {character}
     local detectionDistance = 2
@@ -119,7 +120,7 @@ local function getWallRaycastResult()
     local blockResult = Workspace:Blockcast(blockCastOriginCF, blockCastSize, blockCastDirection * blockCastDistance, raycastParams)
 
     if blockResult and blockResult.Instance and blockResult.Distance < minDistance then
-         minDistance = blockResult.Distance -- Added this line, was missing before
+         minDistance = blockResult.Distance
          closestHit = blockResult
     end
 
@@ -127,9 +128,11 @@ local function getWallRaycastResult()
 end
 -- ============================================================== --
 
+
 -- ======================================================================== --
 -- Function for the "Jump" button in GUI 2 - Uses revised getWallRaycastResult
 -- Includes camera influence (corrected) and cosmetic flick + rotate back
+-- MODIFIED: Allows separate Left/Right max influence angles AND smooth rotation
 -- ======================================================================== --
 local function performFaceWallJump()
     local player = Players.LocalPlayer
@@ -143,6 +146,12 @@ local function performFaceWallJump()
     local wallRayResult = getWallRaycastResult()
 
     if wallRayResult then
+        -- === CONFIGURATION FOR JUMP BUTTON ROTATION ===
+        local maxInfluenceAngleRight = math.rad(-250) -- <<< CHANGE Max angle if camera is to the RIGHT
+        local maxInfluenceAngleLeft  = math.rad(100) -- <<< CHANGE Max angle if camera is to the LEFT
+        local rotationDuration = 0.2 -- <<< CHANGE THIS: Time in seconds for the pre-jump rotation
+        -- ============================================
+
         local wallNormal = wallRayResult.Normal
         local baseDirectionAwayFromWall = Vector3.new(wallNormal.X, 0, wallNormal.Z).Unit
         if baseDirectionAwayFromWall.Magnitude < 0.1 then
@@ -161,25 +170,51 @@ local function performFaceWallJump()
         local horizontalCameraLook = Vector3.new(cameraLook.X, 0, cameraLook.Z).Unit
         if horizontalCameraLook.Magnitude < 0.1 then horizontalCameraLook = baseDirectionAwayFromWall end
 
-        local maxInfluenceAngle = math.rad(60)
+        -- Calculate angle and direction between base and camera
         local dot = math.clamp(baseDirectionAwayFromWall:Dot(horizontalCameraLook), -1, 1)
         local angleBetween = math.acos(dot)
         local cross = baseDirectionAwayFromWall:Cross(horizontalCameraLook)
-        local rotationSign = -math.sign(cross.Y) -- Corrected sign
+        local rotationSign = -math.sign(cross.Y)
         if rotationSign == 0 then angleBetween = 0 end
-        local actualInfluenceAngle = math.min(angleBetween, maxInfluenceAngle)
+
+        -- Apply the correct maximum influence angle based on direction
+        local actualInfluenceAngle
+        if rotationSign == 1 then
+            actualInfluenceAngle = math.min(angleBetween, maxInfluenceAngleRight)
+        elseif rotationSign == -1 then
+            actualInfluenceAngle = math.min(angleBetween, maxInfluenceAngleLeft)
+        else
+            actualInfluenceAngle = 0
+        end
+
+        -- Calculate the final target direction using the clamped angle and the sign
         local adjustmentRotation = CFrame.Angles(0, actualInfluenceAngle * rotationSign, 0)
         local initialTargetLookDirection = adjustmentRotation * baseDirectionAwayFromWall
 
-        rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + initialTargetLookDirection)
-        RunService.Heartbeat:Wait()
+        -- <<< SMOOTH ROTATION LOGIC START >>>
+        local targetCFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + initialTargetLookDirection)
+        local tweenInfo = TweenInfo.new(
+            rotationDuration, -- Use the configured duration
+            Enum.EasingStyle.Sine, -- Smooth easing
+            Enum.EasingDirection.Out, -- Ease out towards the end
+            0, -- Repeat count
+            false, -- Reverses
+            0 -- Delay time
+        )
+        local rotationTween = TweenService:Create(rootPart, tweenInfo, {CFrame = targetCFrame})
 
+        rotationTween:Play()
+        rotationTween.Completed:Wait() -- Wait for the rotation tween to finish before jumping
+        -- <<< SMOOTH ROTATION LOGIC END >>>
+
+        -- Jump, Flick, and Rotate Back Logic
         local didJump = false
         if humanoid and humanoid:GetState() ~= Enum.HumanoidStateType.Dead then
             humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
             didJump = true
             print("Performed jump away from wall (Button).")
 
+            -- Cosmetic Flick
             rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, -1, 0)
             task.wait(0.15)
             rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, 1, 0)
@@ -232,7 +267,7 @@ additionButton.MouseButton1Click:Connect(function()
             jumpButtonInAddition.Size = UDim2.new(0.8, 0, 0.4, 0); jumpButtonInAddition.Position = UDim2.new(0.1, 0, 0.3, 0)
             jumpButtonInAddition.Text = "Jump"; jumpButtonInAddition.TextColor3 = Color3.fromRGB(255,255,255)
             jumpButtonInAddition.TextScaled = true; jumpButtonInAddition.Active = true
-            jumpButtonInAddition.MouseButton1Click:Connect(performFaceWallJump)
+            jumpButtonInAddition.MouseButton1Click:Connect(performFaceWallJump) -- Connects to the updated function
         end
     else
         if additionalFrame then
@@ -250,8 +285,7 @@ end)
 
 -- ======================================================================== --
 -- Main Wallhop Function (Activated by Spacebar via JumpRequest)
--- MODIFIED: Now mirrors the Jump Button logic completely:
---           Camera influence -> Jump -> Flick -> Rotate Back
+-- NOTE: This function still uses INSTANT rotation.
 -- ======================================================================== --
 jumpConnection = UserInputService.JumpRequest:Connect(function()
     if not wallhopToggle or not InfiniteJumpEnabled then return end
@@ -294,7 +328,7 @@ jumpConnection = UserInputService.JumpRequest:Connect(function()
         local dot = math.clamp(baseDirectionAwayFromWall:Dot(horizontalCameraLook), -1, 1)
         local angleBetween = math.acos(dot)
         local cross = baseDirectionAwayFromWall:Cross(horizontalCameraLook)
-        local rotationSign = -math.sign(cross.Y) -- Corrected sign
+        local rotationSign = -math.sign(cross.Y)
         if rotationSign == 0 then angleBetween = 0 end
         local actualInfluenceAngle = math.min(angleBetween, maxInfluenceAngle)
         local adjustmentRotation = CFrame.Angles(0, actualInfluenceAngle * rotationSign, 0)
@@ -330,10 +364,10 @@ jumpConnection = UserInputService.JumpRequest:Connect(function()
              print("Rotated back towards wall after jump (Main).")
         end
 
-        -- Post-jump cooldown (wait is already included in flick and rotate back waits)
+        -- Post-jump cooldown
         InfiniteJumpEnabled = true -- End debounce
     end
 end)
 -- ======================================================================== --
 
-print("WallHop GUI Loaded (Enhanced Raycasting) [Main Jump mirrors Button Jump]")
+print("WallHop GUI Loaded (Enhanced Raycasting) [Main Jump mirrors Button Jump] [Button Jump has L/R Rot Limits & Smooth Rotation]")
