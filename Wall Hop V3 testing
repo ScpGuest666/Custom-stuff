@@ -68,7 +68,7 @@ statusLabel.Parent = frame
 statusLabel.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 statusLabel.Size = UDim2.new(0, 200, 0, 30)
 statusLabel.Position = UDim2.new(0, 0, 0, -30)
-statusLabel.Text = "WallHop V2: Off"
+statusLabel.Text = "WallHop V3: Off" -- Changed V2 to V3
 statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
 statusLabel.TextScaled = true
 
@@ -79,7 +79,6 @@ local UserInputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
--- Removed TweenService reference as it's no longer used here
 
 local raycastParams = RaycastParams.new()
 raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
@@ -149,7 +148,6 @@ local function performFaceWallJump()
         -- === CONFIGURATION FOR JUMP BUTTON ROTATION ===
         local maxInfluenceAngleRight = math.rad(-250) -- Max angle if camera is to the RIGHT
         local maxInfluenceAngleLeft  = math.rad(100) -- Max angle if camera is to the LEFT
-        -- local rotationDuration = 0.2 -- Removed this line
         -- ============================================
 
         local wallNormal = wallRayResult.Normal
@@ -179,11 +177,11 @@ local function performFaceWallJump()
 
         -- Apply the correct maximum influence angle based on direction
         local actualInfluenceAngle
-        if rotationSign == 1 then
+        if rotationSign == 1 then -- Camera influencing RIGHT
             actualInfluenceAngle = math.min(angleBetween, maxInfluenceAngleRight)
-        elseif rotationSign == -1 then
+        elseif rotationSign == -1 then -- Camera influencing LEFT
             actualInfluenceAngle = math.min(angleBetween, maxInfluenceAngleLeft)
-        else
+        else -- Aligned
             actualInfluenceAngle = 0
         end
 
@@ -191,10 +189,9 @@ local function performFaceWallJump()
         local adjustmentRotation = CFrame.Angles(0, actualInfluenceAngle * rotationSign, 0)
         local initialTargetLookDirection = adjustmentRotation * baseDirectionAwayFromWall
 
-        -- <<< INSTANT ROTATION LOGIC >>>
+        -- Apply Instant Rotation
         rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + initialTargetLookDirection)
         RunService.Heartbeat:Wait() -- Wait a frame for rotation to process before jump
-        -- <<< INSTANT ROTATION LOGIC END >>>
 
         -- Jump, Flick, and Rotate Back Logic
         local didJump = false
@@ -226,13 +223,13 @@ end
 
 -- Button Functions
 onButton.MouseButton1Click:Connect(function()
-    statusLabel.Text = "WallHop V2: On"
+    statusLabel.Text = "WallHop V3: On" 
     statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
     wallhopToggle = true
 end)
 
 offButton.MouseButton1Click:Connect(function()
-    statusLabel.Text = "WallHop V2: Off"
+    statusLabel.Text = "WallHop V3: Off" 
     statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
     wallhopToggle = false
 end)
@@ -274,7 +271,7 @@ end)
 
 -- ======================================================================== --
 -- Main Wallhop Function (Activated by Spacebar via JumpRequest)
--- NOTE: This function still uses INSTANT rotation.
+-- MODIFIED: Uses the SAME L/R rotation logic & limits as the Jump Button.
 -- ======================================================================== --
 jumpConnection = UserInputService.JumpRequest:Connect(function()
     if not wallhopToggle or not InfiniteJumpEnabled then return end
@@ -291,6 +288,11 @@ jumpConnection = UserInputService.JumpRequest:Connect(function()
 
     if wallRayResult then
         InfiniteJumpEnabled = false -- Start debounce
+
+        -- === CONFIGURATION FOR MAIN JUMP ROTATION (Mirrors Jump Button) ===
+        local maxInfluenceAngleRight = math.rad(-250) -- Max angle if camera is to the RIGHT
+        local maxInfluenceAngleLeft  = math.rad(100) -- Max angle if camera is to the LEFT
+        -- ==================================================================
 
         -- 1. Calculate Base Direction Away from Wall
         local wallNormal = wallRayResult.Normal
@@ -313,19 +315,28 @@ jumpConnection = UserInputService.JumpRequest:Connect(function()
         if horizontalCameraLook.Magnitude < 0.1 then horizontalCameraLook = baseDirectionAwayFromWall end
 
         -- 3. Calculate Initial Rotation Target Direction (Away from wall, camera influenced)
-        local maxInfluenceAngle = math.rad(40) -- Limit camera influence for spacebar jump
         local dot = math.clamp(baseDirectionAwayFromWall:Dot(horizontalCameraLook), -1, 1)
         local angleBetween = math.acos(dot)
         local cross = baseDirectionAwayFromWall:Cross(horizontalCameraLook)
         local rotationSign = -math.sign(cross.Y)
         if rotationSign == 0 then angleBetween = 0 end
-        local actualInfluenceAngle = math.min(angleBetween, maxInfluenceAngle)
+
+        -- Apply the correct maximum influence angle based on direction (Mirrors Jump Button)
+        local actualInfluenceAngle
+        if rotationSign == 1 then -- Camera influencing RIGHT
+            actualInfluenceAngle = math.min(angleBetween, maxInfluenceAngleRight)
+        elseif rotationSign == -1 then -- Camera influencing LEFT
+            actualInfluenceAngle = math.min(angleBetween, maxInfluenceAngleLeft)
+        else -- Aligned
+            actualInfluenceAngle = 0
+        end
+
+        -- Calculate the final target direction
         local adjustmentRotation = CFrame.Angles(0, actualInfluenceAngle * rotationSign, 0)
         local initialTargetLookDirection = adjustmentRotation * baseDirectionAwayFromWall
 
         -- 4. Apply Initial Rotation AWAY FIRST (Instant LookAt)
         rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + initialTargetLookDirection)
-        print("Rotated away from wall with camera influence (Main). Target Dir:", initialTargetLookDirection)
 
         -- 5. Wait a frame for rotation to process before jump
         RunService.Heartbeat:Wait()
@@ -345,7 +356,7 @@ jumpConnection = UserInputService.JumpRequest:Connect(function()
              -- ====================================
         end
 
-        -- 7. Apply Rotation BACK towards the wall IF the jump occurred (Mirrors Jump Button)
+        -- 7. Apply Rotation BACK towards the wall IF the jump occurred
         if didJump then
              local directionTowardsWall = -baseDirectionAwayFromWall
              task.wait(0.05) -- Wait for flick to visually finish
@@ -358,5 +369,3 @@ jumpConnection = UserInputService.JumpRequest:Connect(function()
     end
 end)
 -- ======================================================================== --
-
-print("WallHop GUI Loaded (Enhanced Raycasting) [Main Jump mirrors Button Jump] [Button Jump has L/R Rot Limits & Instant Rotation]")
