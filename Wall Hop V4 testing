@@ -11,6 +11,7 @@ frame.Size = UDim2.new(0, 200, 0, 140) -- Increased height from 100 to 140
 frame.Position = UDim2.new(0.5, -100, 0.5, -70) -- Adjusted Y position for new height (-140/2)
 frame.Active = true
 frame.Draggable = true
+frame.ClipsDescendants = false -- Allow children (like the + button) to render outside the frame bounds
 
 -- Calculate button positions (Top row)
 local frameWidth = frame.Size.X.Offset
@@ -77,10 +78,26 @@ local statusLabel = Instance.new("TextLabel")
 statusLabel.Parent = frame
 statusLabel.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 statusLabel.Size = UDim2.new(0, 200, 0, 30)
-statusLabel.Position = UDim2.new(0, 0, 0, -30)
+statusLabel.Position = UDim2.new(0, 0, 0, -30) -- Positioned 30 pixels ABOVE the frame's top edge
 statusLabel.Text = "WallHop V3: Off"
 statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
 statusLabel.TextScaled = true
+
+-- <<< MODIFIED: Create Plus Button >>>
+local plusButton = Instance.new("TextButton")
+plusButton.Parent = frame -- Parent is frame (GUI 1)
+plusButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0) -- Start as Off (Red)
+plusButton.Size = UDim2.new(0, 30, 0, 30) -- Small square button, 30px high
+-- <<< CHANGED: Position relative to the parent frame's top-left corner >>>
+-- X: Place it 5 pixels to the left of the frame (offset = -buttonWidth - gap = -30 - 5 = -35)
+-- Y: Align its top edge with the statusLabel's top edge (offset = statusLabel Y offset = -30)
+plusButton.Position = UDim2.new(0, -35, 0, -30)
+plusButton.Text = "+"
+plusButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+plusButton.TextScaled = true
+local plusButtonToggle = false -- State variable for the Plus button
+-- <<< END MODIFIED: Create Plus Button >>>
+
 
 -- Variables for Wallhop Functionality
 local wallhopToggle = false
@@ -244,7 +261,7 @@ offButton.MouseButton1Click:Connect(function()
     wallhopToggle = false
 end)
 
--- Addition Button Functionality (Creates GUI 2 with FIXED size) <<<< MODIFIED HERE
+-- Addition Button Functionality (Creates GUI 2 with FIXED size)
 additionButton.MouseButton1Click:Connect(function()
     additionToggle = not additionToggle
     if additionToggle then
@@ -255,7 +272,7 @@ additionButton.MouseButton1Click:Connect(function()
             additionalFrame.Parent = frame -- Parented to GUI 1
             additionalFrame.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
 
-            -- GUI 2 Size Definition - CHANGED TO FIXED PIXELS
+            -- GUI 2 Size Definition - FIXED PIXELS
             additionalFrame.Size = UDim2.new(0, 200, 0, 100) -- Fixed 200px width, 100px height
 
             additionalFrame.Position = UDim2.new(0, 0, 1, 0) -- Positioned directly below the parent (frame)
@@ -292,9 +309,26 @@ autoButton.MouseButton1Click:Connect(function()
     end
 end)
 
+-- Plus Button Toggle Functionality
+plusButton.MouseButton1Click:Connect(function()
+    plusButtonToggle = not plusButtonToggle -- Flip the toggle state
+    if plusButtonToggle then
+        plusButton.BackgroundColor3 = Color3.fromRGB(0, 255, 0) -- Green for On
+        print("Plus Button toggled ON")
+        -- Add any future 'ON' functionality here
+    else
+        plusButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0) -- Red for Off
+        print("Plus Button toggled OFF")
+        -- Add any future 'OFF' functionality here
+    end
+end)
+
+
 destroyButton.MouseButton1Click:Connect(function()
     if jumpConnection then jumpConnection:Disconnect(); jumpConnection = nil end
-    wallhopToggle = false; autoToggle = false; screenGui:Destroy(); additionalFrame = nil; jumpButtonInAddition = nil
+    wallhopToggle = false; autoToggle = false; plusButtonToggle = false -- Reset plus toggle state too
+    screenGui:Destroy(); -- This destroys frame, which now destroys plusButton and additionalFrame (if exists) too
+    additionalFrame = nil; jumpButtonInAddition = nil; plusButton = nil; frame = nil -- Clear references
     print("GUI Destroyed.")
 end)
 
