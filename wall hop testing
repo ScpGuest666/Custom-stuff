@@ -3,14 +3,25 @@ local screenGui = Instance.new("ScreenGui")
 screenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
 screenGui.ResetOnSpawn = false
 
--- Create Frame (GUI 1) - Resized for Auto button
+-- Services
+local UserInputService = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+
+-- Player specific
+local player = Players.LocalPlayer
+local mouse = player:GetMouse()
+
+-- Create Frame (GUI 1)
 local frame = Instance.new("Frame")
 frame.Parent = screenGui
 frame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-frame.Size = UDim2.new(0, 200, 0, 140) -- Increased height from 100 to 140
-frame.Position = UDim2.new(0.5, -100, 0.5, -70) -- Adjusted Y position for new height (-140/2)
+frame.Size = UDim2.new(0, 200, 0, 140)
+frame.Position = UDim2.new(0.5, -100, 0.5, -70)
 frame.Active = true
 frame.Draggable = true
+frame.ClipsDescendants = false
 
 -- Calculate button positions (Top row)
 local frameWidth = frame.Size.X.Offset
@@ -41,8 +52,8 @@ additionButton.Position = UDim2.new(0, additionButtonX, 0, 20)
 additionButton.Text = "Addition"
 additionButton.TextScaled = true
 local additionToggle = false
-local additionalFrame = nil -- This will hold the Frame instance (GUI 2)
-local jumpButtonInAddition = nil -- To hold the jump button specific to the additional frame
+local additionalFrame = nil
+local jumpButtonInAddition = nil
 
 -- Create Off Button
 local offButton = Instance.new("TextButton")
@@ -58,87 +69,86 @@ local destroyButton = Instance.new("TextButton")
 destroyButton.Parent = frame
 destroyButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 destroyButton.Size = UDim2.new(0, 160, 0, 30)
-destroyButton.Position = UDim2.new(0, 20, 0, 60) -- Position remains the same relative to top
+destroyButton.Position = UDim2.new(0, 20, 0, 60)
 destroyButton.Text = "Destroy"
 destroyButton.TextScaled = true
 
 -- Create Auto Button
 local autoButton = Instance.new("TextButton")
 autoButton.Parent = frame
-autoButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0) -- Start as Off (Red)
+autoButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0) -- Start Red (Off)
 autoButton.Size = UDim2.new(0, 160, 0, 30)
-autoButton.Position = UDim2.new(0, 20, 0, 100) -- Positioned below Destroy button
+autoButton.Position = UDim2.new(0, 20, 0, 100)
 autoButton.Text = "Auto"
 autoButton.TextScaled = true
-local autoToggle = false -- State variable for the Auto button
-local edgeCheckActive = false -- Variable to control the edge check loop
+local autoToggle = false -- State variable for Auto button
 
--- Create Status Indicator
+-- Create Status Indicator -- <<< RENAMED HERE >>>
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Parent = frame
 statusLabel.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 statusLabel.Size = UDim2.new(0, 200, 0, 30)
 statusLabel.Position = UDim2.new(0, 0, 0, -30)
-statusLabel.Text = "WallHop V4: Off"
+statusLabel.Text = "WallHop V4: Off" -- <<< Initial Text Changed
 statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
 statusLabel.TextScaled = true
 
+-- Create Plus Button
+local plusButton = Instance.new("TextButton")
+plusButton.Parent = frame
+plusButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0) -- Start Red (Off)
+plusButton.Size = UDim2.new(0, 30, 0, 30)
+plusButton.Position = UDim2.new(0, -35, 0, -30)
+plusButton.Text = "+"
+plusButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+plusButton.TextScaled = true
+local plusButtonToggle = false
+local plusFrame = nil -- Holds GUI 3
+local selectButtonInPlusFrame = nil
+local selectModeActive = false
+local colorListLabelInPlusFrame = nil
+local mouseClickConnection = nil
+local selectedBrickColor = nil -- Variable to store the selected BrickColor
+
 -- Variables for Wallhop Functionality
 local wallhopToggle = false
-local InfiniteJumpEnabled = true
-local UserInputService = game:GetService("UserInputService")
-local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
-local RunService = game:GetService("RunService")
-
--- Configuration for Auto-Jump Boost
-local autoJumpVerticalBoost = 60 -- << NEW: Adjust this value as needed (higher = more boost)
-
+local InfiniteJumpEnabled = true -- Debounce for ALL jumps (manual and auto)
 local raycastParams = RaycastParams.new()
 raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
-
 local jumpConnection = nil
+local autoJumpConnection = nil -- Connection for the auto jump Heartbeat loop
 
 -- ============================================================== --
--- Precise wall detection function - REVISED with More Rays + Blockcast --
--- (Used by performFaceWallJump and manual spacebar jump)
+-- Precise wall detection function (Unchanged)
 -- ============================================================== --
 local function getWallRaycastResult()
-    local player = Players.LocalPlayer
     local character = player.Character
     if not character then return nil end
     local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-    local humanoid = character:FindFirstChildOfClass("Humanoid") -- Get humanoid for size
-    if not humanoidRootPart or not humanoid then return nil end
+    if not humanoidRootPart then return nil end
 
-    local wallDetectParams = RaycastParams.new()
-    wallDetectParams.FilterDescendantsInstances = {character}
-    wallDetectParams.FilterType = Enum.RaycastFilterType.Blacklist
-    wallDetectParams.IgnoreWater = true
-
+    raycastParams.FilterDescendantsInstances = {character}
     local detectionDistance = 2
     local closestHit = nil
     local minDistance = detectionDistance + 1
     local hrpCF = humanoidRootPart.CFrame
 
-    -- Multi-directional Rays
     for i = 0, 7 do
         local angle = math.rad(i * 45)
         local direction = (hrpCF * CFrame.Angles(0, angle, 0)).LookVector
-        local ray = Workspace:Raycast(humanoidRootPart.Position, direction * detectionDistance, wallDetectParams)
+        local ray = Workspace:Raycast(humanoidRootPart.Position, direction * detectionDistance, raycastParams)
         if ray and ray.Instance and ray.Distance < minDistance then
             minDistance = ray.Distance
             closestHit = ray
         end
     end
 
-    -- Blockcast (adjust size/offset/distance as needed)
-    local blockCastSize = Vector3.new(1.5, humanoid.HipHeight * 2, 0.5) -- Size based on HipHeight
-    local blockCastOffset = CFrame.new(0, 0, -blockCastSize.Z/2 - 0.1) -- Offset slightly forward
+    local blockCastSize = Vector3.new(1.5, 1, 0.5)
+    local blockCastOffset = CFrame.new(0, -1, -0.5)
     local blockCastOriginCF = hrpCF * blockCastOffset
     local blockCastDirection = hrpCF.LookVector
     local blockCastDistance = 1.5
-    local blockResult = Workspace:Blockcast(blockCastOriginCF, blockCastSize, blockCastDirection * blockCastDistance, wallDetectParams)
+    local blockResult = Workspace:Blockcast(blockCastOriginCF, blockCastSize, blockCastDirection * blockCastDistance, raycastParams)
 
     if blockResult and blockResult.Instance and blockResult.Distance < minDistance then
          minDistance = blockResult.Distance
@@ -149,177 +159,117 @@ local function getWallRaycastResult()
 end
 -- ============================================================== --
 
+-- ======================================================================== --
+-- Reusable Core Wall Jump Execution Function (Unchanged Logic)
+-- ======================================================================== --
+local function executeWallJump(wallRayResult, jumpType) -- jumpType for debug print ("Manual", "Button", "Auto")
+    if not InfiniteJumpEnabled then return end -- Respect debounce
 
--- ======================================================================== --
--- Function for the "Jump" button in GUI 2 AND Auto Jump
--- Includes camera influence, cosmetic flick, rotate back
--- Uses getWallRaycastResult for wall normal calculation
--- ADDED: Vertical impulse boost
--- ======================================================================== --
-local function performFaceWallJump()
-    local player = Players.LocalPlayer
     local character = player.Character
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     local rootPart = character and character:FindFirstChild("HumanoidRootPart")
     local camera = Workspace.CurrentCamera
 
-    if not (humanoid and rootPart and camera and humanoid:GetState() ~= Enum.HumanoidStateType.Dead) then
+    if not (humanoid and rootPart and camera and humanoid:GetState() ~= Enum.HumanoidStateType.Dead and wallRayResult) then
+        -- print("executeWallJump: Invalid state or no wall result.") -- Less spammy print
         return
     end
 
-    local wallRayResult = getWallRaycastResult()
+    InfiniteJumpEnabled = false -- Start debounce FOR ALL JUMPS
 
-    if wallRayResult then
-        -- Calculate Base Direction Away from Wall
-        local wallNormal = wallRayResult.Normal
-        local baseDirectionAwayFromWall = (Vector3.new(wallNormal.X, 0, wallNormal.Z)).Unit
-        if baseDirectionAwayFromWall.Magnitude < 0.1 then
-             local dirToHit = (wallRayResult.Position - rootPart.Position) * Vector3.new(1,0,1)
-             if dirToHit.Magnitude > 0.1 then baseDirectionAwayFromWall = (-dirToHit).Unit
-             else baseDirectionAwayFromWall = (-rootPart.CFrame.LookVector * Vector3.new(1, 0, 1)).Unit
-                 if baseDirectionAwayFromWall.Magnitude < 0.1 then baseDirectionAwayFromWall = Vector3.new(0,0,-1) end
-             end
-        end
-        baseDirectionAwayFromWall = baseDirectionAwayFromWall.Unit
+    local maxInfluenceAngleRight = math.rad(20)
+    local maxInfluenceAngleLeft  = math.rad(-100)
 
-        -- Get Camera Influence
-        local cameraLook = camera.CFrame.LookVector
-        local horizontalCameraLook = (Vector3.new(cameraLook.X, 0, cameraLook.Z)).Unit
-        if horizontalCameraLook.Magnitude < 0.1 then horizontalCameraLook = baseDirectionAwayFromWall end
+    local wallNormal = wallRayResult.Normal
+    local baseDirectionAwayFromWall = Vector3.new(wallNormal.X, 0, wallNormal.Z).Unit
+    if baseDirectionAwayFromWall.Magnitude < 0.1 then
+         local dirToHit = (wallRayResult.Position - rootPart.Position) * Vector3.new(1,0,1)
+         baseDirectionAwayFromWall = -dirToHit.Unit
+         if baseDirectionAwayFromWall.Magnitude < 0.1 then
+             baseDirectionAwayFromWall = -rootPart.CFrame.LookVector * Vector3.new(1, 0, 1)
+             if baseDirectionAwayFromWall.Magnitude > 0.1 then baseDirectionAwayFromWall = baseDirectionAwayFromWall.Unit end
+             if baseDirectionAwayFromWall.Magnitude < 0.1 then baseDirectionAwayFromWall = Vector3.new(0,0,1) end
+         end
+    end
+    baseDirectionAwayFromWall = Vector3.new(baseDirectionAwayFromWall.X, 0, baseDirectionAwayFromWall.Z).Unit
+    if baseDirectionAwayFromWall.Magnitude < 0.1 then baseDirectionAwayFromWall = Vector3.new(0,0,1) end
 
-        -- Calculate Angle and Apply Influence Limits
-        local dot = math.clamp(baseDirectionAwayFromWall:Dot(horizontalCameraLook), -1, 1)
-        local angleBetween = math.acos(dot)
-        local cross = baseDirectionAwayFromWall:Cross(horizontalCameraLook)
-        local rotationSign = -math.sign(cross.Y)
-        if rotationSign == 0 then angleBetween = 0 end
+    local cameraLook = camera.CFrame.LookVector
+    local horizontalCameraLook = Vector3.new(cameraLook.X, 0, cameraLook.Z).Unit
+    if horizontalCameraLook.Magnitude < 0.1 then horizontalCameraLook = baseDirectionAwayFromWall end
 
-        local maxInfluenceAngleRight = math.rad(20)
-        local maxInfluenceAngleLeft  = math.rad(-100)
-        local actualInfluenceAngle
-        if rotationSign == 1 then actualInfluenceAngle = math.min(angleBetween, maxInfluenceAngleRight)
-        elseif rotationSign == -1 then actualInfluenceAngle = math.max(angleBetween * rotationSign, maxInfluenceAngleLeft); rotationSign = 1
-        else actualInfluenceAngle = 0 end
+    local dot = math.clamp(baseDirectionAwayFromWall:Dot(horizontalCameraLook), -1, 1)
+    local angleBetween = math.acos(dot)
+    local cross = baseDirectionAwayFromWall:Cross(horizontalCameraLook)
+    local rotationSign = -math.sign(cross.Y)
+    if rotationSign == 0 then angleBetween = 0 end
 
-        -- Calculate Final Jump Direction and Rotate Player
-        local adjustmentRotation = CFrame.Angles(0, actualInfluenceAngle, 0)
-        local initialTargetLookDirection = adjustmentRotation * baseDirectionAwayFromWall
-
-        -- Apply Instant Rotation (LookAt)
-        rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + initialTargetLookDirection)
-        RunService.Heartbeat:Wait() -- Wait a frame for rotation physics
-
-        -- Jump, BOOST, Flick, and Rotate Back Logic
-        local didJump = false
-        if humanoid and humanoid:GetState() ~= Enum.HumanoidStateType.Dead then
-            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-
-            -- Apply Vertical Boost <<<< MODIFIED SECTION
-            local boostVector = Vector3.new(0, autoJumpVerticalBoost, 0)
-            rootPart:ApplyImpulse(boostVector)
-            -- print("Applied vertical boost:", boostVector.Y)
-            -- End Vertical Boost <<<<
-
-            didJump = true
-            print("Performed jump away from wall (Button/Auto). Boost:", autoJumpVerticalBoost) -- Added boost info
-
-            -- Cosmetic Flick (Optional - can be removed or adjusted)
-            -- rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, -1, 0)
-            -- task.wait(0.15)
-            -- rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, 1, 0)
-            -- print("Applied cosmetic rotation flick (Button/Auto).")
-
-        end
-
-        -- Rotate back AFTER jump IF jump happened
-        if didJump then
-            local directionTowardsWall = -baseDirectionAwayFromWall
-            task.wait(0.05)
-            if humanoid and humanoid:GetState() ~= Enum.HumanoidStateType.Dead then
-                 rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + directionTowardsWall)
-                 -- print("Rotated back towards wall after jump (Button/Auto).")
-            end
-        end
+    local actualInfluenceAngle
+    if rotationSign == 1 then
+        actualInfluenceAngle = math.min(angleBetween, maxInfluenceAngleRight)
+    elseif rotationSign == -1 then
+        actualInfluenceAngle = math.min(angleBetween, maxInfluenceAngleLeft)
     else
-        print("performFaceWallJump: No nearby wall found by getWallRaycastResult.")
+        actualInfluenceAngle = 0
+    end
+
+    local adjustmentRotation = CFrame.Angles(0, actualInfluenceAngle * rotationSign, 0)
+    local initialTargetLookDirection = adjustmentRotation * baseDirectionAwayFromWall
+
+    rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + initialTargetLookDirection)
+    RunService.Heartbeat:Wait()
+
+    local didJump = false
+    if humanoid and humanoid:GetState() ~= Enum.HumanoidStateType.Dead then
+         humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+         didJump = true
+         print("Performed jump away from wall (".. (jumpType or "Unknown") .. ").")
+
+         rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, -1, 0)
+         task.wait(0.15)
+         rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, 1, 0)
+         print("Applied cosmetic rotation flick (-1/+1 radians) (".. (jumpType or "Unknown") .. ").")
+    end
+
+    if didJump then
+         local directionTowardsWall = -baseDirectionAwayFromWall
+         task.wait(0.05)
+         rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + directionTowardsWall)
+         print("Rotated back towards wall after jump (".. (jumpType or "Unknown") .. ").")
+    end
+
+    task.wait(0.1)
+    InfiniteJumpEnabled = true
+end
+-- ======================================================================== --
+
+-- ======================================================================== --
+-- Function for the "Jump" button in GUI 2 - Uses executeWallJump
+-- ======================================================================== --
+local function performFaceWallJump()
+    local wallRayResult = getWallRaycastResult()
+    if wallRayResult then
+        executeWallJump(wallRayResult, "Button") -- Call the core function
+    else
+        print("No nearby wall found for wall jump (Button).")
     end
 end
 -- ======================================================================== --
 
-
--- ======================================================================== --
--- Revised Platform Edge Detection Function (Improved)
--- ======================================================================== --
-local function isAtPlatformEdge()
-    local player = Players.LocalPlayer
-    local character = player.Character
-    if not character then return false end
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    local rootPart = character:FindFirstChild("HumanoidRootPart")
-    if not humanoid or not rootPart or humanoid:GetState() == Enum.HumanoidStateType.Dead then return false end
-
-    -- 1. Primary Check: Is the Humanoid actually on the ground?
-    if humanoid.FloorMaterial == nil then
-        return false
-    end
-
-    -- Raycast setup
-    local edgeRayParams = RaycastParams.new()
-    edgeRayParams.FilterDescendantsInstances = {character}
-    edgeRayParams.FilterType = Enum.RaycastFilterType.Blacklist
-    edgeRayParams.IgnoreWater = true
-
-    local rootPos = rootPart.Position
-    local rootCF = rootPart.CFrame
-    local hipHeight = humanoid.HipHeight
-
-    local footPos = rootPos - Vector3.new(0, hipHeight, 0)
-
-    local horizontalForward = (rootCF.LookVector * Vector3.new(1, 0, 1)).Unit
-    if horizontalForward.Magnitude < 0.1 then
-         horizontalForward = (rootCF.RightVector * Vector3.new(1,0,1)).Unit
-         if horizontalForward.Magnitude < 0.1 then horizontalForward = Vector3.new(0,0,1) end
-    end
-
-    -- Configuration
-    local edgeCheckForwardDist = 0.75
-    local wallCheckForwardDist = 1.75
-    local checkVerticalOffset = 0.1
-    local edgeFloorCheckDownDist = 1.5
-    local wallCheckHeightOffset = 0.6
-
-    -- 2. Check for *Absence* of Floor Ahead
-    local edgeRayOrigin = footPos + (horizontalForward * edgeCheckForwardDist) + Vector3.new(0, checkVerticalOffset, 0)
-    local edgeFloorRay = Workspace:Raycast(edgeRayOrigin, Vector3.new(0, -edgeFloorCheckDownDist, 0), edgeRayParams)
-    if edgeFloorRay then return false end -- Floor detected ahead, not an edge
-
-    -- 3. Check for *Presence* of a Wall Further Ahead
-    local wallRayOrigin = footPos + Vector3.new(0, wallCheckHeightOffset, 0)
-    local wallRay = Workspace:Raycast(wallRayOrigin, horizontalForward * wallCheckForwardDist, edgeRayParams)
-    if not wallRay then return false end -- No wall detected ahead
-
-    -- Conditions met
-    return true
-end
--- ======================================================================== --
-
-
--- Button Functions
+-- Button Functions -- <<< RENAMED HERE >>>
 onButton.MouseButton1Click:Connect(function()
-    statusLabel.Text = "WallHop V4: On"
+    statusLabel.Text = "WallHop V4: On" -- <<< Text Changed
     statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
     wallhopToggle = true
-    print("Manual Wallhop (Spacebar): ENABLED")
 end)
 
 offButton.MouseButton1Click:Connect(function()
-    statusLabel.Text = "WallHop V4: Off"
+    statusLabel.Text = "WallHop V4: Off" -- <<< Text Changed
     statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
     wallhopToggle = false
-    print("Manual Wallhop (Spacebar): DISABLED")
 end)
 
--- Addition Button Functionality (Creates GUI 2 with FIXED size)
+-- Addition Button Functionality (Creates/Destroys GUI 2) - Unchanged Logic
 additionButton.MouseButton1Click:Connect(function()
     additionToggle = not additionToggle
     if additionToggle then
@@ -332,94 +282,183 @@ additionButton.MouseButton1Click:Connect(function()
             additionalFrame.Size = UDim2.new(0, 200, 0, 100)
             additionalFrame.Position = UDim2.new(0, 0, 1, 0)
             additionalFrame.Active = false; additionalFrame.Draggable = false; additionalFrame.BorderSizePixel = 1
+
             jumpButtonInAddition = Instance.new("TextButton")
             jumpButtonInAddition.Name = "FaceWallJumpButton"; jumpButtonInAddition.Parent = additionalFrame
             jumpButtonInAddition.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
-            jumpButtonInAddition.Size = UDim2.new(0.8, 0, 0.4, 0); jumpButtonInAddition.Position = UDim2.new(0.1, 0, 0.3, 0)
+            jumpButtonInAddition.Size = UDim2.new(0.8, 0, 0.4, 0)
+            jumpButtonInAddition.Position = UDim2.new(0.1, 0, 0.3, 0)
             jumpButtonInAddition.Text = "Jump"; jumpButtonInAddition.TextColor3 = Color3.fromRGB(255,255,255)
             jumpButtonInAddition.TextScaled = true; jumpButtonInAddition.Active = true
             jumpButtonInAddition.MouseButton1Click:Connect(performFaceWallJump)
-            print("Addition GUI (Jump Button) Opened.")
         end
     else
         if additionalFrame then
             additionButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
             additionalFrame:Destroy(); additionalFrame = nil; jumpButtonInAddition = nil
-            print("Addition GUI (Jump Button) Closed.")
         end
     end
 end)
 
--- Modified Auto Button Click Handler
+-- Auto Button Toggle Functionality (Checks for selected color)
 autoButton.MouseButton1Click:Connect(function()
-    autoToggle = not autoToggle
-    autoButton.BackgroundColor3 = autoToggle and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)
-    print("Auto Jump Toggled:", autoToggle)
+    local desiredState = not autoToggle
 
-    if autoToggle then
-        edgeCheckActive = true
-        task.spawn(function()
-            print("Auto Jump Loop Started")
-            while edgeCheckActive and autoToggle do
-                local currentCharacter = Players.LocalPlayer.Character
-                local currentHumanoid = currentCharacter and currentCharacter:FindFirstChildOfClass("Humanoid")
-                if not currentHumanoid or currentHumanoid:GetState() == Enum.HumanoidStateType.Dead then
-                    print("Auto Jump Loop: Player died or character invalid, stopping.")
-                    edgeCheckActive = false
-                    break
-                end
-
-                if isAtPlatformEdge() then
-                    print("Edge detected, attempting auto-jump...")
-                    performFaceWallJump() -- Calls function with boost
-                    task.wait(0.5) -- Cooldown
-                end
-                RunService.Heartbeat:Wait()
-            end
+    if desiredState == true then
+        if selectedBrickColor then
+            autoToggle = true
+            autoButton.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+            print("Auto toggled ON")
+        else
             autoToggle = false
-            edgeCheckActive = false
-            if autoButton and autoButton.Parent then
-                 autoButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-            end
-            print("Auto Jump Loop Stopped")
-        end)
+            autoButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+            print("Auto toggle FAILED: No color selected in GUI 3 yet.")
+            local currentStatusText = statusLabel.Text -- Store current text
+            local currentStatusColor = statusLabel.TextColor3 -- Store current color
+            statusLabel.Text = "Auto requires color selection!"
+            statusLabel.TextColor3 = Color3.fromRGB(255,100,0)
+            task.wait(2)
+            statusLabel.Text = currentStatusText -- Revert status label
+            statusLabel.TextColor3 = currentStatusColor
+        end
     else
-        edgeCheckActive = false
+        autoToggle = false
+        autoButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+        print("Auto toggled OFF")
+    end
+end)
+
+-- Plus Button Functionality (GUI 3 Visibility Toggle + Stores Selected Color)
+plusButton.MouseButton1Click:Connect(function()
+    plusButtonToggle = not plusButtonToggle
+
+    if plusButtonToggle then
+        plusButton.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+
+        if not plusFrame then
+            print("Plus Button: Creating GUI 3")
+            plusFrame = Instance.new("Frame")
+            plusFrame.Name = "PlusFrame"; plusFrame.Parent = frame
+            plusFrame.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+            plusFrame.Size = UDim2.new(0, 200, 0, 100); plusFrame.Position = UDim2.new(0, -205, 0, 0)
+            plusFrame.Active = false; plusFrame.Draggable = false; plusFrame.BorderSizePixel = 1
+            plusFrame.Visible = true
+
+            selectButtonInPlusFrame = Instance.new("TextButton")
+            selectButtonInPlusFrame.Name = "SelectPlatformButton"; selectButtonInPlusFrame.Parent = plusFrame
+            selectButtonInPlusFrame.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+            selectButtonInPlusFrame.Size = UDim2.new(0, 80, 0, 30); selectButtonInPlusFrame.Position = UDim2.new(0, 10, 0, 10)
+            selectButtonInPlusFrame.Text = "Select"; selectButtonInPlusFrame.TextScaled = true; selectButtonInPlusFrame.TextColor3 = Color3.fromRGB(255, 255, 255)
+
+            colorListLabelInPlusFrame = Instance.new("TextLabel")
+            colorListLabelInPlusFrame.Name = "ColorDisplayLabel"; colorListLabelInPlusFrame.Parent = plusFrame
+            colorListLabelInPlusFrame.BackgroundColor3 = Color3.fromRGB(200, 200, 200); colorListLabelInPlusFrame.BackgroundTransparency = 0
+            colorListLabelInPlusFrame.Size = UDim2.new(0, 180, 0, 50); colorListLabelInPlusFrame.Position = UDim2.new(0, 10, 0, 45)
+            colorListLabelInPlusFrame.Text = "Click a part to detect color"; colorListLabelInPlusFrame.TextColor3 = Color3.new(1, 1, 1)
+            colorListLabelInPlusFrame.TextScaled = true; colorListLabelInPlusFrame.BorderSizePixel = 1; colorListLabelInPlusFrame.BorderColor3 = Color3.new(0,0,0)
+
+            selectButtonInPlusFrame.MouseButton1Click:Connect(function()
+                selectModeActive = not selectModeActive
+
+                if selectModeActive then
+                    selectButtonInPlusFrame.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+                    colorListLabelInPlusFrame.Text = "Click any part in the world"
+                    print("Select Mode Activated")
+
+                    if mouseClickConnection then mouseClickConnection:Disconnect(); mouseClickConnection = nil end
+
+                    mouseClickConnection = mouse.Button1Down:Connect(function()
+                        local target = mouse.Target
+                        if target and target:IsA("BasePart") then
+                            local part = target
+                            local bColor = part.BrickColor
+                            local colorValue = part.Color
+
+                            selectedBrickColor = bColor
+                            print("Stored selected BrickColor:", selectedBrickColor.Name)
+
+                            colorListLabelInPlusFrame.Text = "Color: " .. bColor.Name
+                            colorListLabelInPlusFrame.TextColor3 = colorValue
+                            print("Detected Part:", part.Name, "Color:", bColor.Name)
+
+                        else
+                            print("Clicked invalid target or empty space.")
+                        end
+                    end)
+                else
+                    selectButtonInPlusFrame.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+                    print("Select Mode Deactivated")
+                    if mouseClickConnection then mouseClickConnection:Disconnect(); mouseClickConnection = nil end
+                end
+            end)
+        else
+            print("Plus Button: Showing existing GUI 3")
+            plusFrame.Visible = true
+        end
+
+    else
+        plusButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+        if plusFrame then
+            print("Plus Button: Hiding GUI 3")
+            plusFrame.Visible = false
+            if selectModeActive then
+                selectModeActive = false
+                if selectButtonInPlusFrame then selectButtonInPlusFrame.BackgroundColor3 = Color3.fromRGB(255, 0, 0) end
+                if mouseClickConnection then mouseClickConnection:Disconnect(); mouseClickConnection = nil end
+            end
+        end
+    end
+end)
+
+-- Auto Jump Heartbeat Loop
+autoJumpConnection = RunService.Heartbeat:Connect(function(deltaTime)
+    if not autoToggle then return end
+    if not InfiniteJumpEnabled then return end
+    if not selectedBrickColor then return end
+    if not wallhopToggle then return end -- Check main toggle too
+
+    local character = player.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not (humanoid and humanoid:GetState() ~= Enum.HumanoidStateType.Dead) then return end
+
+    local wallRayResult = getWallRaycastResult()
+
+    if wallRayResult and wallRayResult.Instance then
+        local hitPart = wallRayResult.Instance
+        if hitPart:IsA("BasePart") and hitPart.BrickColor == selectedBrickColor then
+             -- print("Auto Jump Triggered: Found matching wall color (" .. hitPart.BrickColor.Name .. ")") -- Less spammy print
+             executeWallJump(wallRayResult, "Auto")
+        end
     end
 end)
 
 -- Destroy Button Functionality
 destroyButton.MouseButton1Click:Connect(function()
-    print("Destroy button clicked. Cleaning up...")
-    if jumpConnection then jumpConnection:Disconnect(); jumpConnection = nil; print("- Disconnected JumpRequest") end
-    wallhopToggle = false; print("- wallhopToggle set to false")
-    autoToggle = false; print("- autoToggle set to false")
-    edgeCheckActive = false; print("- edgeCheckActive set to false (stops auto loop)")
-    if screenGui and screenGui.Parent then screenGui:Destroy(); print("- ScreenGui destroyed") end
-    additionalFrame = nil
-    jumpButtonInAddition = nil
+    if jumpConnection then jumpConnection:Disconnect(); jumpConnection = nil end
+    if autoJumpConnection then autoJumpConnection:Disconnect(); autoJumpConnection = nil end
+    if mouseClickConnection then mouseClickConnection:Disconnect(); mouseClickConnection = nil end
+
+    if additionalFrame and additionalFrame.Parent then additionalFrame:Destroy() end
+    if plusFrame and plusFrame.Parent then plusFrame:Destroy() end
+
+    wallhopToggle = false; autoToggle = false; plusButtonToggle = false; additionToggle = false; selectModeActive = false
+    selectedBrickColor = nil
+
+    if screenGui and screenGui.Parent then screenGui:Destroy() end
+
+    additionalFrame = nil; jumpButtonInAddition = nil;
+    plusFrame = nil; selectButtonInPlusFrame = nil; colorListLabelInPlusFrame = nil;
+    plusButton = nil; frame = nil; screenGui = nil; mouseClickConnection = nil; autoJumpConnection = nil
     print("GUI Destroyed.")
 end)
 
--- ======================================================================== --
--- Main Wallhop Function (Activated by Spacebar via JumpRequest)
--- This version will ALSO get the boost from performFaceWallJump
--- ======================================================================== --
+-- Main Wallhop Function (Spacebar) - Uses executeWallJump
 jumpConnection = UserInputService.JumpRequest:Connect(function()
-    if not wallhopToggle or not InfiniteJumpEnabled then return end
+    if not wallhopToggle then return end -- Only check main toggle
 
-    local player = Players.LocalPlayer
-    local character = player.Character
-    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-    if not humanoid or humanoid:GetState() == Enum.HumanoidStateType.Dead then return end
-
-    InfiniteJumpEnabled = false -- Debounce start
-
-    performFaceWallJump() -- Call the shared jump function (which now includes the boost)
-
-    task.wait(0.2) -- Cooldown for manual jump
-    InfiniteJumpEnabled = true -- Debounce end
+    local wallRayResult = getWallRaycastResult()
+    if wallRayResult then
+        executeWallJump(wallRayResult, "Manual")
+    end
 end)
--- ======================================================================== --
 
-print("Wallhop V3 Script Loaded with Vertical Boost.")
