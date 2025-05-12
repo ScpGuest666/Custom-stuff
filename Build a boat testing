@@ -245,8 +245,8 @@ local function spawnRedPlatform()
     -- Position the arrow on top of the platform, pointing along the platform's local +Z axis.
     -- The arrow's base (center of its X,Y plane at its local Z= -Length/2) will be slightly forward from the platform's center.
     local arrowOffsetY = newPlatform.Size.Y/2 + arrow.Size.Y/2 -- Place arrow on top of platform
-    local arrowOffsetZ = arrow.Size.Z/2 -- Position arrow's center so its back is at platform's center Z
-                                        -- This makes it point from center towards +Z edge.
+    local arrowOffsetZ = -arrow.Size.Z/2 -- Position arrow's center so its back is at platform's center Z
+    -- This makes it point from center towards -Z edge.  Changed to NEGATIVE Z!
 
     -- The WedgePart points along its own +Z axis.
     -- We set its CFrame relative to the newPlatform's CFrame.
