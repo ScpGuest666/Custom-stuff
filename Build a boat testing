@@ -1,0 +1,489 @@
+-- Create Main ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+screenGui.ResetOnSpawn = false
+
+-- Create Main Frame (GUI 1)
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(180, 180, 180)
+frame.Size = UDim2.new(0, 200, 0, 150)
+frame.Position = UDim2.new(0.5, -100, 0.5, -75)
+frame.Active = true
+frame.Draggable = true
+
+-- Platform Variables
+local movablePlatform = nil
+
+-- Additional GUI Variables
+local additionalGuiInstance = nil
+local additionalFrame = nil
+local platformScrollingFrame = nil
+local uiListLayout = nil
+local uiListLayoutConnection = nil
+local positionConnection = nil
+
+-- Red Platform Variables
+local redPlatforms = {}  -- Table: { part, billboardGui, weld, number, wasWelded, isDetached, hitPartDestroyConn }
+local redPlatformBaseOffset = Vector3.new(0, -3, 0) -- Spawn below feet (fallback if no surface hit or forbidden surface)
+local redPlatformNumberOffset = Vector3.new(0, 1.5, 0)
+local teleportVerticalOffset = Vector3.new(0, 3, 0) -- Height adjustment for TP target
+local raycastDistance = 6
+
+-- **NEW:** Allowed surface names for welding/centering
+local allowedSurfaceNames = {"Wood block", "Seat"} -- Add names here that you want to center on
+
+local player = game.Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+-- Simplified UI Setup & Functions --
+local function destroyAllRedPlatforms()
+    for i = #redPlatforms, 1, -1 do
+        local pd = redPlatforms[i]
+        if pd.hitPartDestroyConn then
+            pd.hitPartDestroyConn:Disconnect()
+            pd.hitPartDestroyConn = nil
+        end
+        if pd and pd.part and pd.part.Parent then
+            pcall(function() pd.part:Destroy() end)
+        end
+    end
+    redPlatforms = {}
+    if uiListLayout and platformScrollingFrame and platformScrollingFrame.Parent then
+        platformScrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+        for _, c in ipairs(platformScrollingFrame:GetChildren()) do
+            if c:IsA("Frame") and c.Name:match("^PlatformEntry_") then
+                pcall(function() c:Destroy() end)
+            elseif not c:IsA("UIListLayout") then
+                pcall(function() c:Destroy() end)
+            end
+        end
+    end
+end
+
+local function destroyAdditionalGuiElements()
+    if uiListLayoutConnection then
+        uiListLayoutConnection:Disconnect()
+        uiListLayoutConnection = nil
+    end
+    if additionalGuiInstance then
+        pcall(function() additionalGuiInstance:Destroy() end)
+    end
+    additionalGuiInstance = nil
+    additionalFrame = nil
+    platformScrollingFrame = nil
+    uiListLayout = nil
+end
+
+local function destroyAllGuisAndPlatform()
+    destroyAllRedPlatforms()
+    destroyAdditionalGuiElements()
+    if positionConnection then
+        positionConnection:Disconnect()
+        positionConnection = nil
+    end
+    if screenGui then
+        pcall(function() screenGui:Destroy() end)
+    end
+end
+
+-- Removed: All speed controls, On/Off buttons, and green platform functionality
+
+-- Main Frame Buttons
+local buttonWidthG1 = 50
+local buttonHeightG1 = 30
+local buttonSpacingG1 = 10
+local totalButtonWidthG1 = (buttonWidthG1 * 3) + (buttonSpacingG1 * 2)
+local startXG1 = (200 - totalButtonWidthG1) / 2
+local startYG1 = 20
+
+local additionalButton = Instance.new("TextButton", frame)
+additionalButton.BackgroundColor3 = Color3.fromRGB(255, 165, 0)
+additionalButton.Size = UDim2.new(0, 100, 0, 30)
+additionalButton.Position = UDim2.new(0.5, -50, 0, startYG1)
+additionalButton.Text = "Additional"
+additionalButton.TextScaled = true
+
+local destroyButton = Instance.new("TextButton", frame)
+destroyButton.BackgroundColor3 = Color3.fromRGB(220, 220, 220)
+destroyButton.Size = UDim2.new(0, 160, 0, 30)
+destroyButton.Position = UDim2.new(0, 20, 0, 60)
+destroyButton.Text = "Destroy All"
+destroyButton.TextScaled = true
+
+
+-- Platform list entry creation function (FULL IMPLEMENTATION)
+local function createPlatformListEntry(platformData)
+    if not platformData or not platformData.part or not platformScrollingFrame then return nil end -- Added check for scrolling frame
+
+    local targetPlatformPart = platformData.part
+    local platformNumber = platformData.number
+    local isDetached = platformData.isDetached
+
+    local entryFrame = Instance.new("Frame")
+    entryFrame.Name = "PlatformEntry_" .. platformNumber
+    entryFrame.BackgroundColor3 = isDetached and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(210, 210, 210)
+    entryFrame.BorderSizePixel = 1
+    entryFrame.Size = UDim2.new(1, -10, 0, 25) -- Size relative to parent (scrolling frame)
+
+    local entryLayout = Instance.new("UIListLayout", entryFrame)
+    entryLayout.FillDirection = Enum.FillDirection.Horizontal
+    entryLayout.Padding = UDim.new(0, 5)
+    entryLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+    entryLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center -- Center items horizontally within the entry frame
+
+    local entryLabel = Instance.new("TextLabel", entryFrame)
+    entryLabel.Name = "EntryLabel"
+    entryLabel.Size = UDim2.new(0.7, -5, 1, 0)
+    entryLabel.BackgroundTransparency = 1
+    entryLabel.Text = "Platform " .. platformNumber
+    entryLabel.Font = Enum.Font.SourceSans
+    entryLabel.TextColor3 = Color3.fromRGB(0, 0, 0)
+    entryLabel.TextXAlignment = Enum.TextXAlignment.Left
+    entryLabel.TextScaled = true
+
+    local tpButton = Instance.new("TextButton", entryFrame)
+    tpButton.Name = "TeleportButton"
+    tpButton.Size = UDim2.new(0.3, -5, 0.9, 0)
+    tpButton.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+    tpButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    tpButton.Text = "TP"
+    tpButton.TextScaled = true
+    tpButton.Font = Enum.Font.SourceSansBold
+
+    tpButton.MouseButton1Click:Connect(function()
+        local char = player.Character
+        local playerHrp = char and char:FindFirstChild("HumanoidRootPart")
+        if playerHrp and targetPlatformPart and targetPlatformPart.Parent then
+            -- Calculate height needed based on platform's top surface and player's HRP size
+            local platformTopY = targetPlatformPart.Position.Y + targetPlatformPart.Size.Y/2
+            local minPlayerY = platformTopY + playerHrp.Size.Y/2 + 0.1 -- Add a small buffer
+            local finalY = math.max(targetPlatformPart.Position.Y + teleportVerticalOffset.Y, minPlayerY) -- Use offset or minimum height
+
+            playerHrp.CFrame = CFrame.new(Vector3.new(
+                targetPlatformPart.Position.X,
+                finalY,
+                targetPlatformPart.Position.Z
+            ))
+        end
+    end)
+
+    return entryFrame
+end
+
+-- Full platform population function
+local function populatePlatformList()
+    if not platformScrollingFrame or not platformScrollingFrame.Parent then return end
+
+    -- Clear existing entries
+    for _, child in ipairs(platformScrollingFrame:GetChildren()) do
+        if child:IsA("Frame") and child.Name:match("^PlatformEntry_") then
+            child:Destroy()
+        end
+    end
+
+    -- Create new entries
+    for _, platformData in ipairs(redPlatforms) do
+        if platformData.part and platformData.part.Parent then
+            local entryUI = createPlatformListEntry(platformData)
+            if entryUI then
+                entryUI.Parent = platformScrollingFrame
+            end
+        end
+    end
+end
+
+-- Complete spawnRedPlatform implementation - MODIFIED FOR ALLOWED NAMES
+local function spawnRedPlatform()
+    local char = player.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local platformNumber = #redPlatforms + 1
+    local hitPart = nil
+    local weldConstraint = nil
+    local spawnPosition = hrp.Position + redPlatformBaseOffset -- Default fallback position
+    local isAnchored = true -- Default fallback state
+    local shouldWeld = false -- Flag to determine if welding happens
+
+    -- Raycast to find attachment surface
+    local rayOrigin = hrp.Position + Vector3.new(0, 1, 0)
+    local rayDirection = Vector3.new(0, -raycastDistance, 0)
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    raycastParams.FilterDescendantsInstances = {char}
+
+    local rayResult = workspace:Raycast(rayOrigin, rayDirection, raycastParams)
+
+    if rayResult then
+        local potentialHitPart = rayResult.Instance
+        -- Check if the hit part's name is in our allowed list
+        local isAllowedSurface = table.find(allowedSurfaceNames, potentialHitPart.Name)
+
+        if isAllowedSurface then
+            hitPart = potentialHitPart
+            shouldWeld = true
+            isAnchored = false -- Will be welded, not anchored
+
+            -- Calculate centered position on the hitPart's X and Z
+            -- And place its bottom surface on top of the hitPart's top surface
+            local hitPartTopY = hitPart.Position.Y + hitPart.Size.Y/2
+            local platformBottomY = hitPartTopY
+            local platformCenterY = platformBottomY + (newPlatform and newPlatform.Size.Y/2 or 1/2) -- Use actual size if part exists, otherwise default
+
+            spawnPosition = Vector3.new(hitPart.Position.X, platformCenterY, hitPart.Position.Z)
+
+            -- Need to create the part *before* calculating its final Y if using its size
+            -- Let's refactor: Create part first, then decide position/anchoring/welding
+        end
+        -- If rayResult exists but is NOT allowed, we fall through to the default anchored behavior
+    end
+
+     -- Create platform part (doing this earlier so we can use its size)
+    local newPlatform = Instance.new("Part")
+    newPlatform.Name = "RedPlatform_" .. platformNumber
+    newPlatform.Size = Vector3.new(3, 1, 3) -- Example size - Keep consistent
+    newPlatform.Color = Color3.fromRGB(255, 0, 0)
+    newPlatform.Material = Enum.Material.Plastic
+    newPlatform.CanCollide = false -- Red platforms are not intended for standing on directly unless welded/anchored
+    newPlatform.Parent = workspace -- Parent early
+
+    -- Recalculate spawnPosition if hit part was allowed, now that newPlatform exists
+     if rayResult and table.find(allowedSurfaceNames, rayResult.Instance.Name) then
+         hitPart = rayResult.Instance -- Confirm hitPart again
+         shouldWeld = true
+         isAnchored = false
+
+         local hitPartTopY = hitPart.Position.Y + hitPart.Size.Y/2
+         local platformBottomY = hitPartTopY
+         local platformCenterY = platformBottomY + newPlatform.Size.Y/2 -- Use actual size
+         spawnPosition = Vector3.new(hitPart.Position.X, platformCenterY, hitPart.Position.Z)
+     else
+         -- If no ray result, or ray result was not an allowed name
+         spawnPosition = hrp.Position + redPlatformBaseOffset
+         isAnchored = true
+         shouldWeld = false -- Explicitly set to false if not allowed/no hit
+         hitPart = nil -- Ensure hitPart is nil if not allowed/no hit
+     end
+
+    newPlatform.Position = spawnPosition
+    newPlatform.Anchored = isAnchored
+
+
+    -- Create number display (regardless of anchoring)
+    local bbGui = Instance.new("BillboardGui", newPlatform)
+    bbGui.Name = "NumberGui"
+    bbGui.Adornee = newPlatform
+    bbGui.AlwaysOnTop = true
+    bbGui.Size = UDim2.new(1.5, 0, 0.6, 0) -- Adjust size as needed
+    bbGui.StudsOffset = redPlatformNumberOffset
+
+    local numLabel = Instance.new("TextLabel", bbGui)
+    numLabel.Size = UDim2.new(1, 0, 1, 0)
+    numLabel.BackgroundTransparency = 1
+    numLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    numLabel.TextScaled = true
+    numLabel.Text = tostring(platformNumber)
+    numLabel.Font = Enum.Font.SourceSansBold
+
+    -- Create weld if needed (only if shouldWeld is true)
+    if shouldWeld and hitPart then -- Double check hitPart exists just in case
+        weldConstraint = Instance.new("WeldConstraint", newPlatform)
+        weldConstraint.Part0 = newPlatform
+        weldConstraint.Part1 = hitPart
+    end
+
+    -- Track platform data
+    local platformData = {
+        part = newPlatform,
+        billboardGui = bbGui,
+        weld = weldConstraint, -- nil if anchored
+        number = platformNumber,
+        isDetached = isAnchored, -- Considered detached immediately if anchored (no valid weld)
+        hitPartDestroyConn = nil
+    }
+
+    -- Handle surface part destruction (only if it was welded)
+    if shouldWeld and hitPart then -- Only set up connection if we actually welded
+        platformData.hitPartDestroyConn = hitPart.Destroying:Connect(function()
+            -- Check if newPlatform still exists before trying to anchor/update UI
+            if platformData.part and platformData.part.Parent then -- Use platformData.part in case newPlatform was destroyed
+                platformData.part.Anchored = true
+                platformData.isDetached = true
+                if platformScrollingFrame and platformScrollingFrame.Parent then
+                    local entry = platformScrollingFrame:FindFirstChild("PlatformEntry_" .. platformNumber)
+                    if entry then
+                        -- Update entry color to red
+                        entry.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
+                    end
+                end
+            end
+             -- Clean up the connection itself
+            if platformData.hitPartDestroyConn then
+                platformData.hitPartDestroyConn:Disconnect()
+                platformData.hitPartDestroyConn = nil
+            end
+        end)
+    end
+
+    table.insert(redPlatforms, platformData)
+
+    -- Update UI list
+    if additionalFrame and additionalFrame.Parent then -- Check if additional GUI is open
+        -- Add the new entry
+        local entryUI = createPlatformListEntry(platformData)
+        if entryUI then
+            entryUI.Parent = platformScrollingFrame
+        end
+        -- Repopulating is simpler if order/status matters, but adding the last one works for this case
+        -- populatePlatformList() -- Alternative: Repopulate the whole list
+    end
+end
+
+-- Complete removeLastRedPlatform implementation
+local function removeLastRedPlatform()
+    if #redPlatforms == 0 then return end
+
+    local lastPlatform = redPlatforms[#redPlatforms]
+    -- Disconnect any potential connection before destroying
+    if lastPlatform.hitPartDestroyConn then
+        lastPlatform.hitPartDestroyConn:Disconnect()
+        lastPlatform.hitPartDestroyConn = nil
+    end
+
+    -- Destroy the part instance
+    if lastPlatform.part and lastPlatform.part.Parent then
+        pcall(function() lastPlatform.part:Destroy() end)
+    end
+
+    -- Remove from the table
+    table.remove(redPlatforms, #redPlatforms)
+
+    -- Remove from UI list
+    if additionalFrame and additionalFrame.Parent then -- Check if additional GUI is open
+        -- Simply remove the specific entry if the UI is open
+        if platformScrollingFrame then
+            local entry = platformScrollingFrame:FindFirstChild("PlatformEntry_" .. lastPlatform.number)
+            if entry then
+                pcall(function() entry:Destroy() end)
+            end
+        end
+    end
+end
+
+
+-- Additional Button Logic
+local function updateAdditionalGuiPosition()
+    if additionalFrame and additionalFrame.Parent and frame then
+        local ny = frame.AbsolutePosition.Y + frame.AbsoluteSize.Y
+        local nx = frame.AbsolutePosition.X
+        additionalFrame.Position = UDim2.fromOffset(nx, ny)
+        additionalFrame.Size = frame.Size -- Keep the size the same as the main frame
+    end
+end
+
+-- Listen for Main Frame position changes to update Additional Frame position
+-- This connection is created when the screenGui is first created.
+if frame then -- Ensure frame exists before connecting
+    positionConnection = frame:GetPropertyChangedSignal("AbsolutePosition"):Connect(updateAdditionalGuiPosition)
+end
+
+
+additionalButton.MouseButton1Click:Connect(function()
+    if additionalGuiInstance and additionalGuiInstance.Parent then
+        destroyAdditionalGuiElements()
+        additionalButton.BackgroundColor3 = Color3.fromRGB(255, 165, 0)
+    else
+        additionalGuiInstance = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
+        additionalGuiInstance.Name = "AdditionalScreenGui"
+        additionalGuiInstance.ResetOnSpawn = false
+        additionalGuiInstance.DisplayOrder = screenGui.DisplayOrder - 1 -- Render below main GUI
+
+        additionalFrame = Instance.new("Frame", additionalGuiInstance)
+        additionalFrame.Name = "AdditionalFrame"
+        additionalFrame.BackgroundColor3 = Color3.fromRGB(190, 190, 190)
+        additionalFrame.Size = frame.Size
+        additionalFrame.BorderSizePixel = frame.BorderSizePixel
+        additionalFrame.Active = true
+        additionalFrame.Draggable = false -- Prevent dragging additional frame
+
+        -- Update position immediately after creation
+        updateAdditionalGuiPosition()
+
+
+        local pad = 10
+        local btnH = 30
+        -- Use relative size calculations based on the frame's UDim2 size
+        local btnW = (frame.Size.X.Offset - pad * 3) / 2
+        local btnY = frame.Size.Y.Offset - btnH - pad
+        local scrollH = btnY - pad * 2
+
+        -- Positive Button (Spawn Platform)
+        local posBtn = Instance.new("TextButton", additionalFrame)
+        posBtn.Name = "PositiveButton"
+        posBtn.Size = UDim2.new(0, btnW, 0, btnH)
+        posBtn.Position = UDim2.new(0, pad, 0, btnY)
+        posBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+        posBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        posBtn.Text = "Positive (+)"
+        posBtn.TextScaled = true
+        posBtn.MouseButton1Click:Connect(spawnRedPlatform)
+
+        -- Negative Button (Remove Platform)
+        local negBtn = Instance.new("TextButton", additionalFrame)
+        negBtn.Name = "NegativeButton"
+        negBtn.Size = UDim2.new(0, btnW, 0, btnH)
+        negBtn.Position = UDim2.new(0, pad + btnW + pad, 0, btnY)
+        negBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+        negBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        negBtn.Text = "Negative (-)"
+        negBtn.TextScaled = true
+        negBtn.MouseButton1Click:Connect(removeLastRedPlatform)
+
+        -- Platform List Scrolling Frame
+        platformScrollingFrame = Instance.new("ScrollingFrame", additionalFrame)
+        platformScrollingFrame.Name = "PlatformListScroll"
+        platformScrollingFrame.Size = UDim2.new(1, -pad * 2, 0, scrollH)
+        platformScrollingFrame.Position = UDim2.new(0, pad, 0, pad)
+        platformScrollingFrame.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+        platformScrollingFrame.BorderSizePixel = 1
+        platformScrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+        platformScrollingFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 100)
+        platformScrollingFrame.ScrollBarThickness = 8
+        platformScrollingFrame.ScrollingDirection = Enum.ScrollingDirection.Y
+
+        -- UI List Layout
+        uiListLayout = Instance.new("UIListLayout", platformScrollingFrame)
+        uiListLayout.Padding = UDim.new(0, 5)
+        uiListLayout.FillDirection = Enum.FillDirection.Vertical
+        uiListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        uiListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+        -- Auto-size scrolling frame
+        uiListLayoutConnection = uiListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            if platformScrollingFrame then
+                platformScrollingFrame.CanvasSize = UDim2.new(0, 0, 0, uiListLayout.AbsoluteContentSize.Y)
+            end
+        end)
+
+        -- Populate existing platforms
+        populatePlatformList()
+
+        additionalButton.BackgroundColor3 = Color3.fromRGB(200, 120, 0) -- Indicate it's open
+    end
+end)
+
+destroyButton.MouseButton1Click:Connect(destroyAllGuisAndPlatform)
+
+-- Cleanup connection for main frame
+if frame then
+    frame.Destroying:Connect(function()
+        -- Disconnect the position connection when the main frame is destroyed
+        if positionConnection then
+            positionConnection:Disconnect()
+            positionConnection = nil
+        end
+        -- Trigger full cleanup
+        destroyAllGuisAndPlatform()
+    end)
+end
