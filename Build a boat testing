@@ -25,13 +25,10 @@ local positionConnection = nil
 
 -- Red Platform Variables
 local redPlatforms = {}  -- Table: { part, billboardGui, weld, number, wasWelded, isDetached, hitPartDestroyConn }
-local redPlatformBaseOffset = Vector3.new(0, -3, 0) -- Spawn below feet (fallback if no surface hit or forbidden surface)
+local redPlatformBaseOffset = Vector3.new(0, -3, 0) -- Spawn below feet (fallback if no surface hit)
 local redPlatformNumberOffset = Vector3.new(0, 1.5, 0)
 local teleportVerticalOffset = Vector3.new(0, 3, 0) -- Height adjustment for TP target
 local raycastDistance = 6
-
--- **NEW:** Allowed surface names for welding/centering
-local allowedSurfaceNames = {"Wood block", "Seat"} -- Add names here that you want to center on
 
 local player = game.Players.LocalPlayer
 local camera = workspace.CurrentCamera
@@ -114,7 +111,7 @@ destroyButton.TextScaled = true
 
 -- Platform list entry creation function (FULL IMPLEMENTATION)
 local function createPlatformListEntry(platformData)
-    if not platformData or not platformData.part or not platformScrollingFrame then return nil end -- Added check for scrolling frame
+    if not platformData or not platformData.part then return nil end
 
     local targetPlatformPart = platformData.part
     local platformNumber = platformData.number
@@ -124,13 +121,12 @@ local function createPlatformListEntry(platformData)
     entryFrame.Name = "PlatformEntry_" .. platformNumber
     entryFrame.BackgroundColor3 = isDetached and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(210, 210, 210)
     entryFrame.BorderSizePixel = 1
-    entryFrame.Size = UDim2.new(1, -10, 0, 25) -- Size relative to parent (scrolling frame)
+    entryFrame.Size = UDim2.new(1, -10, 0, 25)
 
     local entryLayout = Instance.new("UIListLayout", entryFrame)
     entryLayout.FillDirection = Enum.FillDirection.Horizontal
     entryLayout.Padding = UDim.new(0, 5)
     entryLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-    entryLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center -- Center items horizontally within the entry frame
 
     local entryLabel = Instance.new("TextLabel", entryFrame)
     entryLabel.Name = "EntryLabel"
@@ -155,10 +151,13 @@ local function createPlatformListEntry(platformData)
         local char = player.Character
         local playerHrp = char and char:FindFirstChild("HumanoidRootPart")
         if playerHrp and targetPlatformPart and targetPlatformPart.Parent then
+             -- Add the teleportVerticalOffset for extra clearance
+            local targetY = targetPlatformPart.Position.Y + teleportVerticalOffset.Y
+            -- Ensure the player is above the platform, not inside it
             -- Calculate height needed based on platform's top surface and player's HRP size
             local platformTopY = targetPlatformPart.Position.Y + targetPlatformPart.Size.Y/2
             local minPlayerY = platformTopY + playerHrp.Size.Y/2 + 0.1 -- Add a small buffer
-            local finalY = math.max(targetPlatformPart.Position.Y + teleportVerticalOffset.Y, minPlayerY) -- Use offset or minimum height
+            local finalY = math.max(targetY, minPlayerY)
 
             playerHrp.CFrame = CFrame.new(Vector3.new(
                 targetPlatformPart.Position.X,
@@ -193,7 +192,7 @@ local function populatePlatformList()
     end
 end
 
--- Complete spawnRedPlatform implementation - MODIFIED FOR ALLOWED NAMES
+-- Complete spawnRedPlatform implementation - MODIFIED FOR CENTER SPAWN ON HIT PART
 local function spawnRedPlatform()
     local char = player.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -202,9 +201,6 @@ local function spawnRedPlatform()
     local platformNumber = #redPlatforms + 1
     local hitPart = nil
     local weldConstraint = nil
-    local spawnPosition = hrp.Position + redPlatformBaseOffset -- Default fallback position
-    local isAnchored = true -- Default fallback state
-    local shouldWeld = false -- Flag to determine if welding happens
 
     -- Raycast to find attachment surface
     local rayOrigin = hrp.Position + Vector3.new(0, 1, 0)
@@ -214,63 +210,38 @@ local function spawnRedPlatform()
     raycastParams.FilterDescendantsInstances = {char}
 
     local rayResult = workspace:Raycast(rayOrigin, rayDirection, raycastParams)
-
     if rayResult then
-        local potentialHitPart = rayResult.Instance
-        -- Check if the hit part's name is in our allowed list
-        local isAllowedSurface = table.find(allowedSurfaceNames, potentialHitPart.Name)
-
-        if isAllowedSurface then
-            hitPart = potentialHitPart
-            shouldWeld = true
-            isAnchored = false -- Will be welded, not anchored
-
-            -- Calculate centered position on the hitPart's X and Z
-            -- And place its bottom surface on top of the hitPart's top surface
-            local hitPartTopY = hitPart.Position.Y + hitPart.Size.Y/2
-            local platformBottomY = hitPartTopY
-            local platformCenterY = platformBottomY + (newPlatform and newPlatform.Size.Y/2 or 1/2) -- Use actual size if part exists, otherwise default
-
-            spawnPosition = Vector3.new(hitPart.Position.X, platformCenterY, hitPart.Position.Z)
-
-            -- Need to create the part *before* calculating its final Y if using its size
-            -- Let's refactor: Create part first, then decide position/anchoring/welding
-        end
-        -- If rayResult exists but is NOT allowed, we fall through to the default anchored behavior
+        hitPart = rayResult.Instance
     end
 
-     -- Create platform part (doing this earlier so we can use its size)
+    -- Create platform part
     local newPlatform = Instance.new("Part")
     newPlatform.Name = "RedPlatform_" .. platformNumber
-    newPlatform.Size = Vector3.new(3, 1, 3) -- Example size - Keep consistent
+    newPlatform.Size = Vector3.new(3, 1, 3) -- Example size
     newPlatform.Color = Color3.fromRGB(255, 0, 0)
     newPlatform.Material = Enum.Material.Plastic
     newPlatform.CanCollide = false -- Red platforms are not intended for standing on directly unless welded/anchored
-    newPlatform.Parent = workspace -- Parent early
 
-    -- Recalculate spawnPosition if hit part was allowed, now that newPlatform exists
-     if rayResult and table.find(allowedSurfaceNames, rayResult.Instance.Name) then
-         hitPart = rayResult.Instance -- Confirm hitPart again
-         shouldWeld = true
-         isAnchored = false
+    -- **MODIFIED POSITIONING LOGIC**
+    if hitPart then
+        -- Position the platform centered on the hitPart's X and Z
+        -- And place its bottom surface on top of the hitPart's top surface
+        local hitPartTopY = hitPart.Position.Y + hitPart.Size.Y/2
+        local platformBottomY = hitPartTopY
+        local platformCenterY = platformBottomY + newPlatform.Size.Y/2
 
-         local hitPartTopY = hitPart.Position.Y + hitPart.Size.Y/2
-         local platformBottomY = hitPartTopY
-         local platformCenterY = platformBottomY + newPlatform.Size.Y/2 -- Use actual size
-         spawnPosition = Vector3.new(hitPart.Position.X, platformCenterY, hitPart.Position.Z)
-     else
-         -- If no ray result, or ray result was not an allowed name
-         spawnPosition = hrp.Position + redPlatformBaseOffset
-         isAnchored = true
-         shouldWeld = false -- Explicitly set to false if not allowed/no hit
-         hitPart = nil -- Ensure hitPart is nil if not allowed/no hit
-     end
+        newPlatform.Position = Vector3.new(hitPart.Position.X, platformCenterY, hitPart.Position.Z)
+        newPlatform.Anchored = false -- It will be welded
+    else
+        -- Fallback if raycast hits nothing (spawn below player)
+        newPlatform.Position = hrp.Position + redPlatformBaseOffset
+        newPlatform.Anchored = true -- Anchor if no surface is found
+    end
 
-    newPlatform.Position = spawnPosition
-    newPlatform.Anchored = isAnchored
+    newPlatform.Parent = workspace
 
 
-    -- Create number display (regardless of anchoring)
+    -- Create number display
     local bbGui = Instance.new("BillboardGui", newPlatform)
     bbGui.Name = "NumberGui"
     bbGui.Adornee = newPlatform
@@ -286,8 +257,8 @@ local function spawnRedPlatform()
     numLabel.Text = tostring(platformNumber)
     numLabel.Font = Enum.Font.SourceSansBold
 
-    -- Create weld if needed (only if shouldWeld is true)
-    if shouldWeld and hitPart then -- Double check hitPart exists just in case
+    -- Create weld if needed (only if a hitPart was found)
+    if hitPart then
         weldConstraint = Instance.new("WeldConstraint", newPlatform)
         weldConstraint.Part0 = newPlatform
         weldConstraint.Part1 = hitPart
@@ -299,16 +270,16 @@ local function spawnRedPlatform()
         billboardGui = bbGui,
         weld = weldConstraint, -- nil if anchored
         number = platformNumber,
-        isDetached = isAnchored, -- Considered detached immediately if anchored (no valid weld)
+        isDetached = (hitPart == nil), -- Considered detached immediately if anchored
         hitPartDestroyConn = nil
     }
 
     -- Handle surface part destruction (only if it was welded)
-    if shouldWeld and hitPart then -- Only set up connection if we actually welded
+    if hitPart then
         platformData.hitPartDestroyConn = hitPart.Destroying:Connect(function()
             -- Check if newPlatform still exists before trying to anchor/update UI
-            if platformData.part and platformData.part.Parent then -- Use platformData.part in case newPlatform was destroyed
-                platformData.part.Anchored = true
+            if newPlatform and newPlatform.Parent then
+                newPlatform.Anchored = true
                 platformData.isDetached = true
                 if platformScrollingFrame and platformScrollingFrame.Parent then
                     local entry = platformScrollingFrame:FindFirstChild("PlatformEntry_" .. platformNumber)
@@ -318,11 +289,6 @@ local function spawnRedPlatform()
                     end
                 end
             end
-             -- Clean up the connection itself
-            if platformData.hitPartDestroyConn then
-                platformData.hitPartDestroyConn:Disconnect()
-                platformData.hitPartDestroyConn = nil
-            end
         end)
     end
 
@@ -330,13 +296,8 @@ local function spawnRedPlatform()
 
     -- Update UI list
     if additionalFrame and additionalFrame.Parent then -- Check if additional GUI is open
-        -- Add the new entry
-        local entryUI = createPlatformListEntry(platformData)
-        if entryUI then
-            entryUI.Parent = platformScrollingFrame
-        end
-        -- Repopulating is simpler if order/status matters, but adding the last one works for this case
-        -- populatePlatformList() -- Alternative: Repopulate the whole list
+        -- Refresh the entire list to ensure correct order and detachment status colors
+        populatePlatformList()
     end
 end
 
@@ -359,8 +320,8 @@ local function removeLastRedPlatform()
     -- Remove from the table
     table.remove(redPlatforms, #redPlatforms)
 
-    -- Remove from UI list
-    if additionalFrame and additionalFrame.Parent then -- Check if additional GUI is open
+    -- Update UI list (repopulate to handle shifting numbers correctly if needed, though removing last is simplest)
+     if additionalFrame and additionalFrame.Parent then -- Check if additional GUI is open
         -- Simply remove the specific entry if the UI is open
         if platformScrollingFrame then
             local entry = platformScrollingFrame:FindFirstChild("PlatformEntry_" .. lastPlatform.number)
@@ -378,15 +339,13 @@ local function updateAdditionalGuiPosition()
         local ny = frame.AbsolutePosition.Y + frame.AbsoluteSize.Y
         local nx = frame.AbsolutePosition.X
         additionalFrame.Position = UDim2.fromOffset(nx, ny)
-        additionalFrame.Size = frame.Size -- Keep the size the same as the main frame
+        additionalFrame.Size = frame.Size
     end
 end
 
 -- Listen for Main Frame position changes to update Additional Frame position
 -- This connection is created when the screenGui is first created.
-if frame then -- Ensure frame exists before connecting
-    positionConnection = frame:GetPropertyChangedSignal("AbsolutePosition"):Connect(updateAdditionalGuiPosition)
-end
+positionConnection = frame:GetPropertyChangedSignal("AbsolutePosition"):Connect(updateAdditionalGuiPosition)
 
 
 additionalButton.MouseButton1Click:Connect(function()
