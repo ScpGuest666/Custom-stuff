@@ -23,13 +23,18 @@ local uiListLayout = nil
 local uiListLayoutConnection = nil
 local positionConnection = nil
 
+-- Control GUI Variables
+local controlScreenGui = nil
+local controlFrame = nil
+-- No need to store fwd/back/left/right buttons globally unless accessed elsewhere
+
 -- Red Platform Variables
-local redPlatforms = {}  -- Table: { part, billboardGui, weld, number, wasWelded, isDetached, hitPartDestroyConn, arrowPart (optional) }
-local redPlatformBaseOffset = Vector3.new(0, -3, 0) -- Spawn below feet (fallback if no surface hit)
-local redPlatformNumberOffset = Vector3.new(0, 1.5, 0) -- Offset for the number GUI
-local teleportVerticalOffset = Vector3.new(0, 3, 0) -- Height adjustment for TP target
+local redPlatforms = {}
+local redPlatformBaseOffset = Vector3.new(0, -3, 0)
+local redPlatformNumberOffset = Vector3.new(0, 1.5, 0)
+local teleportVerticalOffset = Vector3.new(0, 3, 0)
 local raycastDistance = 6
-local maxRedPlatforms = 3 -- Maximum number of red platforms allowed
+local maxRedPlatforms = 3
 
 local player = game.Players.LocalPlayer
 local camera = workspace.CurrentCamera
@@ -43,7 +48,7 @@ local function destroyAllRedPlatforms()
             pd.hitPartDestroyConn = nil
         end
         if pd and pd.part and pd.part.Parent then
-            pcall(function() pd.part:Destroy() end) -- Arrow will be destroyed as it's a child
+            pcall(function() pd.part:Destroy() end)
         end
     end
     redPlatforms = {}
@@ -73,9 +78,18 @@ local function destroyAdditionalGuiElements()
     uiListLayout = nil
 end
 
+local function destroyControlGuiElements()
+    if controlScreenGui then
+        pcall(function() controlScreenGui:Destroy() end)
+        controlScreenGui = nil
+        controlFrame = nil
+    end
+end
+
 local function destroyAllGuisAndPlatform()
     destroyAllRedPlatforms()
     destroyAdditionalGuiElements()
+    destroyControlGuiElements() -- Added this
     if positionConnection then
         positionConnection:Disconnect()
         positionConnection = nil
@@ -86,24 +100,39 @@ local function destroyAllGuisAndPlatform()
 end
 
 -- Main Frame Buttons
-local buttonWidthG1 = 50
-local buttonHeightG1 = 30
-local buttonSpacingG1 = 10
-local totalButtonWidthG1 = (buttonWidthG1 * 3) + (buttonSpacingG1 * 2)
-local startXG1 = (200 - totalButtonWidthG1) / 2
 local startYG1 = 20
+local mainButtonHeight = 30
+local mainButtonWidth = 80 -- Width for Control and Additional buttons
+local mainButtonSpacing = 10
+local totalTopButtonsWidth = (mainButtonWidth * 2) + mainButtonSpacing
+local topButtonsStartX = (frame.Size.X.Offset - totalTopButtonsWidth) / 2
 
+-- Control Button (New)
+local controlButton = Instance.new("TextButton", frame)
+controlButton.Name = "ControlButton"
+controlButton.BackgroundColor3 = Color3.fromRGB(100, 100, 255) -- Blueish for "Off" state
+controlButton.Size = UDim2.new(0, mainButtonWidth, 0, mainButtonHeight)
+controlButton.Position = UDim2.new(0, topButtonsStartX, 0, startYG1)
+controlButton.Text = "Control"
+controlButton.TextScaled = true
+controlButton.TextColor3 = Color3.fromRGB(255,255,255)
+
+-- Additional Button (Adjusted)
 local additionalButton = Instance.new("TextButton", frame)
-additionalButton.BackgroundColor3 = Color3.fromRGB(255, 165, 0)
-additionalButton.Size = UDim2.new(0, 100, 0, 30)
-additionalButton.Position = UDim2.new(0.5, -50, 0, startYG1)
+additionalButton.Name = "AdditionalButton"
+additionalButton.BackgroundColor3 = Color3.fromRGB(255, 165, 0) -- Orange for "Off" state
+additionalButton.Size = UDim2.new(0, mainButtonWidth, 0, mainButtonHeight)
+additionalButton.Position = UDim2.new(0, topButtonsStartX + mainButtonWidth + mainButtonSpacing, 0, startYG1)
 additionalButton.Text = "Additional"
 additionalButton.TextScaled = true
+additionalButton.TextColor3 = Color3.fromRGB(255,255,255)
 
+-- Destroy Button (Adjusted Y position)
 local destroyButton = Instance.new("TextButton", frame)
+destroyButton.Name = "DestroyButton"
 destroyButton.BackgroundColor3 = Color3.fromRGB(220, 220, 220)
-destroyButton.Size = UDim2.new(0, 160, 0, 30)
-destroyButton.Position = UDim2.new(0, 20, 0, 60)
+destroyButton.Size = UDim2.new(0, 160, 0, 30) -- Kept original width
+destroyButton.Position = UDim2.new(0, (frame.Size.X.Offset - 160)/2, 0, startYG1 + mainButtonHeight + 10) -- Centered below top row
 destroyButton.Text = "Destroy All"
 destroyButton.TextScaled = true
 
@@ -111,22 +140,18 @@ destroyButton.TextScaled = true
 -- Platform list entry creation function
 local function createPlatformListEntry(platformData)
     if not platformData or not platformData.part then return nil end
-
     local targetPlatformPart = platformData.part
     local platformNumber = platformData.number
     local isDetached = platformData.isDetached
-
     local entryFrame = Instance.new("Frame")
     entryFrame.Name = "PlatformEntry_" .. platformNumber
     entryFrame.BackgroundColor3 = isDetached and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(210, 210, 210)
     entryFrame.BorderSizePixel = 1
     entryFrame.Size = UDim2.new(1, -10, 0, 25)
-
     local entryLayout = Instance.new("UIListLayout", entryFrame)
     entryLayout.FillDirection = Enum.FillDirection.Horizontal
     entryLayout.Padding = UDim.new(0, 5)
     entryLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-
     local entryLabel = Instance.new("TextLabel", entryFrame)
     entryLabel.Name = "EntryLabel"
     entryLabel.Size = UDim2.new(0.7, -5, 1, 0)
@@ -136,7 +161,6 @@ local function createPlatformListEntry(platformData)
     entryLabel.TextColor3 = Color3.fromRGB(0, 0, 0)
     entryLabel.TextXAlignment = Enum.TextXAlignment.Left
     entryLabel.TextScaled = true
-
     local tpButton = Instance.new("TextButton", entryFrame)
     tpButton.Name = "TeleportButton"
     tpButton.Size = UDim2.new(0.3, -5, 0.9, 0)
@@ -145,7 +169,6 @@ local function createPlatformListEntry(platformData)
     tpButton.Text = "TP"
     tpButton.TextScaled = true
     tpButton.Font = Enum.Font.SourceSansBold
-
     tpButton.MouseButton1Click:Connect(function()
         local char = player.Character
         local playerHrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -154,74 +177,53 @@ local function createPlatformListEntry(platformData)
             local platformTopY = targetPlatformPart.Position.Y + targetPlatformPart.Size.Y/2
             local minPlayerY = platformTopY + playerHrp.Size.Y/2 + 0.1
             local finalY = math.max(targetY, minPlayerY)
-
-            playerHrp.CFrame = CFrame.new(Vector3.new(
-                targetPlatformPart.Position.X,
-                finalY,
-                targetPlatformPart.Position.Z
-            ))
+            playerHrp.CFrame = CFrame.new(Vector3.new(targetPlatformPart.Position.X, finalY, targetPlatformPart.Position.Z))
         end
     end)
-
     return entryFrame
 end
 
 -- Full platform population function
 local function populatePlatformList()
     if not platformScrollingFrame or not platformScrollingFrame.Parent then return end
-
     for _, child in ipairs(platformScrollingFrame:GetChildren()) do
-        if child:IsA("Frame") and child.Name:match("^PlatformEntry_") then
-            child:Destroy()
-        end
+        if child:IsA("Frame") and child.Name:match("^PlatformEntry_") then child:Destroy() end
     end
-
     for _, platformData in ipairs(redPlatforms) do
         if platformData.part and platformData.part.Parent then
             local entryUI = createPlatformListEntry(platformData)
-            if entryUI then
-                entryUI.Parent = platformScrollingFrame
-            end
+            if entryUI then entryUI.Parent = platformScrollingFrame end
         end
     end
 end
 
--- Complete spawnRedPlatform implementation - ADDED ARROW INDICATOR
+-- SpawnRedPlatform function (with arrow)
 local function spawnRedPlatform()
     if #redPlatforms >= maxRedPlatforms then
         warn("Cannot spawn more than " .. maxRedPlatforms .. " platforms.")
         return
     end
-
     local char = player.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
-
     local platformNumber = #redPlatforms + 1
-    local hitPart = nil
-    local weldConstraint = nil
-
+    local hitPart, weldConstraint = nil, nil
     local rayOrigin = hrp.Position + Vector3.new(0, 1, 0)
     local rayDirection = Vector3.new(0, -raycastDistance, 0)
     local raycastParams = RaycastParams.new()
     raycastParams.FilterType = Enum.RaycastFilterType.Exclude
     raycastParams.FilterDescendantsInstances = {char}
-
     local rayResult = workspace:Raycast(rayOrigin, rayDirection, raycastParams)
-    if rayResult then
-        hitPart = rayResult.Instance
-    end
-
+    if rayResult then hitPart = rayResult.Instance end
     local newPlatform = Instance.new("Part")
     newPlatform.Name = "RedPlatform_" .. platformNumber
     newPlatform.Size = Vector3.new(3, 1, 3)
     newPlatform.Color = Color3.fromRGB(255, 0, 0)
     newPlatform.Material = Enum.Material.Plastic
     newPlatform.CanCollide = false
-
     if hitPart then
         local platformCF = hitPart.CFrame * CFrame.new(0, hitPart.Size.Y/2 + newPlatform.Size.Y/2, 0)
-        newPlatform.CFrame   = platformCF
+        newPlatform.CFrame = platformCF
         newPlatform.Orientation = hitPart.Orientation
         newPlatform.Anchored = false
     else
@@ -229,67 +231,29 @@ local function spawnRedPlatform()
         newPlatform.Anchored = true
     end
     newPlatform.Parent = workspace
-
-    -- Create orientation arrow
     local arrow = Instance.new("WedgePart")
     arrow.Name = "OrientationArrow"
-    arrow.Size = Vector3.new(0.5, 0.2, 1) -- Width (X), Height (Y), Length (Z, pointy end)
-    arrow.Color = Color3.fromRGB(255, 255, 0) -- Yellow
-    arrow.Material = Enum.Material.Neon -- Make it stand out
+    arrow.Size = Vector3.new(0.5, 0.2, 1)
+    arrow.Color = Color3.fromRGB(255, 255, 0)
+    arrow.Material = Enum.Material.Neon
     arrow.CanCollide = false
-    arrow.Anchored = false -- Will be welded
-    arrow.TopSurface = Enum.SurfaceType.Smooth
-    arrow.BottomSurface = Enum.SurfaceType.Smooth
-    arrow.Parent = newPlatform -- Parent to the platform
-
-    -- Position the arrow on top of the platform, pointing along the platform's local +Z axis.
-    -- The arrow's base (center of its X,Y plane at its local Z= -Length/2) will be slightly forward from the platform's center.
-    local arrowOffsetY = newPlatform.Size.Y/2 + arrow.Size.Y/2 -- Place arrow on top of platform
-    local arrowOffsetZ = -arrow.Size.Z/2 -- Position arrow's center so its back is at platform's center Z
-    -- This makes it point from center towards -Z edge.  Changed to NEGATIVE Z!
-
-    -- The WedgePart points along its own +Z axis.
-    -- We set its CFrame relative to the newPlatform's CFrame.
+    arrow.Anchored = false
+    arrow.TopSurface, arrow.BottomSurface = Enum.SurfaceType.Smooth, Enum.SurfaceType.Smooth
+    arrow.Parent = newPlatform
+    local arrowOffsetY = newPlatform.Size.Y/2 + arrow.Size.Y/2
+    local arrowOffsetZ = -arrow.Size.Z/2 -- Corrected for wedge pointing
     arrow.CFrame = newPlatform.CFrame * CFrame.new(0, arrowOffsetY, arrowOffsetZ)
-
-    -- Weld the arrow to the platform
-    local arrowWeld = Instance.new("WeldConstraint")
-    arrowWeld.Part0 = newPlatform
-    arrowWeld.Part1 = arrow
-    arrowWeld.Parent = arrow -- Or newPlatform, doesn't matter much for WeldConstraints
-
-    -- Create number display
+    local arrowWeld = Instance.new("WeldConstraint", arrow)
+    arrowWeld.Part0, arrowWeld.Part1 = newPlatform, arrow
     local bbGui = Instance.new("BillboardGui", newPlatform)
-    bbGui.Name = "NumberGui"
-    bbGui.Adornee = newPlatform
-    bbGui.AlwaysOnTop = true
-    bbGui.Size = UDim2.new(1.5, 0, 0.6, 0)
-    bbGui.StudsOffset = redPlatformNumberOffset -- Positioned above the platform's center
-
+    bbGui.Name, bbGui.Adornee, bbGui.AlwaysOnTop = "NumberGui", newPlatform, true
+    bbGui.Size, bbGui.StudsOffset = UDim2.new(1.5, 0, 0.6, 0), redPlatformNumberOffset
     local numLabel = Instance.new("TextLabel", bbGui)
-    numLabel.Size = UDim2.new(1, 0, 1, 0)
-    numLabel.BackgroundTransparency = 1
-    numLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    numLabel.TextScaled = true
-    numLabel.Text = tostring(platformNumber)
-    numLabel.Font = Enum.Font.SourceSansBold
-
-    if hitPart then
-        weldConstraint = Instance.new("WeldConstraint", newPlatform)
-        weldConstraint.Part0 = newPlatform
-        weldConstraint.Part1 = hitPart
-    end
-
-    local platformData = {
-        part = newPlatform,
-        billboardGui = bbGui,
-        weld = weldConstraint,
-        number = platformNumber,
-        isDetached = (hitPart == nil),
-        hitPartDestroyConn = nil,
-        arrowPart = arrow -- Store reference if needed, though not strictly necessary for cleanup
-    }
-
+    numLabel.Size, numLabel.BackgroundTransparency = UDim2.new(1, 0, 1, 0), 1
+    numLabel.TextColor3, numLabel.TextScaled = Color3.fromRGB(255, 255, 255), true
+    numLabel.Text, numLabel.Font = tostring(platformNumber), Enum.Font.SourceSansBold
+    if hitPart then weldConstraint = Instance.new("WeldConstraint", newPlatform); weldConstraint.Part0, weldConstraint.Part1 = newPlatform, hitPart end
+    local platformData = {part=newPlatform, billboardGui=bbGui, weld=weldConstraint, number=platformNumber, isDetached=(hitPart==nil), hitPartDestroyConn=nil, arrowPart=arrow}
     if hitPart then
         platformData.hitPartDestroyConn = hitPart.Destroying:Connect(function()
             if newPlatform and newPlatform.Parent then
@@ -297,51 +261,31 @@ local function spawnRedPlatform()
                 platformData.isDetached = true
                 if platformScrollingFrame and platformScrollingFrame.Parent then
                     local entry = platformScrollingFrame:FindFirstChild("PlatformEntry_" .. platformNumber)
-                    if entry then
-                        entry.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
-                    end
+                    if entry then entry.BackgroundColor3 = Color3.fromRGB(255, 100, 100) end
                 end
             end
         end)
     end
-
     table.insert(redPlatforms, platformData)
-
-    if additionalFrame and additionalFrame.Parent then
-        populatePlatformList()
-    end
+    if additionalFrame and additionalFrame.Parent then populatePlatformList() end
 end
 
--- Complete removeLastRedPlatform implementation
+-- RemoveLastRedPlatform function
 local function removeLastRedPlatform()
     if #redPlatforms == 0 then return end
-
-    local lastPlatformData = redPlatforms[#redPlatforms]
-    if lastPlatformData.hitPartDestroyConn then
-        lastPlatformData.hitPartDestroyConn:Disconnect()
-        lastPlatformData.hitPartDestroyConn = nil
-    end
-
-    if lastPlatformData.part and lastPlatformData.part.Parent then
-        pcall(function() lastPlatformData.part:Destroy() end) -- Arrow will be destroyed as it's a child
-    end
-
+    local lastPd = redPlatforms[#redPlatforms]
+    if lastPd.hitPartDestroyConn then lastPd.hitPartDestroyConn:Disconnect(); lastPd.hitPartDestroyConn=nil end
+    if lastPd.part and lastPd.part.Parent then pcall(function() lastPd.part:Destroy() end) end
     table.remove(redPlatforms, #redPlatforms)
-
-     if additionalFrame and additionalFrame.Parent then
-        if platformScrollingFrame then
-            local entry = platformScrollingFrame:FindFirstChild("PlatformEntry_" .. lastPlatformData.number)
-            if entry then
-                pcall(function() entry:Destroy() end)
-            end
-        end
+    if additionalFrame and additionalFrame.Parent and platformScrollingFrame then
+        local entry = platformScrollingFrame:FindFirstChild("PlatformEntry_" .. lastPd.number)
+        if entry then pcall(function() entry:Destroy() end) end
     end
 end
-
 
 -- Additional Button Logic
 local function updateAdditionalGuiPosition()
-    if additionalFrame and additionalFrame.Parent and frame then
+    if additionalFrame and additionalFrame.Parent and frame and frame.Parent then
         local ny = frame.AbsolutePosition.Y + frame.AbsoluteSize.Y
         local nx = frame.AbsolutePosition.X
         additionalFrame.Position = UDim2.fromOffset(nx, ny)
@@ -349,79 +293,132 @@ local function updateAdditionalGuiPosition()
     end
 end
 
-positionConnection = frame:GetPropertyChangedSignal("AbsolutePosition"):Connect(updateAdditionalGuiPosition)
+if frame then -- Ensure frame exists before connecting
+    positionConnection = frame:GetPropertyChangedSignal("AbsolutePosition"):Connect(updateAdditionalGuiPosition)
+end
 
 additionalButton.MouseButton1Click:Connect(function()
     if additionalGuiInstance and additionalGuiInstance.Parent then
         destroyAdditionalGuiElements()
-        additionalButton.BackgroundColor3 = Color3.fromRGB(255, 165, 0)
+        additionalButton.BackgroundColor3 = Color3.fromRGB(255, 165, 0) -- Orange "Off"
     else
         additionalGuiInstance = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
-        additionalGuiInstance.Name = "AdditionalScreenGui"
-        additionalGuiInstance.ResetOnSpawn = false
-        additionalGuiInstance.DisplayOrder = screenGui.DisplayOrder - 1
-
+        additionalGuiInstance.Name, additionalGuiInstance.ResetOnSpawn = "AdditionalScreenGui", false
+        additionalGuiInstance.DisplayOrder = (screenGui and screenGui.DisplayOrder or 0) - 1
         additionalFrame = Instance.new("Frame", additionalGuiInstance)
-        additionalFrame.Name = "AdditionalFrame"
-        additionalFrame.BackgroundColor3 = Color3.fromRGB(190, 190, 190)
+        additionalFrame.Name, additionalFrame.BackgroundColor3 = "AdditionalFrame", Color3.fromRGB(190, 190, 190)
         additionalFrame.Size = frame.Size
         additionalFrame.BorderSizePixel = frame.BorderSizePixel
-        additionalFrame.Active = true
-        additionalFrame.Draggable = false
-
+        additionalFrame.Active, additionalFrame.Draggable = true, false
         updateAdditionalGuiPosition()
-
-        local pad = 10
-        local btnH = 30
-        local btnW = (frame.Size.X.Offset - pad * 3) / 2
+        local pad, btnH = 10, 30
+        local btnW = (frame.Size.X.Offset - pad*3)/2
         local btnY = frame.Size.Y.Offset - btnH - pad
-        local scrollH = btnY - pad * 2
-
+        local scrollH = btnY - pad*2
         local posBtn = Instance.new("TextButton", additionalFrame)
-        posBtn.Name = "PositiveButton"
-        posBtn.Size = UDim2.new(0, btnW, 0, btnH)
-        posBtn.Position = UDim2.new(0, pad, 0, btnY)
-        posBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
-        posBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        posBtn.Text = "Positive (+)"
-        posBtn.TextScaled = true
+        posBtn.Name, posBtn.Size, posBtn.Position = "PositiveButton", UDim2.new(0,btnW,0,btnH), UDim2.new(0,pad,0,btnY)
+        posBtn.BackgroundColor3, posBtn.TextColor3 = Color3.fromRGB(0,200,0), Color3.fromRGB(255,255,255)
+        posBtn.Text, posBtn.TextScaled = "Positive (+)", true
         posBtn.MouseButton1Click:Connect(spawnRedPlatform)
-
         local negBtn = Instance.new("TextButton", additionalFrame)
-        negBtn.Name = "NegativeButton"
-        negBtn.Size = UDim2.new(0, btnW, 0, btnH)
-        negBtn.Position = UDim2.new(0, pad + btnW + pad, 0, btnY)
-        negBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
-        negBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        negBtn.Text = "Negative (-)"
-        negBtn.TextScaled = true
+        negBtn.Name, negBtn.Size, negBtn.Position = "NegativeButton", UDim2.new(0,btnW,0,btnH), UDim2.new(0,pad+btnW+pad,0,btnY)
+        negBtn.BackgroundColor3, negBtn.TextColor3 = Color3.fromRGB(200,0,0), Color3.fromRGB(255,255,255)
+        negBtn.Text, negBtn.TextScaled = "Negative (-)", true
         negBtn.MouseButton1Click:Connect(removeLastRedPlatform)
-
         platformScrollingFrame = Instance.new("ScrollingFrame", additionalFrame)
-        platformScrollingFrame.Name = "PlatformListScroll"
-        platformScrollingFrame.Size = UDim2.new(1, -pad * 2, 0, scrollH)
-        platformScrollingFrame.Position = UDim2.new(0, pad, 0, pad)
-        platformScrollingFrame.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
-        platformScrollingFrame.BorderSizePixel = 1
-        platformScrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
-        platformScrollingFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 100)
-        platformScrollingFrame.ScrollBarThickness = 8
+        platformScrollingFrame.Name, platformScrollingFrame.Size = "PlatformListScroll", UDim2.new(1,-pad*2,0,scrollH)
+        platformScrollingFrame.Position = UDim2.new(0,pad,0,pad)
+        platformScrollingFrame.BackgroundColor3, platformScrollingFrame.BorderSizePixel = Color3.fromRGB(200,200,200),1
+        platformScrollingFrame.CanvasSize = UDim2.new(0,0,0,0)
+        platformScrollingFrame.ScrollBarImageColor3, platformScrollingFrame.ScrollBarThickness = Color3.fromRGB(100,100,100),8
         platformScrollingFrame.ScrollingDirection = Enum.ScrollingDirection.Y
-
         uiListLayout = Instance.new("UIListLayout", platformScrollingFrame)
-        uiListLayout.Padding = UDim.new(0, 5)
-        uiListLayout.FillDirection = Enum.FillDirection.Vertical
-        uiListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-        uiListLayout.SortOrder = Enum.SortOrder.LayoutOrder
-
+        uiListLayout.Padding, uiListLayout.FillDirection = UDim.new(0,5), Enum.FillDirection.Vertical
+        uiListLayout.HorizontalAlignment, uiListLayout.SortOrder = Enum.HorizontalAlignment.Center, Enum.SortOrder.LayoutOrder
         uiListLayoutConnection = uiListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-            if platformScrollingFrame then
-                platformScrollingFrame.CanvasSize = UDim2.new(0, 0, 0, uiListLayout.AbsoluteContentSize.Y)
-            end
+            if platformScrollingFrame then platformScrollingFrame.CanvasSize = UDim2.new(0,0,0,uiListLayout.AbsoluteContentSize.Y) end
         end)
-
         populatePlatformList()
-        additionalButton.BackgroundColor3 = Color3.fromRGB(200, 120, 0)
+        additionalButton.BackgroundColor3 = Color3.fromRGB(200, 120, 0) -- Darker Orange "On"
+    end
+end)
+
+-- Control Button Logic (New)
+local function createControlJoystickGui()
+    if controlScreenGui then return end -- Already open
+
+    controlScreenGui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
+    controlScreenGui.Name = "ControlJoystickScreenGui"
+    controlScreenGui.ResetOnSpawn = false
+    controlScreenGui.DisplayOrder = 10 -- High display order to be on top
+    controlScreenGui.IgnoreGuiInset = true -- Position relative to absolute screen edges
+
+    controlFrame = Instance.new("Frame", controlScreenGui)
+    controlFrame.Name = "ControlJoystickFrame"
+    controlFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30) -- Dark semi-transparent background
+    controlFrame.BackgroundTransparency = 0.4
+    controlFrame.Size = UDim2.new(0, 160, 0, 160) -- Slightly larger for comfort
+    controlFrame.AnchorPoint = Vector2.new(0, 1) -- Bottom-left anchor of the frame
+    controlFrame.Position = UDim2.new(0, 25, 1, -25) -- 25px from bottom-left of screen
+    controlFrame.BorderSizePixel = 1
+    controlFrame.BorderColor3 = Color3.fromRGB(150,150,150)
+
+    local dirButtonSize = UDim2.new(0, 50, 0, 50) -- Square buttons
+    local dirButtonColor = Color3.fromRGB(100, 100, 100)
+    local dirButtonTextColor = Color3.fromRGB(255, 255, 255)
+    local dirButtonFont = Enum.Font.SourceSansBold
+    local dirButtonTextSize = 28
+
+    -- Forward Button (Up)
+    local forwardBtn = Instance.new("TextButton", controlFrame)
+    forwardBtn.Name, forwardBtn.Size = "ForwardButton", dirButtonSize
+    forwardBtn.AnchorPoint = Vector2.new(0.5, 0) -- Top-center of button
+    forwardBtn.Position = UDim2.new(0.5, 0, 0, 5) -- Centered X, 5px from top of controlFrame
+    forwardBtn.BackgroundColor3, forwardBtn.TextColor3 = dirButtonColor, dirButtonTextColor
+    forwardBtn.Text, forwardBtn.Font, forwardBtn.TextSize = "↑", dirButtonFont, dirButtonTextSize
+    forwardBtn.MouseButton1Click:Connect(function() print("Control: Forward pressed") end)
+
+    -- Backward Button (Down)
+    local backwardBtn = Instance.new("TextButton", controlFrame)
+    backwardBtn.Name, backwardBtn.Size = "BackwardButton", dirButtonSize
+    backwardBtn.AnchorPoint = Vector2.new(0.5, 1) -- Bottom-center of button
+    backwardBtn.Position = UDim2.new(0.5, 0, 1, -5) -- Centered X, 5px from bottom
+    backwardBtn.BackgroundColor3, backwardBtn.TextColor3 = dirButtonColor, dirButtonTextColor
+    backwardBtn.Text, backwardBtn.Font, backwardBtn.TextSize = "↓", dirButtonFont, dirButtonTextSize
+    backwardBtn.MouseButton1Click:Connect(function() print("Control: Backward pressed") end)
+
+    -- Left Button
+    local leftBtn = Instance.new("TextButton", controlFrame)
+    leftBtn.Name, leftBtn.Size = "LeftButton", dirButtonSize
+    leftBtn.AnchorPoint = Vector2.new(0, 0.5) -- Middle-left of button
+    leftBtn.Position = UDim2.new(0, 5, 0.5, 0) -- 5px from left of controlFrame, Centered Y
+    leftBtn.BackgroundColor3, leftBtn.TextColor3 = dirButtonColor, dirButtonTextColor
+    leftBtn.Text, leftBtn.Font, leftBtn.TextSize = "←", dirButtonFont, dirButtonTextSize
+    leftBtn.MouseButton1Click:Connect(function() print("Control: Left pressed") end)
+
+    -- Right Button
+    local rightBtn = Instance.new("TextButton", controlFrame)
+    rightBtn.Name, rightBtn.Size = "RightButton", dirButtonSize
+    rightBtn.AnchorPoint = Vector2.new(1, 0.5) -- Middle-right of button
+    rightBtn.Position = UDim2.new(1, -5, 0.5, 0) -- 5px from right of controlFrame, Centered Y
+    rightBtn.BackgroundColor3, rightBtn.TextColor3 = dirButtonColor, dirButtonTextColor
+    rightBtn.Text, rightBtn.Font, rightBtn.TextSize = "→", dirButtonFont, dirButtonTextSize
+    rightBtn.MouseButton1Click:Connect(function() print("Control: Right pressed") end)
+
+    controlButton.BackgroundColor3 = Color3.fromRGB(60, 60, 200) -- Darker Blue "On"
+end
+
+controlButton.MouseButton1Click:Connect(function()
+    if controlScreenGui and controlScreenGui.Parent then
+        destroyControlGuiElements()
+        controlButton.BackgroundColor3 = Color3.fromRGB(100, 100, 255) -- Blueish "Off"
+    else
+        -- Optional: Close other panel if this one opens
+        if additionalGuiInstance and additionalGuiInstance.Parent then
+            destroyAdditionalGuiElements()
+            additionalButton.BackgroundColor3 = Color3.fromRGB(255, 165, 0) -- Orange "Off"
+        end
+        createControlJoystickGui()
     end
 end)
 
@@ -429,10 +426,7 @@ destroyButton.MouseButton1Click:Connect(destroyAllGuisAndPlatform)
 
 if frame then
     frame.Destroying:Connect(function()
-        if positionConnection then
-            positionConnection:Disconnect()
-            positionConnection = nil
-        end
+        if positionConnection then positionConnection:Disconnect(); positionConnection = nil end
         destroyAllGuisAndPlatform()
     end)
 end
