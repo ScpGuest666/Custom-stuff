@@ -214,7 +214,7 @@ local function initializeGUI()
     ForwardButton.Parent = ControllerFrame
     ForwardButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
     ForwardButton.Size = UDim2.new(0, 50, 0, 50)
-    ForwardButton.Position = UDim2.new(0.5, -25, 0, -10)
+    ForwardButton.Position = UDim2.new(0.5, -25, 0, 10)
     ForwardButton.Font = Enum.Font.GothamBold
     ForwardButton.Text = "▲"
     ForwardButton.TextColor3 = Color3.fromRGB(255, 255, 255)
