@@ -163,7 +163,7 @@ local function addPlatformToScrollFrame(platformName)
 			end
 		end
 
-		-- REVISED REPLAY LOGIC TO HANDLE MOVEMENT DIRECTION
+		-- REVISED REPLAY LOGIC WITH SMOOTH JUMPING USING CONSTANT TP
 		local function replayPlatforms(startIndex)
 			for i = startIndex, #platforms do
 				if not replaying then return end
@@ -182,30 +182,83 @@ local function addPlatformToScrollFrame(platformName)
 					local initialAutoRotate = humanoid.AutoRotate
 					humanoid.AutoRotate = false -- Disable auto-rotation for precise control
 					
-					for j = 1, #movements do
+					-- Use interpolation for smooth movement but switch to direct TP when jumping
+					for j = 1, #movements - 1 do
 						if not replaying then
 							-- If replay is stopped, restore auto-rotation and exit
 							humanoid.AutoRotate = initialAutoRotate
 							return
 						end
 
-						local movementData = movements[j]
+						local startMovement = movements[j]
+						local endMovement = movements[j + 1]
 						
-						-- Set the character's orientation first
-						rootPart.CFrame = CFrame.new(rootPart.Position) * CFrame.Angles(
-							0, math.rad(movementData.orientation.Y), 0
-						)
-						
-						-- Move to the recorded position (this will respect the orientation)
-						humanoid:MoveTo(movementData.position)
+						-- Calculate duration based on distance and a speed factor
+						local distance = (endMovement.position - startMovement.position).magnitude
+						local speedFactor = 0.01  -- Adjust this for desired replay speed
+						local duration = distance * speedFactor
+						duration = math.max(duration, 0.01)  -- Minimum duration
 
-						-- If a jump was recorded at this point, trigger it
-						if movementData.isJumping then
-							humanoid.Jump = true
+						local startTime = tick()
+						local endTime = startTime + duration
+
+						-- If jumping, use constant teleportation for smooth movement
+						if startMovement.isJumping or endMovement.isJumping then
+							while tick() < endTime do
+								if not replaying then
+									humanoid.AutoRotate = initialAutoRotate
+									return
+								end
+								
+								local alpha = (tick() - startTime) / duration
+								alpha = math.min(alpha, 1)
+								
+								-- Interpolate position and orientation
+								local interpolatedPosition = startMovement.position:Lerp(endMovement.position, alpha)
+								local startOrientation = startMovement.orientation
+								local endOrientation = endMovement.orientation
+								local interpolatedOrientation = CFrame.fromEulerAnglesYXZ(
+									0, math.rad(startOrientation.Y), 0
+								):Lerp(
+									CFrame.fromEulerAnglesYXZ(0, math.rad(endOrientation.Y), 0), alpha
+								)
+								
+								-- Direct teleportation for smooth jumping
+								rootPart.CFrame = CFrame.new(interpolatedPosition) * interpolatedOrientation
+								
+								-- Set jump state if needed
+								if startMovement.isJumping or endMovement.isJumping then
+									humanoid.Jump = true
+								end
+								
+								game:GetService("RunService").Heartbeat:Wait()
+							end
+						else
+							-- For non-jumping movement, use the standard approach
+							while tick() < endTime do
+								if not replaying then
+									humanoid.AutoRotate = initialAutoRotate
+									return
+								end
+								
+								local alpha = (tick() - startTime) / duration
+								alpha = math.min(alpha, 1)
+								
+								-- Set orientation
+								local startOrientation = startMovement.orientation
+								local endOrientation = endMovement.orientation
+								local interpolatedOrientation = CFrame.fromEulerAnglesYXZ(
+									0, math.rad(startOrientation.Y), 0
+								):Lerp(
+									CFrame.fromEulerAnglesYXZ(0, math.rad(endOrientation.Y), 0), alpha
+								)
+								
+								rootPart.CFrame = CFrame.new(rootPart.Position) * interpolatedOrientation
+								humanoid:MoveTo(startMovement.position:Lerp(endMovement.position, alpha))
+								
+								game:GetService("RunService").Heartbeat:Wait()
+							end
 						end
-
-						-- Wait for the next frame
-						game:GetService("RunService").Heartbeat:Wait()
 					end
 					
 					-- Restore auto-rotation
