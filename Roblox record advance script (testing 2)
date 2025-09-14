@@ -185,7 +185,7 @@ local function addPlatformToScrollFrame(platformName)
 					local inJumpSequence = false
 					local jumpSequenceStartTime = 0
 					local jumpSequenceEndTime = 0
-					local jumpSequenceBuffer = 0.5 -- 0.5 seconds before and after jump
+					local jumpSequenceBuffer = 1.0 -- 1.0 seconds before and after jump (changed from 0.5)
 
 					for j = 1, #movements - 1 do
 						if not replaying then
