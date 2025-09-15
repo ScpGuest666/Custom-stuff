@@ -1,7 +1,22 @@
+-- Services
+local PlayerService = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local PathfindingService = game:GetService("PathfindingService")
+
+-- Wait for player to load
+local player = PlayerService.LocalPlayer
+if not player then
+    player = PlayerService.PlayerAdded:Wait()
+end
+
+-- Wait for player GUI to be ready
+player:WaitForChild("PlayerGui")
+
 -- Create ScreenGui
 local screenGui = Instance.new("ScreenGui")
-screenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+screenGui.Parent = player.PlayerGui
 screenGui.ResetOnSpawn = false
+screenGui.Name = "MovementRecorderGui"
 
 -- Create Frame
 local frame = Instance.new("Frame")
@@ -78,9 +93,8 @@ uiListLayout.Padding = UDim.new(0, 5)
 -- Variables for recording and platforms
 local recording = false
 local replaying = false
-local player = game.Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
-local humanoid = character:WaitForChild("Humanoid")
+local humanoid = character:WaitForChild("Humanoid") -- Get the Humanoid
 local platforms = {}
 local yellowPlatforms = {}
 local platformData = {}
@@ -88,344 +102,365 @@ local platformCounter = 0
 local lastPosition = nil
 local replayThread
 
--- Pathfinding service
-local PathfindingService = game:GetService("PathfindingService")
+-- Global Variables for Force Movement (from provided script)
+local forceActiveConnection = nil
+local forceSpeedMultiplier = 1.0 -- 1.0 = same as walk speed, 2.0 = double walk speed, etc.
+local isClimbing = false
+local allConnections = {} -- Table to hold all connections for easy cleanup from the force script
 
--- Function to calculate path
+-- This function sets up the state-change listener for a character's humanoid
+local function setupCharacterForce(characterToSetup)
+    local humanoidToSetup = characterToSetup:WaitForChild("Humanoid")
+    
+    -- Function to update the isClimbing status
+    local function onStateChanged(oldState, newState)
+        isClimbing = (newState == Enum.HumanoidStateType.Climbing)
+    end
+    
+    -- Connect to the StateChanged event and store the connection for later cleanup
+    local stateConnection = humanoidToSetup.StateChanged:Connect(onStateChanged)
+    table.insert(allConnections, stateConnection)
+end
+
+-- Function to stop the force movement
+local function stopForceMovement()
+    if forceActiveConnection then
+        forceActiveConnection:Disconnect()
+        forceActiveConnection = nil
+    end
+    
+    local char = player.Character
+    if char and char.PrimaryPart then
+        local rootPart = char.PrimaryPart
+        -- Crucially, reset velocity to avoid residual movement
+        rootPart.AssemblyLinearVelocity = Vector3.new(0, rootPart.AssemblyLinearVelocity.Y, 0)
+    end
+end
+
+-- Function to start the force movement
+local function startForceMovement()
+    if forceActiveConnection then return end
+    
+    forceActiveConnection = RunService.Heartbeat:Connect(function()
+        local char = player.Character
+        local rootPart = char and char.PrimaryPart
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+        if not rootPart or not hum then
+            stopForceMovement()
+            return
+        end
+        
+        -- If the character is climbing, do nothing.
+        if isClimbing then
+            return
+        end
+        
+        local verticalVelocity = rootPart.AssemblyLinearVelocity.Y
+        local moveSpeed = hum.WalkSpeed * forceSpeedMultiplier
+        local lookVector = rootPart.CFrame.LookVector
+        local horizontalDirection = Vector3.new(lookVector.X, 0, lookVector.Z).Unit
+        local horizontalVelocity = horizontalDirection * moveSpeed
+        
+        local finalVelocity = Vector3.new(horizontalVelocity.X, verticalVelocity, horizontalVelocity.Z)
+        rootPart.AssemblyLinearVelocity = finalVelocity
+    end)
+end
+
+-- Pathfinding function
 local function calculatePath(start, goal)
-	local path = PathfindingService:CreatePath()
-	path:ComputeAsync(start, goal)
-	return path
+    local path = PathfindingService:CreatePath()
+    path:ComputeAsync(start, goal)
+    return path
 end
 
 -- Helper Functions
 local function isCharacterMoving()
-	local currentPosition = character.PrimaryPart.Position
-	if lastPosition then
-		local distance = (currentPosition - lastPosition).magnitude
-		lastPosition = currentPosition
-		return distance > 0.05
-	end
-	lastPosition = currentPosition
-	return false
+    local currentPosition = character.PrimaryPart.Position
+    if lastPosition then
+        local distance = (currentPosition - lastPosition).magnitude
+        lastPosition = currentPosition
+        return distance > 0.05
+    end
+    lastPosition = currentPosition
+    return false
 end
 
 local function cleanupPlatform(platform)
-	for i, p in ipairs(platforms) do
-		if p == platform then
-			table.remove(platforms, i)
-			platformData[platform] = nil
-			break
-		end
-	end
+    for i, p in ipairs(platforms) do
+        if p == platform then
+            table.remove(platforms, i)
+            platformData[platform] = nil
+            break
+        end
+    end
 end
 
 local function addPlatformToScrollFrame(platformName)
-	local button = Instance.new("TextButton")
-	button.Parent = scrollFrame
-	button.Size = UDim2.new(1, -10, 0, 25)
-	button.Text = platformName
-	button.TextScaled = true
-	button.BackgroundColor3 = Color3.fromRGB(150, 150, 255)
+    local button = Instance.new("TextButton")
+    button.Parent = scrollFrame
+    button.Size = UDim2.new(1, -10, 0, 25)
+    button.Text = platformName
+    button.TextScaled = true
+    button.BackgroundColor3 = Color3.fromRGB(150, 150, 255)
 
-	local playButton = Instance.new("TextButton")
-	playButton.Parent = button
-	playButton.Size = UDim2.new(0, 50, 1, 0)
-	playButton.Position = UDim2.new(1, -40, 0, 0)
-	playButton.Text = "Play"
-	playButton.TextScaled = true
-	playButton.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+    local playButton = Instance.new("TextButton")
+    playButton.Parent = button
+    playButton.Size = UDim2.new(0, 50, 1, 0)
+    playButton.Position = UDim2.new(1, -40, 0, 0)
+    playButton.Text = "Play"
+    playButton.TextScaled = true
+    playButton.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
 
-	playButton.MouseButton1Click:Connect(function()
-		if replaying then return end
-		local platformIndex = tonumber(platformName:match("%d+"))
-		local platform = platforms[platformIndex]
+    playButton.MouseButton1Click:Connect(function()
+        if replaying then return end
+        local platformIndex = tonumber(platformName:match("%d+"))
+        local platform = platforms[platformIndex]
 
-		-- Walk to the platform before replaying (Pathfinding Integrated)
-		local function walkToPlatform(destination)
-			local humanoid = character:WaitForChild("Humanoid")
-			local rootPart = character:WaitForChild("HumanoidRootPart")
-			local path = calculatePath(rootPart.Position, destination)
+        -- Walk to the platform before replaying (Pathfinding Integrated)
+        local function walkToPlatform(destination)
+            local humanoidCurrent = character:WaitForChild("Humanoid")
+            local rootPart = character:WaitForChild("HumanoidRootPart")
+            local path = calculatePath(rootPart.Position, destination)
 
-			if path.Status == Enum.PathStatus.Success then
-				local waypoints = path:GetWaypoints()
-				for i, waypoint in ipairs(waypoints) do
-					if not replaying then return end
+            if path.Status == Enum.PathStatus.Success then
+                local waypoints = path:GetWaypoints()
+                for i, waypoint in ipairs(waypoints) do
+                    if not replaying then return end -- Check if replay was stopped during pathfinding
 
-					humanoid:MoveTo(waypoint.Position)
-					if waypoint.Action == Enum.PathWaypointAction.Jump then
-						humanoid.Jump = true
-					end
-					humanoid.MoveToFinished:Wait()
-				end
-			else
-				warn("Path not found!")
-			end
-		end
+                    humanoidCurrent:MoveTo(waypoint.Position)
+                    if waypoint.Action == Enum.PathWaypointAction.Jump then
+                        humanoidCurrent.Jump = true
+                    end
+                    humanoidCurrent.MoveToFinished:Wait()
+                end
+            else
+                warn("Path not found!")
+            end
+        end
 
-		-- REVISED REPLAY LOGIC WITH SMOOTH JUMPING USING CONSTANT TP
-		local function replayPlatforms(startIndex)
-			for i = startIndex, #platforms do
-				if not replaying then return end
-				local platform = platforms[i]
-				
-				-- Walk to the start of the recorded path using pathfinding
-				walkToPlatform(platform.Position + Vector3.new(0, 3, 0))
-				
-				local movements = platformData[platform]
-				if movements then
-					-- Get the humanoid and root part for movement
-					local humanoid = character:WaitForChild("Humanoid")
-					local rootPart = character:WaitForChild("HumanoidRootPart")
-					
-					-- Store the initial state to restore after replay
-					local initialAutoRotate = humanoid.AutoRotate
-					humanoid.AutoRotate = false -- Disable auto-rotation for precise control
-					
-					local inJumpSequence = false
-					local jumpSequenceStartTime = 0
-					local jumpSequenceEndTime = 0
-					local jumpSequenceBuffer = 1.0 -- 1.0 seconds before and after jump (changed from 0.5)
+        -- Replay logic for sequential platforms (Improved)
+        local function replayPlatforms(startIndex)
+            -- This is now managed per movement phase, not globally for the whole replay
+            -- startForceMovement() -- REMOVED FROM HERE
 
-					for j = 1, #movements - 1 do
-						if not replaying then
-							-- If replay is stopped, restore auto-rotation and exit
-							humanoid.AutoRotate = initialAutoRotate
-							return
-						end
+            for i = startIndex, #platforms do
+                if not replaying then break end 
+                local currentPlatform = platforms[i]
+                
+                -- PHASE 1: Walk to platform using pathfinding (NO FORCE MOVEMENT)
+                stopForceMovement() -- Ensure force movement is off during pathfinding
+                walkToPlatform(currentPlatform.Position + Vector3.new(0, 3, 0))
+                
+                if not replaying then break end -- Check if replay was stopped during pathfinding
 
-						local startMovement = movements[j]
-						local endMovement = movements[j + 1]
-						
-						-- Check if a jump is about to happen or just finished
-						local isCurrentJump = startMovement.isJumping or endMovement.isJumping
-						local nextMovementHasJump = false
-						if j + 2 <= #movements then
-							nextMovementHasJump = movements[j+2].isJumping
-						end
+                local movements = platformData[currentPlatform]
+                if movements then
+                    -- PHASE 2: Interpolate movements (ACTIVATE FORCE MOVEMENT)
+                    startForceMovement() -- Activate force movement for interpolation
 
-						-- Determine if we should be in a "jump sequence" (using heartbeat TP)
-						if isCurrentJump or nextMovementHasJump then
-							if not inJumpSequence then
-								inJumpSequence = true
-								jumpSequenceStartTime = tick() - jumpSequenceBuffer -- Start buffer before jump
-							end
-							jumpSequenceEndTime = tick() + jumpSequenceBuffer -- Extend buffer after jump
-						end
+                    for j = 1, #movements - 1 do
+                        if not replaying then break end 
 
-						-- Calculate duration based on distance and a speed factor
-						local distance = (endMovement.position - startMovement.position).magnitude
-						local speedFactor = 0.01  -- Adjust this for desired replay speed
-						local duration = distance * speedFactor
-						duration = math.max(duration, 0.01)  -- Minimum duration
+                        local startMovement = movements[j]
+                        local endMovement = movements[j + 1]
+                        endMovement.isJumping = startMovement.isJumping
 
-						local startTime = tick()
-						local endTime = startTime + duration
+                        local startTime = tick()
 
-						if inJumpSequence and tick() < jumpSequenceEndTime then
-							-- Use continuous teleportation for smooth jumping and the buffer period
-							while tick() < endTime do
-								if not replaying then
-									humanoid.AutoRotate = initialAutoRotate
-									return
-								end
-								
-								local alpha = (tick() - startTime) / duration
-								alpha = math.min(alpha, 1)
-								
-								-- Interpolate position and orientation
-								local interpolatedPosition = startMovement.position:Lerp(endMovement.position, alpha)
-								local startOrientation = startMovement.orientation
-								local endOrientation = endMovement.orientation
-								local interpolatedOrientation = CFrame.fromEulerAnglesYXZ(
-									0, math.rad(startOrientation.Y), 0
-								):Lerp(
-									CFrame.fromEulerAnglesYXZ(0, math.rad(endOrientation.Y), 0), alpha
-								)
-								
-								-- Direct teleportation for smooth movement during jump sequence
-								rootPart.CFrame = CFrame.new(interpolatedPosition) * interpolatedOrientation
-								
-								-- Set jump state if needed
-								if startMovement.isJumping or endMovement.isJumping then
-									humanoid.Jump = true
-								end
-								
-								game:GetService("RunService").Heartbeat:Wait()
-							end
-						else
-							-- For non-jumping movement, use the standard approach
-							while tick() < endTime do
-								if not replaying then
-									humanoid.AutoRotate = initialAutoRotate
-									return
-								end
-								
-								local alpha = (tick() - startTime) / duration
-								alpha = math.min(alpha, 1)
-								
-								-- Set orientation
-								local startOrientation = startMovement.orientation
-								local endOrientation = endMovement.orientation
-								local interpolatedOrientation = CFrame.fromEulerAnglesYXZ(
-									0, math.rad(startOrientation.Y), 0
-								):Lerp(
-									CFrame.fromEulerAnglesYXZ(0, math.rad(endOrientation.Y), 0), alpha
-								)
-								
-								rootPart.CFrame = CFrame.new(rootPart.Position) * interpolatedOrientation
-								humanoid:MoveTo(startMovement.position:Lerp(endMovement.position, alpha))
-								
-								game:GetService("RunService").Heartbeat:Wait()
-							end
-						end
+                        local distance = (endMovement.position - startMovement.position).magnitude
+                        local speedFactor = 0.01  
+                        local duration = distance * speedFactor
+                        duration = math.max(duration, 0.01)
 
-						-- If we are past the jump sequence end time, reset the flag
-						if inJumpSequence and tick() >= jumpSequenceEndTime then
-							inJumpSequence = false
-						end
-					end
-					
-					-- Restore auto-rotation
-					humanoid.AutoRotate = initialAutoRotate
-				end
-				wait(0.5) -- Pause between replaying different platforms
-			end
-			replaying = false
-			statusLabel.Text = "Status: Idle"
-			statusLabel.TextColor3 = Color3.fromRGB(0, 0, 0)
-		end
+                        local endTime = startTime + duration
 
-		-- Update status and start replaying
-		statusLabel.Text = "Status: Playing from " .. platformName
-		statusLabel.TextColor3 = Color3.fromRGB(0, 0, 255)
-		replaying = true
-		spawn(function()
-			replayPlatforms(platformIndex)
-		end)
-	end)
+                        while tick() < endTime do
+                            if not replaying then break end
+                            local alpha = (tick() - startTime) / duration
+                            alpha = math.min(alpha, 1)
+
+                            local interpolatedPosition = startMovement.position:Lerp(endMovement.position, alpha)
+                            local startOrientation = startMovement.orientation
+                            local endOrientation = endMovement.orientation
+                            local interpolatedOrientation = CFrame.fromEulerAnglesYXZ(0, math.rad(startOrientation.Y), 0):Lerp(CFrame.fromEulerAnglesYXZ(0, math.rad(endOrientation.Y), 0), alpha)
+
+                            character:SetPrimaryPartCFrame(CFrame.new(interpolatedPosition) * interpolatedOrientation)
+
+                            if endMovement.isJumping then
+                                humanoid.Jump = true
+                            end
+
+                            game:GetService("RunService").Heartbeat:Wait()
+                        end
+                    end
+                    stopForceMovement() -- Deactivate force movement after interpolation for this platform
+                end
+                wait(0.5) -- Small pause between platforms
+            end
+            
+            -- Final cleanup after all platforms are processed or replay is stopped
+            replaying = false
+            statusLabel.Text = "Status: Idle"
+            statusLabel.TextColor3 = Color3.fromRGB(0, 0, 0)
+            stopForceMovement() -- Ensure force movement is off when replay completely ends
+        end
+
+        -- Update status and start replaying
+        statusLabel.Text = "Status: Playing from " .. platformName
+        statusLabel.TextColor3 = Color3.fromRGB(0, 0, 255)
+        replaying = true
+        spawn(function()
+            replayPlatforms(platformIndex)
+        end)
+    end)
 end
 
 -- Handle character respawn or reset
 player.CharacterAdded:Connect(function(newCharacter)
-	character = newCharacter
-	humanoid = newCharacter:WaitForChild("Humanoid")
-	lastPosition = nil
-	statusLabel.Text = "Status: Idle"
-	statusLabel.TextColor3 = Color3.fromRGB(0, 0, 0)
+    character = newCharacter
+    humanoid = newCharacter:WaitForChild("Humanoid") -- Get Humanoid for new character
+    lastPosition = nil
+    statusLabel.Text = "Status: Idle"
+    statusLabel.TextColor3 = Color3.fromRGB(0, 0, 0)
 
-	if recording then
-		platformCounter = 0
-		platforms = {}
-		yellowPlatforms = {}
-		platformData = {}
-		scrollFrame:ClearAllChildren()
-		scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
-	end
+    -- Re-setup force movement character listener for new character
+    for _, connection in ipairs(allConnections) do
+        connection:Disconnect()
+    end
+    allConnections = {}
+    setupCharacterForce(newCharacter)
+
+    if recording then
+        platformCounter = 0
+        platforms = {}
+        yellowPlatforms = {}
+        platformData = {}
+        scrollFrame:ClearAllChildren()
+        scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+    end
+    -- Ensure force movement is off after character reset
+    stopForceMovement()
 end)
+
+-- Initial setup for force movement
+if player.Character then
+    setupCharacterForce(player.Character)
+end
+-- The CharacterAdded connection for force movement is already handled above in player.CharacterAdded:Connect
 
 -- Button Functions
 recordButton.MouseButton1Click:Connect(function()
-	if not recording then
-		recording = true
-		statusLabel.Text = "Status: Recording"
-		statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+    if not recording then
+        recording = true
+        statusLabel.Text = "Status: Recording"
+        statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
 
-		if #yellowPlatforms > 0 then
-			local lastYellowPlatform = yellowPlatforms[#yellowPlatforms]
-			character:SetPrimaryPartCFrame(CFrame.new(lastYellowPlatform.Position + Vector3.new(0, 3, 0)))
-		end
+        if #yellowPlatforms > 0 then
+            local lastYellowPlatform = yellowPlatforms[#yellowPlatforms]
+            character:SetPrimaryPartCFrame(CFrame.new(lastYellowPlatform.Position + Vector3.new(0, 3, 0)))
+        end
 
-		platformCounter += 1
-		local platform = Instance.new("Part")
-		platform.Name = "Platform " .. platformCounter
-		platform.Size = Vector3.new(5, 1, 5)
-		platform.Position = character.PrimaryPart.Position - Vector3.new(0, 3, 0)
-		platform.Anchored = true
-		platform.BrickColor = BrickColor.Red()
-		platform.CanCollide = false
-		platform.Parent = workspace
+        platformCounter += 1
+        local platform = Instance.new("Part")
+        platform.Name = "Platform " .. platformCounter
+        platform.Size = Vector3.new(5, 1, 5)
+        platform.Position = character.PrimaryPart.Position - Vector3.new(0, 3, 0)
+        platform.Anchored = true
+        platform.BrickColor = BrickColor.Red()
+        platform.CanCollide = false
+        platform.Parent = workspace
 
-		table.insert(platforms, platform)
-		platformData[platform] = {}
+        table.insert(platforms, platform)
+        platformData[platform] = {}
 
-		addPlatformToScrollFrame("Platform " .. platformCounter)
-		scrollFrame.CanvasSize = UDim2.new(0, 0, 0, #platforms * 30)
+        addPlatformToScrollFrame("Platform " .. platformCounter)
+        scrollFrame.CanvasSize = UDim2.new(0, 0, 0, #platforms * 30)
 
-		-- Start recording movement, orientation, and jump state
-		spawn(function()
-			while recording do
-				if isCharacterMoving() then
-					table.insert(platformData[platform], {
-						position = character.PrimaryPart.Position,
-						orientation = character.PrimaryPart.Orientation,
-						isJumping = humanoid.Jump -- Record jump state
-					})
-				end
-				game:GetService("RunService").Heartbeat:Wait() -- Use Heartbeat for recording
-			end
-		end)
-	end
+        -- Start recording movement, orientation, and jump state
+        spawn(function()
+            while recording do
+                if isCharacterMoving() then
+                    table.insert(platformData[platform], {
+                        position = character.PrimaryPart.Position,
+                        orientation = character.PrimaryPart.Orientation,
+                        isJumping = humanoid.Jump -- Record jump state
+                    })
+                end
+                game:GetService("RunService").Heartbeat:Wait() -- Use Heartbeat for recording
+            end
+        end)
+    end
 end)
 
 stopRecordButton.MouseButton1Click:Connect(function()
-	if recording then
-		recording = false
-		statusLabel.Text = "Status: Stopped Recording"
-		statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+    if recording then
+        recording = false
+        statusLabel.Text = "Status: Stopped Recording"
+        statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
 
-		local yellowPlatform = Instance.new("Part")
-		yellowPlatform.Size = Vector3.new(5, 1, 5)
-		yellowPlatform.Position = character.PrimaryPart.Position - Vector3.new(0, 3, 0)
-		yellowPlatform.Anchored = true
-		yellowPlatform.BrickColor = BrickColor.Yellow()
-		yellowPlatform.CanCollide = false
-		yellowPlatform.Parent = workspace
+        local yellowPlatform = Instance.new("Part")
+        yellowPlatform.Size = Vector3.new(5, 1, 5)
+        yellowPlatform.Position = character.PrimaryPart.Position - Vector3.new(0, 3, 0)
+        yellowPlatform.Anchored = true
+        yellowPlatform.BrickColor = BrickColor.Yellow()
+        yellowPlatform.CanCollide = false
+        yellowPlatform.Parent = workspace
 
-		table.insert(yellowPlatforms, yellowPlatform)
-	end
+        table.insert(yellowPlatforms, yellowPlatform)
+    end
 end)
 
 stopReplayButton.MouseButton1Click:Connect(function()
-	if replaying then
-		replaying = false
-		statusLabel.Text = "Status: Replay Stopped"
-		statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
-	end
+    if replaying then
+        replaying = false
+        statusLabel.Text = "Status: Replay Stopped"
+        statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+        -- Deactivate force movement immediately if replay is stopped
+        stopForceMovement()
+    end
 end)
 
 destroyButton.MouseButton1Click:Connect(function()
-	for _, platform in ipairs(platforms) do
-		platform:Destroy()
-	end
-	for _, yellowPlatform in ipairs(yellowPlatforms) do
-		yellowPlatform:Destroy()
-	end
-	platforms = {}
-	yellowPlatforms = {}
-	platformData = {}
-	platformCounter = 0
-	screenGui:Destroy()
+    for _, platform in ipairs(platforms) do
+        platform:Destroy()
+    end
+    for _, yellowPlatform in ipairs(yellowPlatforms) do
+        yellowPlatform:Destroy()
+    end
+    platforms = {}
+    yellowPlatforms = {}
+    platformData = {}
+    platformCounter = 0
+    
+    -- Cleanup force movement connections as well
+    stopForceMovement()
+    for _, connection in ipairs(allConnections) do
+        connection:Disconnect()
+    end
+    allConnections = {}
+
+    screenGui:Destroy()
 end)
 
 deleteButton.MouseButton1Click:Connect(function()
-	if #platforms > 0 then
-		local lastPlatform = platforms[#platforms]
-		lastPlatform:Destroy()
-		cleanupPlatform(lastPlatform)
+    if #platforms > 0 then
+        local lastPlatform = platforms[#platforms]
+        lastPlatform:Destroy()
+        cleanupPlatform(lastPlatform)
 
-		if #yellowPlatforms > 0 then
-			local lastYellowPlatform = yellowPlatforms[#yellowPlatforms]
-			lastYellowPlatform:Destroy()
-			table.remove(yellowPlatforms, #yellowPlatforms)
-		end
+        if #yellowPlatforms > 0 then
+            local lastYellowPlatform = yellowPlatforms[#yellowPlatforms]
+            lastYellowPlatform:Destroy()
+            table.remove(yellowPlatforms, #yellowPlatforms)
+        end
 
-		if #scrollFrame:GetChildren() > 1 then
-			local lastButton = scrollFrame:GetChildren()[#scrollFrame:GetChildren()]
-			lastButton:Destroy()
-		end
+        if #scrollFrame:GetChildren() > 1 then
+            local lastButton = scrollFrame:GetChildren()[#scrollFrame:GetChildren()]
+            lastButton:Destroy()
+        end
 
-		platformCounter -= 1
-		scrollFrame.CanvasSize = UDim2.new(0, 0, 0, #platforms * 30)
-	end
+        platformCounter -= 1
+        scrollFrame.CanvasSize = UDim2.new(0, 0, 0, #platforms * 30)
+    end
 end)
