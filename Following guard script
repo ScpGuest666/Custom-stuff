@@ -44,13 +44,14 @@ playerInput.PlaceholderText = "Enter Player Name"
 playerInput.TextScaled = true
 playerInput.TextColor3 = Color3.fromRGB(0, 0, 0)
 
--- Create Buttons: On, Off, Guard, Destroy, Increase/Decrease Distance
+-- Create Buttons: On, Off, Guard, Destroy, Increase/Decrease Distance, Addition
 local onButton = createButton(frame, UDim2.new(0, 20, 0, 60), UDim2.new(0, 80, 0, 30), Color3.fromRGB(0, 255, 0), "On", true)
 local offButton = createButton(frame, UDim2.new(0, 120, 0, 60), UDim2.new(0, 80, 0, 30), Color3.fromRGB(255, 0, 0), "Off", true)
-local guardButton = createButton(frame, UDim2.new(0, 20, 0, 100), UDim2.new(0, 180, 0, 30), Color3.fromRGB(100, 100, 255), "Guard: Off", true) -- New Guard button
+local guardButton = createButton(frame, UDim2.new(0, 20, 0, 100), UDim2.new(0, 180, 0, 30), Color3.fromRGB(100, 100, 255), "Guard: Off", true)
 local pathfindButton = createButton(frame, UDim2.new(0, 20, 0, 140), UDim2.new(0, 180, 0, 30), Color3.fromRGB(255, 255, 0), "Pathfind: Off", true)
 local destroyButton = createButton(frame, UDim2.new(0, 20, 0, 180), UDim2.new(0, 180, 0, 30), Color3.fromRGB(255, 255, 255), "Destroy", true)
 local plusButton = createButton(frame, UDim2.new(0, 20, 0, 220), UDim2.new(0, 40, 0, 30), Color3.fromRGB(0, 255, 255), "+", true)
+local additionButton = createButton(frame, UDim2.new(0, 80, 0, 220), UDim2.new(0, 60, 0, 30), Color3.fromRGB(150, 150, 150), "Addition: Off", true) -- New Addition button
 local minusButton = createButton(frame, UDim2.new(0, 160, 0, 220), UDim2.new(0, 40, 0, 30), Color3.fromRGB(255, 165, 0), "-", true)
 
 -- Status Label
@@ -76,6 +77,10 @@ local movementCheckInterval = 0.5 -- Time in seconds to check for movement
 local notMovingCounter = 0 -- Counter to check if the character hasn't moved in several checks
 
 local targetPlayer = nil
+
+-- Frame 2 variables
+local frame2 = nil
+local additionEnabled = false
 
 -- Function to find a player by partial name
 local function findPlayerByName(partialName)
@@ -300,6 +305,48 @@ local function updateStatusLabel()
 	statusLabel.Text = "Status: On (Follow: " .. tostring(followDistance) .. " studs, Dodge: " .. tostring(dodgeDistance) .. " studs, Guard: " .. guardStatus .. ")"
 end
 
+-- Function to create Frame 2
+local function createFrame2()
+    frame2 = Instance.new("Frame")
+    frame2.Parent = screenGui
+    frame2.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    frame2.Size = UDim2.new(0, 220, 0, 260) -- Same size as main frame
+    frame2.Active = false -- Not draggable
+    frame2.Draggable = false -- Not draggable
+
+    local uicorner2 = Instance.new("UICorner")
+    uicorner2.CornerRadius = UDim.new(0, 10)
+    uicorner2.Parent = frame2
+
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Parent = frame2
+    titleLabel.Size = UDim2.new(1, 0, 0, 30)
+    titleLabel.Position = UDim2.new(0, 0, 0, 0)
+    titleLabel.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    titleLabel.Text = "Additional Options"
+    titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    titleLabel.TextScaled = true
+    titleLabel.Font = Enum.Font.SourceSansBold
+
+    -- Position Frame 2 relative to Frame 1
+    local function updateFrame2Position()
+        if frame and frame2 then
+            -- Calculate position to be to the left of frame1 with a small gap
+            local newX = frame.Position.X.Scale - frame2.Size.X.Scale - 0.01 -- 0.01 for a small gap
+            local newY = frame.Position.Y.Scale
+            frame2.Position = UDim2.new(newX, frame.Position.X.Offset - frame2.Size.X.Offset - 10, newY, frame.Position.Y.Offset)
+        end
+    end
+
+    -- Initial positioning
+    updateFrame2Position()
+
+    -- Connect Frame1's position changes to Frame2's position
+    frame:GetPropertyChangedSignal("Position"):Connect(updateFrame2Position)
+
+    print("Frame 2 created and linked.")
+end
+
 -- New event connection for player input
 playerInput.Changed:Connect(function()
     targetPlayer = findPlayerByName(playerInput.Text)
@@ -380,6 +427,25 @@ pathfindButton.MouseButton1Click:Connect(function()
     end
 end)
 
+additionButton.MouseButton1Click:Connect(function()
+    additionEnabled = not additionEnabled
+    if additionEnabled then
+        additionButton.Text = "Addition: On"
+        additionButton.BackgroundColor3 = Color3.fromRGB(0, 255, 0) -- Green when on
+        if not frame2 then
+            createFrame2()
+        else
+            frame2.Visible = true
+        end
+    else
+        additionButton.Text = "Addition: Off"
+        additionButton.BackgroundColor3 = Color3.fromRGB(150, 150, 150) -- Grey when off
+        if frame2 then
+            frame2.Visible = false
+        end
+    end
+end)
+
 destroyButton.MouseButton1Click:Connect(function()
     -- Stop following and pathfinding
     lookAtEnabled = false
@@ -392,6 +458,8 @@ destroyButton.MouseButton1Click:Connect(function()
     pathfindButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
     guardButton.Text = "Guard: Off"
     guardButton.BackgroundColor3 = Color3.fromRGB(100, 100, 255)
+    additionButton.Text = "Addition: Off"
+    additionButton.BackgroundColor3 = Color3.fromRGB(150, 150, 150)
 
     -- Reset status label
     statusLabel.Text = "Status: Off"
@@ -400,6 +468,12 @@ destroyButton.MouseButton1Click:Connect(function()
     -- Clear target player
     targetPlayer = nil
     playerInput.Text = ""
+
+    -- Destroy Frame 2 if it exists
+    if frame2 then
+        frame2:Destroy()
+        frame2 = nil
+    end
 
     -- Destroy the GUI
     screenGui:Destroy()
