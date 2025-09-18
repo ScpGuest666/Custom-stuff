@@ -1,0 +1,406 @@
+-- Utility function to create buttons with rounded corners
+local function createButton(parent, position, size, bgColor, text, scaled)
+	local button = Instance.new("TextButton")
+	button.Parent = parent
+	button.Size = size
+	button.Position = position
+	button.BackgroundColor3 = bgColor
+	button.Text = text
+	button.TextScaled = scaled
+	button.BorderSizePixel = 0
+
+	-- Rounded corners for a modern look
+	local uicorner = Instance.new("UICorner")
+	uicorner.CornerRadius = UDim.new(0, 5)
+	uicorner.Parent = button
+
+	return button
+end
+
+-- Create ScreenGui with optional rounded background for the frame
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+screenGui.ResetOnSpawn = false
+
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+frame.Size = UDim2.new(0, 220, 0, 260) -- Adjusted height for new Guard button
+frame.Position = UDim2.new(0.5, -110, 0.5, -130) -- Adjusted position
+frame.Active = true
+frame.Draggable = true
+
+local uicorner = Instance.new("UICorner")
+uicorner.CornerRadius = UDim.new(0, 10)
+uicorner.Parent = frame
+
+-- TextBox for player input
+local playerInput = Instance.new("TextBox")
+playerInput.Parent = frame
+playerInput.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+playerInput.Size = UDim2.new(0, 180, 0, 30)
+playerInput.Position = UDim2.new(0, 20, 0, 20)
+playerInput.PlaceholderText = "Enter Player Name"
+playerInput.TextScaled = true
+playerInput.TextColor3 = Color3.fromRGB(0, 0, 0)
+
+-- Create Buttons: On, Off, Guard, Destroy, Increase/Decrease Distance
+local onButton = createButton(frame, UDim2.new(0, 20, 0, 60), UDim2.new(0, 80, 0, 30), Color3.fromRGB(0, 255, 0), "On", true)
+local offButton = createButton(frame, UDim2.new(0, 120, 0, 60), UDim2.new(0, 80, 0, 30), Color3.fromRGB(255, 0, 0), "Off", true)
+local guardButton = createButton(frame, UDim2.new(0, 20, 0, 100), UDim2.new(0, 180, 0, 30), Color3.fromRGB(100, 100, 255), "Guard: Off", true) -- New Guard button
+local pathfindButton = createButton(frame, UDim2.new(0, 20, 0, 140), UDim2.new(0, 180, 0, 30), Color3.fromRGB(255, 255, 0), "Pathfind: Off", true)
+local destroyButton = createButton(frame, UDim2.new(0, 20, 0, 180), UDim2.new(0, 180, 0, 30), Color3.fromRGB(255, 255, 255), "Destroy", true)
+local plusButton = createButton(frame, UDim2.new(0, 20, 0, 220), UDim2.new(0, 40, 0, 30), Color3.fromRGB(0, 255, 255), "+", true)
+local minusButton = createButton(frame, UDim2.new(0, 160, 0, 220), UDim2.new(0, 40, 0, 30), Color3.fromRGB(255, 165, 0), "-", true)
+
+-- Status Label
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = frame
+statusLabel.Size = UDim2.new(0, 220, 0, 30)
+statusLabel.Position = UDim2.new(0, 0, 0, -30)
+statusLabel.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+statusLabel.Text = "Status: Off"
+statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+statusLabel.TextScaled = true
+statusLabel.Font = Enum.Font.SourceSansBold
+
+-- Variables for managing distances
+local followDistance = 3
+local dodgeDistance = 3
+local lookAtEnabled = false
+local pathfindingEnabled = false -- Initially pathfinding is off
+local guardEnabled = false -- New variable for Guard mode
+local isShaking = false
+local lastPosition = nil
+local movementCheckInterval = 0.5 -- Time in seconds to check for movement
+local notMovingCounter = 0 -- Counter to check if the character hasn't moved in several checks
+
+local targetPlayer = nil
+
+-- Function to find a player by partial name
+local function findPlayerByName(partialName)
+	partialName = string.lower(partialName)
+	for _, player in pairs(game.Players:GetPlayers()) do
+		if string.find(string.lower(player.Name), partialName) or string.find(string.lower(player.DisplayName), partialName) then
+			return player
+		end
+	end
+	return nil
+end
+
+-- Pathfinding service
+local PathfindingService = game:GetService("PathfindingService")
+
+-- Function to calculate path
+local function calculatePath(start, goal)
+	local path = PathfindingService:CreatePath()
+	path:ComputeAsync(start, goal)
+	return path
+end
+
+-- Guard mode specific variables
+local guardMoveCooldown = 2 -- seconds
+local lastGuardMoveTime = 0
+
+-- Enhanced movement function to follow the target player
+local function moveToPlayer(targetPlayer)
+    local localPlayer = game.Players.LocalPlayer
+    local localRootPart = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local targetRootPart = targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+
+    if localRootPart and targetRootPart then
+        local distance = (localRootPart.Position - targetRootPart.Position).Magnitude
+
+        -- Guard mode logic
+        if guardEnabled then
+            local currentTime = tick()
+
+            -- If outside followDistance, use pathfinding to get back into range
+            if distance > followDistance + 2 then -- A small buffer to re-engage pathfinding
+                if not pathfindingEnabled then
+                    pathfindingEnabled = true
+                    pathfindButton.Text = "Pathfind: On"
+                    pathfindButton.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
+                end
+                local path = calculatePath(localRootPart.Position, targetRootPart.Position)
+                if path.Status == Enum.PathStatus.Success then
+                    local waypoints = path:GetWaypoints()
+                    for i, waypoint in ipairs(waypoints) do
+                        if i > 1 then
+                            localPlayer.Character.Humanoid:MoveTo(waypoint.Position)
+                            if waypoint.Action == Enum.PathWaypointAction.Jump then
+                                localPlayer.Character.Humanoid.Jump = true
+                            end
+                            localPlayer.Character.Humanoid.MoveToFinished:Wait()
+                            break
+                        end
+                    end
+                else
+                    print("Path calculation failed in Guard mode (out of range)")
+                    pathfindingEnabled = false
+                    pathfindButton.Text = "Pathfind: Off"
+                    pathfindButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+                end
+            else -- Within followDistance, move randomly every 2 seconds
+                -- Turn off pathfinding only when within range
+                if pathfindingEnabled then
+                    pathfindingEnabled = false
+                    pathfindButton.Text = "Pathfind: Off"
+                    pathfindButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+                end
+
+                if currentTime - lastGuardMoveTime >= guardMoveCooldown then
+                    local randomAngle = math.random() * 2 * math.pi
+                    local randomRadius = math.random() * followDistance -- Move within the follow distance
+                    local randomOffset = Vector3.new(math.cos(randomAngle) * randomRadius, 0, math.sin(randomAngle) * randomRadius)
+                    local randomDestination = targetRootPart.Position + randomOffset
+
+                    localPlayer.Character.Humanoid:MoveTo(randomDestination)
+                    lastGuardMoveTime = currentTime
+                end
+            end
+            return -- Exit early if in Guard mode
+        end
+
+        -- Normal follow/dodge logic (only if not in Guard mode)
+        -- Turn off pathfinding if too close to the target
+        if distance <= 3 then
+            pathfindingEnabled = false
+            pathfindButton.Text = "Pathfind: Off"
+            pathfindButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+        end
+
+        -- Check for movement if pathfinding is enabled
+        if pathfindingEnabled then
+            if lastPosition then
+                local movedDistance = (localRootPart.Position - lastPosition).Magnitude
+                if movedDistance < 0.5 then
+                    notMovingCounter = notMovingCounter + 1
+                    if notMovingCounter >= 3 then -- If not moved for 3 checks (1.5 seconds)
+                        -- Not moving, try raycasting again
+                        pathfindingEnabled = false
+                        pathfindButton.Text = "Pathfind: Off"
+                        pathfindButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+                        notMovingCounter = 0 -- Reset counter
+                    end
+                else
+                    notMovingCounter = 0 -- Reset counter if moved
+                end
+            else
+                notMovingCounter = 0 -- Reset counter if no last position
+            end
+            lastPosition = localRootPart.Position
+        end
+
+        if math.abs(distance - followDistance) > 1 then
+            local direction = (targetRootPart.Position - localRootPart.Position).unit
+            local destination = targetRootPart.Position - (direction * followDistance)
+
+            local raycastParams = RaycastParams.new()
+            raycastParams.FilterDescendantsInstances = {localPlayer.Character}
+            raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+
+            local rayResult = workspace:Raycast(localRootPart.Position, direction * followDistance, raycastParams)
+            if rayResult and not pathfindingEnabled then
+                -- Obstacle detected, check for shaking
+                local lastPosition = localRootPart.Position
+                task.wait(0.1) -- Wait for a short duration to check for movement
+                local currentPosition = localRootPart.Position
+                local movedDistance = (currentPosition - lastPosition).Magnitude
+
+                if movedDistance < 0.5 then -- Threshold for detecting shaking
+                    isShaking = true
+                else
+                    isShaking = false
+                end
+
+                if isShaking then
+                    pathfindingEnabled = true -- Enable pathfinding if shaking
+                    pathfindButton.Text = "Pathfind: On"
+                    pathfindButton.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
+                end
+
+                if not pathfindingEnabled then
+                    local dodgeOptions = {
+                        Vector3.new(-direction.Z, 0, direction.X).unit,   -- Perpendicular left
+                        Vector3.new(direction.Z, 0, -direction.X).unit,   -- Perpendicular right
+                        direction * 0.5,                                  -- Halfway forward
+                        -direction                                        -- Opposite (back)
+                    }
+
+                    for _, dodgeDirection in ipairs(dodgeOptions) do
+                        local dodgePosition = localRootPart.Position + (dodgeDirection * dodgeDistance)
+                        local dodgeRayResult = workspace:Raycast(localRootPart.Position, dodgeDirection * dodgeDistance, raycastParams)
+
+                        if not dodgeRayResult then
+                            destination = dodgePosition
+                            break
+                        end
+                    end
+                end
+            end
+
+            if pathfindingEnabled then
+                local path = calculatePath(localRootPart.Position, targetRootPart.Position)
+                if path.Status == Enum.PathStatus.Success then
+                    local waypoints = path:GetWaypoints()
+                    for i, waypoint in ipairs(waypoints) do
+                        if i > 1 then -- Skip the first waypoint which is the starting position
+                            localPlayer.Character.Humanoid:MoveTo(waypoint.Position)
+                            if waypoint.Action == Enum.PathWaypointAction.Jump then
+                                localPlayer.Character.Humanoid.Jump = true
+                            end
+                            localPlayer.Character.Humanoid.MoveToFinished:Wait()
+                            break -- Move to one waypoint at a time
+                        end
+                    end
+                else
+                    -- Handle path calculation failure
+                    print("Path calculation failed")
+                    pathfindingEnabled = false -- Disable pathfinding if it fails
+                    pathfindButton.Text = "Pathfind: Off"
+                    pathfindButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+                end
+            else
+                localPlayer.Character.Humanoid:MoveTo(destination)
+            end
+
+        elseif distance < dodgeDistance then
+            local retreatDirection = (localRootPart.Position - targetRootPart.Position).unit
+            local retreatPosition = localRootPart.Position + (retreatDirection * dodgeDistance * 0.5)
+            localPlayer.Character.Humanoid:MoveTo(retreatPosition)
+        end
+    end
+end
+
+-- Loop for following/dodging
+local followLoop
+local function startFollowing()
+    if followLoop then return end
+    followLoop = game:GetService("RunService").Heartbeat:Connect(function(deltaTime)
+        if lookAtEnabled then
+            targetPlayer = findPlayerByName(playerInput.Text)
+            if targetPlayer then
+                moveToPlayer(targetPlayer)
+            end
+        end
+    end)
+end
+
+local function stopFollowing()
+    if followLoop then
+        followLoop:Disconnect()
+        followLoop = nil
+    end
+end
+
+-- Update status label
+local function updateStatusLabel()
+    local guardStatus = guardEnabled and "On" or "Off"
+	statusLabel.Text = "Status: On (Follow: " .. tostring(followDistance) .. " studs, Dodge: " .. tostring(dodgeDistance) .. " studs, Guard: " .. guardStatus .. ")"
+end
+
+-- New event connection for player input
+playerInput.Changed:Connect(function()
+    targetPlayer = findPlayerByName(playerInput.Text)
+end)
+
+-- Button Event Listeners
+plusButton.MouseButton1Click:Connect(function()
+	followDistance = math.min(30, followDistance + 1)
+	dodgeDistance = math.min(30, dodgeDistance + 1)
+	updateStatusLabel()
+end)
+
+minusButton.MouseButton1Click:Connect(function()
+	followDistance = math.max(1, followDistance - 1)
+	dodgeDistance = math.max(1, dodgeDistance - 1)
+	updateStatusLabel()
+end)
+
+onButton.MouseButton1Click:Connect(function()
+    lookAtEnabled = true
+    updateStatusLabel()
+    statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+    startFollowing()
+end)
+
+offButton.MouseButton1Click:Connect(function()
+    lookAtEnabled = false
+    pathfindingEnabled = false
+    pathfindButton.Text = "Pathfind: Off"
+    pathfindButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+    statusLabel.Text = "Status: Off"
+    statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+    stopFollowing()
+
+    -- If Guard was on, turn it off
+    if guardEnabled then
+        guardEnabled = false
+        guardButton.Text = "Guard: Off"
+        guardButton.BackgroundColor3 = Color3.fromRGB(100, 100, 255)
+    end
+end)
+
+guardButton.MouseButton1Click:Connect(function()
+    if lookAtEnabled then -- Only allow Guard to be turned on if "On" is active
+        guardEnabled = not guardEnabled
+        if guardEnabled then
+            guardButton.Text = "Guard: On"
+            guardButton.BackgroundColor3 = Color3.fromRGB(0, 255, 0) -- Green when on
+            -- Reset lastGuardMoveTime to immediately trigger a move
+            lastGuardMoveTime = 0
+            -- Pathfinding state will be managed dynamically within moveToPlayer
+        else
+            guardButton.Text = "Guard: Off"
+            guardButton.BackgroundColor3 = Color3.fromRGB(100, 100, 255) -- Blue when off
+            -- When guard is off, pathfinding state should revert to its previous setting or default off
+            pathfindingEnabled = false
+            pathfindButton.Text = "Pathfind: Off"
+            pathfindButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+        end
+        updateStatusLabel()
+    else
+        warn("Cannot enable Guard mode when 'On' is not active.")
+    end
+end)
+
+pathfindButton.MouseButton1Click:Connect(function()
+    if not guardEnabled then -- Pathfinding can only be toggled if Guard is off
+        pathfindingEnabled = not pathfindingEnabled
+        if pathfindingEnabled then
+            pathfindButton.Text = "Pathfind: On"
+            pathfindButton.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
+        else
+            pathfindButton.Text = "Pathfind: Off"
+            pathfindButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+        end
+    else
+        warn("Pathfinding cannot be toggled while Guard mode is active.")
+    end
+end)
+
+destroyButton.MouseButton1Click:Connect(function()
+    -- Stop following and pathfinding
+    lookAtEnabled = false
+    pathfindingEnabled = false
+    guardEnabled = false -- Turn off guard
+    stopFollowing()
+
+    -- Reset button states
+    pathfindButton.Text = "Pathfind: Off"
+    pathfindButton.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+    guardButton.Text = "Guard: Off"
+    guardButton.BackgroundColor3 = Color3.fromRGB(100, 100, 255)
+
+    -- Reset status label
+    statusLabel.Text = "Status: Off"
+    statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+
+    -- Clear target player
+    targetPlayer = nil
+    playerInput.Text = ""
+
+    -- Destroy the GUI
+    screenGui:Destroy()
+end)
