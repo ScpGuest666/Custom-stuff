@@ -1,0 +1,714 @@
+-- Utility function to create buttons with rounded corners
+local function createButton(parent, position, size, bgColor, text, scaled)
+    local button = Instance.new("TextButton")
+    button.Parent = parent
+    button.Size = size
+    button.Position = position
+    button.BackgroundColor3 = bgColor
+    button.Text = text
+    button.TextScaled = scaled
+    button.BorderSizePixel = 0
+
+    -- Rounded corners for a modern look
+    local uicorner = Instance.new("UICorner")
+    uicorner.CornerRadius = UDim.new(0, 5)
+    uicorner.Parent = button
+
+    return button
+end
+
+-- Services
+local PlayerService = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = PlayerService.LocalPlayer
+if not player then
+    player = PlayerService.PlayerAdded:Wait()
+end
+
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = player:WaitForChild("PlayerGui")
+screenGui.ResetOnSpawn = false
+screenGui.Name = "CombinedControlGui" -- Renamed for clarity
+
+-- Create Frame
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+frame.Size = UDim2.new(0, 220, 0, 300) -- Increased size to accommodate more buttons/info
+frame.Position = UDim2.new(0.5, -110, 0.5, -150)
+frame.Active = true
+frame.Draggable = true
+
+local uicorner = Instance.new("UICorner")
+uicorner.CornerRadius = UDim.new(0, 10)
+uicorner.Parent = frame
+
+-- TextBox for target player input
+local playerInput = Instance.new("TextBox")
+playerInput.Parent = frame
+playerInput.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+playerInput.Size = UDim2.new(0, 180, 0, 30)
+playerInput.Position = UDim2.new(0, 20, 0, 20)
+playerInput.PlaceholderText = "Enter Target Player Name"
+playerInput.TextScaled = true
+playerInput.TextColor3 = Color3.fromRGB(0, 0, 0)
+
+-- Create Buttons: On, Off, Destroy, and Increase/Decrease Range
+local onButton = createButton(frame, UDim2.new(0, 20, 0, 60), UDim2.new(0, 80, 0, 30), Color3.fromRGB(0, 255, 0), "On", true)
+local offButton = createButton(frame, UDim2.new(0, 120, 0, 60), UDim2.new(0, 80, 0, 30), Color3.fromRGB(255, 0, 0), "Off", true)
+local destroyButton = createButton(frame, UDim2.new(0, 20, 0, 220), UDim2.new(0, 180, 0, 30), Color3.fromRGB(255, 255, 255), "Destroy", true)
+
+local rangeLabel = Instance.new("TextLabel")
+rangeLabel.Parent = frame
+rangeLabel.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+rangeLabel.Size = UDim2.new(0, 100, 0, 30)
+rangeLabel.Position = UDim2.new(0, 60, 0, 100)
+rangeLabel.Text = "Range: 20"
+rangeLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+rangeLabel.TextScaled = true
+rangeLabel.Font = Enum.Font.SourceSansBold
+
+local plusButton = createButton(frame, UDim2.new(0, 20, 0, 100), UDim2.new(0, 40, 0, 30), Color3.fromRGB(0, 255, 255), "+", true)
+local minusButton = createButton(frame, UDim2.new(0, 160, 0, 100), UDim2.new(0, 40, 0, 30), Color3.fromRGB(255, 165, 0), "-", true)
+
+-- Status Label (for overall system status and countdown)
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = frame
+statusLabel.Size = UDim2.new(0, 220, 0, 30)
+statusLabel.Position = UDim2.new(0, 0, 0, -30)
+statusLabel.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+statusLabel.Text = "System: Off"
+statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+statusLabel.TextScaled = true
+statusLabel.Font = Enum.Font.SourceSansBold
+
+-- Activation Status Label (for the 3-second active phase)
+local activationStatusLabel = Instance.new("TextLabel")
+activationStatusLabel.Parent = frame
+activationStatusLabel.Size = UDim2.new(0, 180, 0, 30)
+activationStatusLabel.Position = UDim2.new(0, 20, 0, 180)
+activationStatusLabel.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+activationStatusLabel.Text = "Activation: Inactive"
+activationStatusLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+activationStatusLabel.TextScaled = true
+activationStatusLabel.Font = Enum.Font.SourceSansBold
+
+-- Variables for movement/staring logic
+local targetRange = 20 -- The range around the target player
+local stopDistance = 10 -- How close your character stops to players in range
+local movementEnabled = false -- Controls the movement/staring loop
+local currentClosestPlayer = nil -- Tracks the player we are currently moving towards/staring at
+
+-- Variables for the timed activation
+local activeConnections = {}
+local proximityConnection = nil
+local autoSwingConnection = nil
+local systemActive = false -- Controls the "VehicleFlyGui" script's functionality (sword, teleport)
+local equippedSword = nil
+local activationLoopRunning = false
+local currentCountdownThread = nil
+local currentActivationThread = nil
+
+-- New variables for teleportation
+local teleportedPlayers = {}
+local TELEPORT_RANGE = 20 -- Same as sword proximity range
+local TELEPORT_OFFSET = CFrame.new(2, 0, -3) -- 2 studs right, 3 studs back relative to local player
+local TELEPORT_DURATION = 1 -- seconds a player stays teleported before checking range again
+
+-- Function to find sword in inventory or character
+local function findSword(character)
+    local backpack = player:FindFirstChild("Backpack")
+    local sword = nil
+
+    if backpack then
+        sword = backpack:FindFirstChildOfClass("Tool")
+        if sword then return sword end
+    end
+
+    if character then
+        sword = character:FindFirstChildOfClass("Tool")
+        if sword then return sword end
+    end
+    return nil
+end
+
+-- Start auto swing
+local function startAutoSwing(sword)
+    if autoSwingConnection then
+        autoSwingConnection:Disconnect()
+    end
+    if sword then
+        autoSwingConnection = RunService.Heartbeat:Connect(function()
+            sword:Activate()
+        end)
+    end
+end
+
+-- Stop auto swing
+local function stopAutoSwing()
+    if autoSwingConnection then
+        autoSwingConnection:Disconnect()
+        autoSwingConnection = nil
+    end
+end
+
+-- Equip sword
+local function equipSword(character)
+    if not character then return end
+    local sword = findSword(character)
+    if sword and sword.Parent ~= character then
+        sword.Parent = character
+        equippedSword = sword
+        startAutoSwing(sword)
+    elseif sword and sword.Parent == character and not autoSwingConnection then
+        equippedSword = sword
+        startAutoSwing(sword)
+    end
+end
+
+-- Unequip sword
+local function unequipSword(character)
+    if not character then return end
+    local sword = findSword(character)
+    if sword and sword.Parent ~= player.Backpack then
+        stopAutoSwing()
+        sword.Parent = player.Backpack
+        equippedSword = nil
+    end
+end
+
+-- Helper to get distance between two players
+local function getDistance(p1, p2)
+    local char1 = p1.Character
+    local char2 = p2.Character
+    if not char1 or not char2 then return math.huge end
+    local hrp1 = char1:FindFirstChild("HumanoidRootPart")
+    local hrp2 = char2:FindFirstChild("HumanoidRootPart")
+    if not hrp1 or not hrp2 then return math.huge end
+    return (hrp1.Position - hrp2.Position).Magnitude
+end
+
+-- Teleport a player to the local player's position with an offset
+local function teleportPlayerToLocal(targetPlayer)
+    local character = player.Character
+    local targetCharacter = targetPlayer.Character
+    if not character or not targetCharacter then return end
+
+    local localRoot = character:FindFirstChild("HumanoidRootPart")
+    local targetRoot = targetCharacter:FindFirstChild("HumanoidRootPart")
+    if not localRoot or not targetRoot then return end
+
+    -- Calculate target position relative to local player
+    local targetPos = (localRoot.CFrame * TELEPORT_OFFSET).Position
+
+    -- Calculate the direction from local player to the targetPos
+    local directionFromLocalToTarget = (targetPos - localRoot.Position).unit
+
+    -- To make the teleported player face AWAY from the local player,
+    -- we make them look in the direction *opposite* to the local player.
+    -- So, their lookAt point should be targetPos + directionFromLocalToTarget * some_distance
+    local lookAwayPoint = targetPos + directionFromLocalToTarget * 10 -- 10 studs away, adjust as needed
+
+    local desiredCFrame = CFrame.lookAt(targetPos, lookAwayPoint)
+
+    -- Only teleport if significantly far from desired position or orientation is off
+    local currentOrientation = targetRoot.CFrame - targetRoot.CFrame.Position
+    local desiredOrientation = desiredCFrame - desiredCFrame.Position
+
+    if (targetRoot.Position - targetPos).Magnitude > 0.02 or (currentOrientation.LookVector - desiredOrientation.LookVector).Magnitude > 0.02 then
+        targetRoot.CFrame = desiredCFrame
+    end
+end
+
+-- Return a player to their original position
+local function returnPlayerToOriginal(targetPlayer)
+    local playerData = teleportedPlayers[targetPlayer]
+    if playerData and playerData.originalCFrame then
+        local targetCharacter = targetPlayer.Character
+        if targetCharacter then
+            local targetRoot = targetCharacter:FindFirstChild("HumanoidRootPart")
+            if targetRoot then
+                targetRoot.CFrame = playerData.originalCFrame
+            end
+        end
+    end
+end
+
+-- Stops the teleport cycle for a specific player and cleans up
+local function stopTeleportCycle(targetPlayer)
+    local playerData = teleportedPlayers[targetPlayer]
+    if playerData then
+        if playerData.teleportTimer then
+            task.cancel(playerData.teleportTimer)
+        end
+        returnPlayerToOriginal(targetPlayer) -- Ensure they are returned
+        teleportedPlayers[targetPlayer] = nil -- Clear stored data
+    end
+end
+
+-- Starts the teleport cycle for a specific player
+local function startTeleportCycle(targetPlayer)
+    if not systemActive then return end -- Only start if system is active
+    if teleportedPlayers[targetPlayer] and teleportedPlayers[targetPlayer].isTeleporting then
+        return -- Already in a teleport cycle
+    end
+
+    local targetCharacter = targetPlayer.Character
+    if not targetCharacter then return end
+    local targetRoot = targetCharacter:FindFirstChild("HumanoidRootPart")
+    if not targetRoot then return end
+
+    -- Store original position if not already stored, or update if it's a new cycle
+    if not teleportedPlayers[targetPlayer] then
+        teleportedPlayers[targetPlayer] = {
+            originalCFrame = targetRoot.CFrame,
+            teleportTimer = nil,
+            isTeleporting = false
+        }
+    else
+        -- If restarting cycle, update originalCFrame to current position before first teleport
+        teleportedPlayers[targetPlayer].originalCFrame = targetRoot.CFrame
+    end
+
+    local playerData = teleportedPlayers[targetPlayer]
+    playerData.isTeleporting = true
+
+    local function cycleStep()
+        if not systemActive or not playerData.isTeleporting or not targetPlayer.Character then
+            stopTeleportCycle(targetPlayer)
+            return
+        end
+
+        -- Teleport to local player
+        teleportPlayerToLocal(targetPlayer)
+
+        -- Wait for TELEPORT_DURATION
+        task.wait(TELEPORT_DURATION)
+
+        if not systemActive or not playerData.isTeleporting or not targetPlayer.Character then
+            stopTeleportCycle(targetPlayer)
+            return
+        end
+
+        -- Return to original position
+        returnPlayerToOriginal(targetPlayer)
+
+        -- Check if still in range after returning
+        local distance = getDistance(player, targetPlayer)
+        if distance <= TELEPORT_RANGE then
+            -- Still in range, restart the cycle
+            playerData.teleportTimer = task.delay(0.1, cycleStep) -- Small delay before re-teleporting
+        else
+            -- Out of range, stop the cycle
+            stopTeleportCycle(targetPlayer)
+        end
+    end
+
+    -- Start the first step of the cycle
+    playerData.teleportTimer = task.delay(0.1, cycleStep) -- Initial small delay
+end
+
+-- Check proximity and manage sword/teleport (This is the core "VehicleFlyGui" functionality)
+local function checkProximityAndActivate()
+    local character = player.Character
+    if not character then return end
+
+    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+    if not humanoidRootPart then return end
+
+    local playersInRange = false
+    local currentPlayersInRange = {} -- To track players currently in range
+
+    for _, otherPlayer in pairs(PlayerService:GetPlayers()) do
+        if otherPlayer ~= player and otherPlayer.Character then
+            local distance = getDistance(player, otherPlayer)
+            if distance <= TELEPORT_RANGE then
+                playersInRange = true
+                table.insert(currentPlayersInRange, otherPlayer)
+                -- If player is in range and not currently in a teleport cycle, start one
+                if not teleportedPlayers[otherPlayer] or not teleportedPlayers[otherPlayer].isTeleporting then
+                    startTeleportCycle(otherPlayer)
+                end
+            end
+        end
+    end
+
+    -- Manage sword based on if ANY player is in range
+    if playersInRange then
+        equipSword(character)
+    else
+        unequipSword(character)
+    end
+
+    -- Stop teleport cycles for players who are no longer in range
+    for p, _ in pairs(teleportedPlayers) do
+        local found = false
+        for _, inRangeP in ipairs(currentPlayersInRange) do
+            if p == inRangeP then
+                found = true
+                break
+            end
+        end
+        if not found then
+            stopTeleportCycle(p)
+        end
+    end
+end
+
+-- Status Online for the "VehicleFlyGui" functionality
+local function setActivationOnline()
+    if systemActive then return end
+    activationStatusLabel.Text = "Activation: Active"
+    activationStatusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+    systemActive = true
+
+    if proximityConnection then
+        proximityConnection:Disconnect()
+    end
+    proximityConnection = RunService.Heartbeat:Connect(checkProximityAndActivate)
+    checkProximityAndActivate() -- Initial check
+end
+
+-- Status Offline for the "VehicleFlyGui" functionality
+local function setActivationOffline()
+    if not systemActive then return end
+    activationStatusLabel.Text = "Activation: Inactive"
+    activationStatusLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+    systemActive = false
+
+    if proximityConnection then
+        proximityConnection:Disconnect()
+        proximityConnection = nil
+    end
+
+    if player.Character then
+        unequipSword(player.Character)
+    end
+    stopAutoSwing()
+
+    -- Stop all teleport cycles and return players to original positions
+    for p, _ in pairs(teleportedPlayers) do
+        stopTeleportCycle(p)
+    end
+end
+
+-- Function to find a player by partial name
+local function findPlayerByName(partialName)
+    partialName = string.lower(partialName)
+    for _, p in pairs(PlayerService:GetPlayers()) do
+        if string.find(string.lower(p.Name), partialName) or string.find(string.lower(p.DisplayName), partialName) then
+            return p
+        end
+    end
+    return nil
+end
+
+-- Main movement and activation loop
+local movementLoop
+local function startMovementAndActivationLoop()
+    if movementLoop then return end
+    movementLoop = RunService.Heartbeat:Connect(function()
+        if movementEnabled then
+            local localCharacter = player.Character
+            local localHumanoid = localCharacter and localCharacter:FindFirstChildOfClass("Humanoid")
+            local localRootPart = localCharacter and localCharacter:FindFirstChild("HumanoidRootPart")
+
+            if not localHumanoid or not localRootPart then return end
+
+            local targetPlayer = findPlayerByName(playerInput.Text)
+            if not targetPlayer or not targetPlayer.Character or not targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                localHumanoid:MoveTo(localRootPart.Position) -- Stop if target is invalid
+                currentClosestPlayer = nil
+                return
+            end
+
+            local targetRootPart = targetPlayer.Character.HumanoidRootPart
+
+            local playersInTargetRange = {}
+            for _, p in pairs(PlayerService:GetPlayers()) do
+                if p ~= player and p ~= targetPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                    local pRootPart = p.Character.HumanoidRootPart
+                    local distanceToTarget = (pRootPart.Position - targetRootPart.Position).Magnitude
+                    if distanceToTarget <= targetRange then
+                        table.insert(playersInTargetRange, p)
+                    end
+                end
+            end
+
+            if #playersInTargetRange > 0 then
+                -- Find the closest player in target's range
+                local newClosestPlayer = nil
+                local minDistanceToNewClosest = math.huge
+
+                for _, p in pairs(playersInTargetRange) do
+                    local pRootPart = p.Character.HumanoidRootPart
+                    local distanceToPlayer = (localRootPart.Position - pRootPart.Position).Magnitude
+                    if distanceToPlayer < minDistanceToNewClosest then
+                        minDistanceToNewClosest = distanceToPlayer
+                        newClosestPlayer = p
+                    end
+                end
+
+                -- Switch target if a closer player is found or if current target is gone
+                if newClosestPlayer and (newClosestPlayer ~= currentClosestPlayer or not currentClosestPlayer or not currentClosestPlayer.Character) then
+                    currentClosestPlayer = newClosestPlayer
+                    -- A new closest player is detected, start the countdown/activation cycle
+                    if not activationLoopRunning then
+                        activationLoopRunning = true
+                        task.spawn(function()
+                            while activationLoopRunning and currentClosestPlayer and currentClosestPlayer.Character do
+                                -- Check if currentClosestPlayer is still in range before starting countdown
+                                local currentClosestRoot = currentClosestPlayer.Character:FindFirstChild("HumanoidRootPart")
+                                if not currentClosestRoot then break end
+                                local distToTarget = (currentClosestRoot.Position - targetRootPart.Position).Magnitude
+                                if distToTarget > targetRange then
+                                    -- Closest player went out of range, stop activation loop
+                                    activationLoopRunning = false
+                                    setActivationOffline()
+                                    statusLabel.Text = "System: Off"
+                                    statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+                                    break
+                                end
+
+                                -- Countdown
+                                for i = 3, 1, -1 do
+                                    statusLabel.Text = "Countdown: " .. i
+                                    statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0) -- Orange for countdown
+                                    task.wait(1)
+                                    if not activationLoopRunning or not currentClosestPlayer or not currentClosestPlayer.Character then break end
+                                end
+                                if not activationLoopRunning or not currentClosestPlayer or not currentClosestPlayer.Character then break end
+
+                                -- Activate for 3 seconds
+                                setActivationOnline()
+                                statusLabel.Text = "System: Active"
+                                statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+                                task.wait(3)
+                                if not activationLoopRunning or not currentClosestPlayer or not currentClosestPlayer.Character then break end
+
+                                -- Deactivate
+                                setActivationOffline()
+                                statusLabel.Text = "System: Off"
+                                statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+                                task.wait(0.1) -- Small pause before re-checking
+
+                                -- Re-check if there are still players in range to restart the cycle
+                                local stillPlayersInTargetRange = false
+                                for _, p in pairs(PlayerService:GetPlayers()) do
+                                    if p ~= player and p ~= targetPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                                        local pRootPart = p.Character.HumanoidRootPart
+                                        local distToTarget = (pRootPart.Position - targetRootPart.Position).Magnitude
+                                        if distToTarget <= targetRange then
+                                            stillPlayersInTargetRange = true
+                                            break
+                                        end
+                                    end
+                                end
+
+                                if not stillPlayersInTargetRange then
+                                    activationLoopRunning = false
+                                    break
+                                end
+                            end
+                            activationLoopRunning = false -- Ensure it's false when loop exits
+                            setActivationOffline() -- Ensure system is off
+                            statusLabel.Text = "System: Off"
+                            statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+                        end)
+                    end
+                end
+
+                if currentClosestPlayer then
+                    local currentClosestRootPart = currentClosestPlayer.Character:FindFirstChild("HumanoidRootPart")
+                    if currentClosestRootPart then
+                        local distanceToClosest = (localRootPart.Position - currentClosestRootPart.Position).Magnitude
+
+                        -- Stare function (yaw only)
+                        local lookVector = (currentClosestRootPart.Position - localRootPart.Position).unit
+                        local currentCFrame = localRootPart.CFrame
+                        local targetCFrame = CFrame.new(currentCFrame.Position, currentCFrame.Position + Vector3.new(lookVector.X, 0, lookVector.Z))
+                        localRootPart.CFrame = targetCFrame
+
+                        if distanceToClosest > stopDistance then
+                            -- Move towards the closest player in range, stopping at stopDistance
+                            local direction = (currentClosestRootPart.Position - localRootPart.Position).unit
+                            local destination = currentClosestRootPart.Position - (direction * stopDistance)
+                            localHumanoid:MoveTo(destination)
+                        else
+                            -- Stop if already within stopDistance
+                            localHumanoid:MoveTo(localRootPart.Position)
+                        end
+                    else
+                        -- Current closest player's character is gone, reset
+                        currentClosestPlayer = nil
+                        localHumanoid:MoveTo(localRootPart.Position)
+                        if activationLoopRunning then
+                            activationLoopRunning = false
+                            setActivationOffline()
+                            statusLabel.Text = "System: Off"
+                            statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+                        end
+                    end
+                else
+                    -- No closest player found in range, stop movement
+                    localHumanoid:MoveTo(localRootPart.Position)
+                    if activationLoopRunning then
+                        activationLoopRunning = false
+                        setActivationOffline()
+                        statusLabel.Text = "System: Off"
+                        statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+                    end
+                end
+            else
+                -- No players in the target's range, stop movement and activation
+                localHumanoid:MoveTo(localRootPart.Position)
+                currentClosestPlayer = nil
+                if activationLoopRunning then
+                    activationLoopRunning = false
+                    setActivationOffline()
+                    statusLabel.Text = "System: Off"
+                    statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+                end
+            end
+        end
+    end)
+end
+
+local function stopMovementAndActivationLoop()
+    if movementLoop then
+        movementLoop:Disconnect()
+        movementLoop = nil
+    end
+    local localCharacter = player.Character
+    if localCharacter and localCharacter:FindFirstChildOfClass("Humanoid") then
+        localCharacter.Humanoid:MoveTo(localCharacter.HumanoidRootPart.Position) -- Stop character movement
+    end
+    currentClosestPlayer = nil
+    if activationLoopRunning then
+        activationLoopRunning = false
+        setActivationOffline()
+        statusLabel.Text = "System: Off"
+        statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+    end
+end
+
+-- Update range label
+local function updateRangeLabel()
+    rangeLabel.Text = "Range: " .. tostring(targetRange)
+    TELEPORT_RANGE = targetRange -- Keep TELEPORT_RANGE in sync with targetRange
+end
+
+-- Button Event Listeners
+plusButton.MouseButton1Click:Connect(function()
+    targetRange = math.min(100, targetRange + 5) -- Max range 100 studs
+    updateRangeLabel()
+end)
+
+minusButton.MouseButton1Click:Connect(function()
+    targetRange = math.max(10, targetRange - 5) -- Min range 10 studs
+    updateRangeLabel()
+end)
+
+onButton.MouseButton1Click:Connect(function()
+    movementEnabled = true
+    statusLabel.Text = "System: Waiting for players..."
+    statusLabel.TextColor3 = Color3.fromRGB(255, 255, 0) -- Yellow for waiting
+    startMovementAndActivationLoop()
+end)
+
+offButton.MouseButton1Click:Connect(function()
+    movementEnabled = false
+    statusLabel.Text = "System: Off"
+    statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+    stopMovementAndActivationLoop()
+    setActivationOffline() -- Ensure the activation part is also off
+end)
+
+destroyButton.MouseButton1Click:Connect(function()
+    movementEnabled = false
+    stopMovementAndActivationLoop()
+    setActivationOffline() -- Ensure the activation part is also off
+    screenGui:Destroy()
+end)
+
+-- Character Added Handler for local player
+local function onCharacterAdded(character)
+    task.wait(0.1) -- Give character a moment to fully load
+    if movementEnabled then
+        -- Re-evaluate movement and activation if system is on
+    else
+        unequipSword(character)
+        stopAutoSwing()
+    end
+end
+
+local respawnConn = player.CharacterAdded:Connect(onCharacterAdded)
+table.insert(activeConnections, respawnConn)
+
+if player.Character then
+    onCharacterAdded(player.Character)
+end
+
+-- Handle other players leaving or respawning
+local function onOtherPlayerRemoving(otherPlayer)
+    if teleportedPlayers[otherPlayer] then
+        stopTeleportCycle(otherPlayer) -- Stop cycle and clear data
+    end
+    -- If the current closest player leaves, reset
+    if currentClosestPlayer == otherPlayer then
+        currentClosestPlayer = nil
+        if activationLoopRunning then
+            activationLoopRunning = false
+            setActivationOffline()
+            statusLabel.Text = "System: Off"
+            statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+        end
+    end
+end
+
+local function onOtherPlayerCharacterRemoving(otherPlayerCharacter)
+    local otherPlayer = PlayerService:GetPlayerFromCharacter(otherPlayerCharacter)
+    if otherPlayer and teleportedPlayers[otherPlayer] then
+        stopTeleportCycle(otherPlayer)
+    end
+    -- If the current closest player's character is removed, reset
+    if currentClosestPlayer == otherPlayer then
+        currentClosestPlayer = nil
+        if activationLoopRunning then
+            activationLoopRunning = false
+            setActivationOffline()
+            statusLabel.Text = "System: Off"
+            statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+        end
+    end
+end
+
+local playerRemovingConn = PlayerService.PlayerRemoving:Connect(onOtherPlayerRemoving)
+table.insert(activeConnections, playerRemovingConn)
+
+for _, p in pairs(PlayerService:GetPlayers()) do
+    if p ~= player then
+        local charRemovingConn = p.CharacterRemoving:Connect(function(char)
+            onOtherPlayerCharacterRemoving(char)
+        end)
+        table.insert(activeConnections, charRemovingConn)
+    end
+end
+
+local playerAddedConn = PlayerService.PlayerAdded:Connect(function(newPlayer)
+    if newPlayer ~= player then
+        local charRemovingConn = newPlayer.CharacterRemoving:Connect(function(char)
+            onOtherPlayerCharacterRemoving(char)
+        end)
+        table.insert(activeConnections, charRemovingConn)
+    end
+end)
+table.insert(activeConnections, playerAddedConn)
+
+-- Initial setup
+updateRangeLabel()
+setActivationOffline() -- Ensure the activation part starts off
