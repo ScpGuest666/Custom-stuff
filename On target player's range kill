@@ -192,8 +192,25 @@ local function getDistance(p1, p2)
     return (hrp1.Position - hrp2.Position).Magnitude
 end
 
+-- Function to find a player by partial name
+local function findPlayerByName(partialName)
+    partialName = string.lower(partialName)
+    for _, p in pairs(PlayerService:GetPlayers()) do
+        if string.find(string.lower(p.Name), partialName) or string.find(string.lower(p.DisplayName), partialName) then
+            return p
+        end
+    end
+    return nil
+end
+
 -- Teleport a player to the local player's position with an offset
 local function teleportPlayerToLocal(targetPlayer)
+    -- Prevent teleporting the chosen target
+    local chosenTarget = findPlayerByName(playerInput.Text)
+    if chosenTarget and targetPlayer == chosenTarget then
+        return
+    end
+
     local character = player.Character
     local targetCharacter = targetPlayer.Character
     if not character or not targetCharacter then return end
@@ -202,24 +219,16 @@ local function teleportPlayerToLocal(targetPlayer)
     local targetRoot = targetCharacter:FindFirstChild("HumanoidRootPart")
     if not localRoot or not targetRoot then return end
 
-    -- Calculate target position relative to local player
     local targetPos = (localRoot.CFrame * TELEPORT_OFFSET).Position
-
-    -- Calculate the direction from local player to the targetPos
     local directionFromLocalToTarget = (targetPos - localRoot.Position).unit
-
-    -- To make the teleported player face AWAY from the local player,
-    -- we make them look in the direction *opposite* to the local player.
-    -- So, their lookAt point should be targetPos + directionFromLocalToTarget * some_distance
-    local lookAwayPoint = targetPos + directionFromLocalToTarget * 10 -- 10 studs away, adjust as needed
-
+    local lookAwayPoint = targetPos + directionFromLocalToTarget * 10
     local desiredCFrame = CFrame.lookAt(targetPos, lookAwayPoint)
 
-    -- Only teleport if significantly far from desired position or orientation is off
     local currentOrientation = targetRoot.CFrame - targetRoot.CFrame.Position
     local desiredOrientation = desiredCFrame - desiredCFrame.Position
 
-    if (targetRoot.Position - targetPos).Magnitude > 0.02 or (currentOrientation.LookVector - desiredOrientation.LookVector).Magnitude > 0.02 then
+    if (targetRoot.Position - targetPos).Magnitude > 0.02 or 
+       (currentOrientation.LookVector - desiredOrientation.LookVector).Magnitude > 0.02 then
         targetRoot.CFrame = desiredCFrame
     end
 end
@@ -252,6 +261,11 @@ end
 
 -- Starts the teleport cycle for a specific player
 local function startTeleportCycle(targetPlayer)
+    local chosenTarget = findPlayerByName(playerInput.Text)
+    if chosenTarget and targetPlayer == chosenTarget then
+        return -- Never teleport the chosen target
+    end
+
     if not systemActive then return end -- Only start if system is active
     if teleportedPlayers[targetPlayer] and teleportedPlayers[targetPlayer].isTeleporting then
         return -- Already in a teleport cycle
@@ -322,9 +336,11 @@ local function checkProximityAndActivate()
 
     local playersInRange = false
     local currentPlayersInRange = {} -- To track players currently in range
+    local chosenTarget = findPlayerByName(playerInput.Text) -- Get the chosen target
 
     for _, otherPlayer in pairs(PlayerService:GetPlayers()) do
-        if otherPlayer ~= player and otherPlayer.Character then
+        -- Exclude local player AND the chosen target from teleportation/sword logic
+        if otherPlayer ~= player and otherPlayer ~= chosenTarget and otherPlayer.Character then
             local distance = getDistance(player, otherPlayer)
             if distance <= TELEPORT_RANGE then
                 playersInRange = true
@@ -337,14 +353,14 @@ local function checkProximityAndActivate()
         end
     end
 
-    -- Manage sword based on if ANY player is in range
+    -- Manage sword based on if ANY player (excluding chosen target) is in range
     if playersInRange then
         equipSword(character)
     else
         unequipSword(character)
     end
 
-    -- Stop teleport cycles for players who are no longer in range
+    -- Stop teleport cycles for players who are no longer in range or are now the chosen target
     for p, _ in pairs(teleportedPlayers) do
         local found = false
         for _, inRangeP in ipairs(currentPlayersInRange) do
@@ -353,7 +369,8 @@ local function checkProximityAndActivate()
                 break
             end
         end
-        if not found then
+        -- If player is no longer in range OR is now the chosen target, stop their cycle
+        if not found or p == chosenTarget then
             stopTeleportCycle(p)
         end
     end
@@ -394,17 +411,6 @@ local function setActivationOffline()
     for p, _ in pairs(teleportedPlayers) do
         stopTeleportCycle(p)
     end
-end
-
--- Function to find a player by partial name
-local function findPlayerByName(partialName)
-    partialName = string.lower(partialName)
-    for _, p in pairs(PlayerService:GetPlayers()) do
-        if string.find(string.lower(p.Name), partialName) or string.find(string.lower(p.DisplayName), partialName) then
-            return p
-        end
-    end
-    return nil
 end
 
 -- Main movement and activation loop
