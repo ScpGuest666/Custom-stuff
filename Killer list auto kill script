@@ -1,0 +1,318 @@
+-- Services
+local PlayerService = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+-- Local Player
+local player = PlayerService.LocalPlayer
+if not player then
+    player = PlayerService.PlayerAdded:Wait()
+end
+player:WaitForChild("PlayerGui")
+
+-- GUI Setup
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = player.PlayerGui
+screenGui.ResetOnSpawn = false
+screenGui.Name = "VehicleFlyGui"
+
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+frame.Size = UDim2.new(0, 220, 0, 280)
+frame.Position = UDim2.new(0.3, 0, 0.5, -140)
+frame.Active = true
+frame.Draggable = true
+
+local onButton = Instance.new("TextButton")
+onButton.Parent = frame
+onButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+onButton.Size = UDim2.new(0, 80, 0, 30)
+onButton.Position = UDim2.new(0, 10, 0, 20)
+onButton.Text = "On"
+onButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+onButton.TextScaled = true
+
+local offButton = Instance.new("TextButton")
+offButton.Parent = frame
+offButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+offButton.Size = UDim2.new(0, 80, 0, 30)
+offButton.Position = UDim2.new(0, 120, 0, 20)
+offButton.Text = "Off"
+offButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+offButton.TextScaled = true
+
+local destroyButton = Instance.new("TextButton")
+destroyButton.Parent = frame
+destroyButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+destroyButton.Size = UDim2.new(0, 180, 0, 30)
+destroyButton.Position = UDim2.new(0, 20, 0, 60)
+destroyButton.Text = "Destroy"
+destroyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+destroyButton.TextScaled = true
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = frame
+statusLabel.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+statusLabel.Size = UDim2.new(0, 220, 0, 30)
+statusLabel.Position = UDim2.new(0, 0, 0, -30)
+statusLabel.Text = "Status: Offline"
+statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+statusLabel.TextScaled = true
+
+local killLogFrame = Instance.new("ScrollingFrame")
+killLogFrame.Parent = frame
+killLogFrame.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+killLogFrame.Size = UDim2.new(0, 200, 0, 150)
+killLogFrame.Position = UDim2.new(0, 10, 0, 100)
+killLogFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+killLogFrame.ScrollBarThickness = 8
+killLogFrame.ScrollBarImageTransparency = 0
+killLogFrame.Name = "KillLogScrollFrame"
+
+local uiListLayout = Instance.new("UIListLayout")
+uiListLayout.Parent = killLogFrame
+uiListLayout.Padding = UDim.new(0, 5)
+uiListLayout.FillDirection = Enum.FillDirection.Vertical
+uiListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+uiListLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+uiListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+-- Kill Log Data
+local killLogEntries = {}
+local nextLayoutOrder = 0
+
+local BUTTON_WIDTH = 25
+local BUTTON_HEIGHT = 25
+local BUTTON_PADDING = 2
+
+local ORIGINAL_LABEL_COLOR = Color3.fromRGB(80, 80, 80)
+local HIGHLIGHT_LABEL_COLOR = Color3.fromRGB(50, 200, 50) -- Green for connections
+
+-- Global Variables for Killing System
+local systemActive = false
+local isLocalPlayerDead = false -- *** NEW: State to halt functions, not turn them off
+local equippedSword = nil
+local autoSwingConnection = nil
+local proximityConnection = nil
+local teleportedPlayers = {}
+local activeConnections = {}
+
+local TELEPORT_RANGE = 20
+local TELEPORT_OFFSET = CFrame.new(2, 0, -3)
+local TELEPORT_DURATION = 1
+
+-- Forward declare functions
+local removeKillerEntry
+local updateEspForKiller
+local startTeleportCycle
+local stopTeleportCycle
+local checkProximity
+local equipSword
+local unequipSword
+local startAutoSwing
+local stopAutoSwing
+local toggleSystem
+local addKillLogEntry
+
+-- (ESP and GUI functions remain the same, omitted for brevity but are included in the final script)
+local function createEspForKiller(killerPlayer, espColor) local character = killerPlayer.Character if not character then return end local humanoidRootPart = character:FindFirstChild("HumanoidRootPart") if not humanoidRootPart then return end local billboardGui = Instance.new("BillboardGui") billboardGui.Adornee = humanoidRootPart billboardGui.Size = UDim2.new(30, 0, 10, 0) billboardGui.AlwaysOnTop = true billboardGui.StudsOffset = Vector3.new(0, 6, 0) billboardGui.MaxDistance = 500 billboardGui.Parent = player.PlayerGui local espLabel = Instance.new("TextLabel") espLabel.Parent = billboardGui espLabel.Size = UDim2.new(1, 0, 1, 0) espLabel.BackgroundTransparency = 1 espLabel.TextColor3 = espColor or Color3.fromRGB(255, 255, 255) espLabel.TextScaled = true espLabel.TextWrapped = true espLabel.Font = Enum.Font.SourceSansBold espLabel.TextStrokeTransparency = 0 espLabel.TextXAlignment = Enum.TextXAlignment.Center espLabel.TextYAlignment = Enum.TextYAlignment.Center return billboardGui, espLabel end
+updateEspForKiller = function(killerUserId) local data = killLogEntries[killerUserId] if not data or not data.espGui or not data.espLabel or not data.killerPlayer then return end local killerPlayer = data.killerPlayer local character = killerPlayer.Character if not character then data.espGui.Enabled = false return end local humanoidRootPart = character:FindFirstChild("HumanoidRootPart") local humanoid = character:FindFirstChildOfClass("Humanoid") if not humanoidRootPart or not humanoid then data.espGui.Enabled = false return end data.espGui.Adornee = humanoidRootPart data.espGui.Enabled = true local localCharacter = player.Character local distance = "N/A" if localCharacter and localCharacter:FindFirstChild("HumanoidRootPart") then distance = math.floor((localCharacter.HumanoidRootPart.Position - humanoidRootPart.Position).Magnitude) end local hp = math.floor(humanoid.Health) local maxHp = math.floor(humanoid.MaxHealth) data.espLabel.Text = string.format("%s (@%s)\nStuds: %s\nHP: %d/%d", killerPlayer.DisplayName, killerPlayer.Name, tostring(distance), hp, maxHp) if data.label.BackgroundColor3 == HIGHLIGHT_LABEL_COLOR then data.espLabel.TextColor3 = HIGHLIGHT_LABEL_COLOR else data.espLabel.TextColor3 = Color3.fromRGB(255, 255, 255) end end
+RunService.RenderStepped:Connect(function() for userId, _ in pairs(killLogEntries) do updateEspForKiller(userId) end end)
+
+-- *** NEW: Function to monitor a connection's death ***
+local function monitorConnectionDeath(connectionPlayer, data)
+    local function onDied(humanoid)
+        -- Only log the killer if the player is currently marked as a connection
+        if data.label.BackgroundColor3 == HIGHLIGHT_LABEL_COLOR then
+            local killerTag = humanoid:FindFirstChild("creator") or humanoid.Parent:FindFirstChild("creator")
+            if killerTag and killerTag.Value and killerTag.Value:IsA("Player") and killerTag.Value ~= player then
+                -- Add the person who killed our connection to the list
+                addKillLogEntry(killerTag.Value)
+            end
+        end
+    end
+
+    local function setupListener(character)
+        if data.diedConnection then data.diedConnection:Disconnect() end
+        local humanoid = character:WaitForChild("Humanoid", 2)
+        if humanoid then
+            data.diedConnection = humanoid.Died:Connect(function() onDied(humanoid) end)
+        end
+    end
+
+    if connectionPlayer.Character then
+        setupListener(connectionPlayer.Character)
+    end
+    if data.charAddedConnection then data.charAddedConnection:Disconnect() end
+    data.charAddedConnection = connectionPlayer.CharacterAdded:Connect(setupListener)
+end
+
+addKillLogEntry = function(killerPlayer)
+    if not killerPlayer or not killerPlayer:IsA("Player") then return end
+    local killerUserId = killerPlayer.UserId
+    local killerName = killerPlayer.Name
+    local displayName = killerPlayer.DisplayName
+    if killLogEntries[killerUserId] then
+        local data = killLogEntries[killerUserId]
+        data.count += 1
+        local newText = ("Killed by: %s (@%s) (x%d)"):format(displayName, killerName, data.count)
+        data.label.Text = newText
+        data.innerScroll.CanvasSize = UDim2.new(0, data.label.TextBounds.X + 10, 0, 0)
+        data.label.Size = UDim2.new(0, data.label.TextBounds.X + 10, 1, 0)
+        updateEspForKiller(killerUserId)
+    else
+        local entryHolder = Instance.new("Frame") entryHolder.Parent = killLogFrame entryHolder.Size = UDim2.new(1, 0, 0, BUTTON_HEIGHT) entryHolder.BackgroundTransparency = 1 entryHolder.Name = "EntryHolder_" .. killerName entryHolder.LayoutOrder = nextLayoutOrder nextLayoutOrder += 1
+        local horizontalLayout = Instance.new("UIListLayout") horizontalLayout.Parent = entryHolder horizontalLayout.FillDirection = Enum.FillDirection.Horizontal horizontalLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left horizontalLayout.VerticalAlignment = Enum.VerticalAlignment.Center horizontalLayout.Padding = UDim.new(0, BUTTON_PADDING)
+        local minusButton = Instance.new("TextButton") minusButton.Parent = entryHolder minusButton.BackgroundColor3 = Color3.fromRGB(150, 50, 50) minusButton.Size = UDim2.new(0, BUTTON_WIDTH, 0, BUTTON_HEIGHT) minusButton.Text = "-" minusButton.TextColor3 = Color3.fromRGB(255, 255, 255) minusButton.TextScaled = true minusButton.MouseButton1Click:Connect(function() removeKillerEntry(killerUserId) end)
+        local plusButton = Instance.new("TextButton") plusButton.Parent = entryHolder plusButton.BackgroundColor3 = Color3.fromRGB(50, 150, 50) plusButton.Size = UDim2.new(0, BUTTON_WIDTH, 0, BUTTON_HEIGHT) plusButton.Text = "+" plusButton.TextColor3 = Color3.fromRGB(255, 255, 255) plusButton.TextScaled = true
+        local innerScroll = Instance.new("ScrollingFrame") innerScroll.Parent = entryHolder innerScroll.Size = UDim2.new(1, -(BUTTON_WIDTH * 2 + BUTTON_PADDING * 2), 1, 0) innerScroll.CanvasSize = UDim2.new(0, 0, 0, 0) innerScroll.ScrollBarThickness = 6 innerScroll.ScrollingDirection = Enum.ScrollingDirection.X innerScroll.VerticalScrollBarInset = Enum.ScrollBarInset.None innerScroll.HorizontalScrollBarInset = Enum.ScrollBarInset.Always innerScroll.BackgroundTransparency = 1
+        local entryLabel = Instance.new("TextLabel") entryLabel.Parent = innerScroll entryLabel.Size = UDim2.new(0, 0, 1, 0) entryLabel.Text = ("Killed by: %s (@%s) (x1)"):format(displayName, killerName) entryLabel.TextColor3 = Color3.fromRGB(255, 255, 255) entryLabel.TextScaled = false entryLabel.TextSize = 16 entryLabel.TextXAlignment = Enum.TextXAlignment.Left entryLabel.TextWrapped = false entryLabel.ClipsDescendants = false
+        if player:IsFriendsWith(killerUserId) then entryLabel.BackgroundColor3 = HIGHLIGHT_LABEL_COLOR else entryLabel.BackgroundColor3 = ORIGINAL_LABEL_COLOR end
+        entryLabel.Size = UDim2.new(0, 1000, 1, 0) innerScroll.CanvasSize = UDim2.new(0, entryLabel.TextBounds.X + 10, 0, 0) entryLabel.Size = UDim2.new(0, entryLabel.TextBounds.X + 10, 1, 0)
+        plusButton.MouseButton1Click:Connect(function() if entryLabel.BackgroundColor3 == ORIGINAL_LABEL_COLOR then entryLabel.BackgroundColor3 = HIGHLIGHT_LABEL_COLOR else entryLabel.BackgroundColor3 = ORIGINAL_LABEL_COLOR end updateEspForKiller(killerUserId) end)
+        local espGui, espLabel = createEspForKiller(killerPlayer, Color3.fromRGB(255, 255, 255)) if espGui then espGui.Enabled = true end
+        
+        local data = {
+            count = 1, label = entryLabel, innerScroll = innerScroll, plusButton = plusButton,
+            minusButton = minusButton, entryHolder = entryHolder, espGui = espGui,
+            espLabel = espLabel, killerPlayer = killerPlayer,
+            charAddedConnection = nil, diedConnection = nil -- For monitoring
+        }
+        killLogEntries[killerUserId] = data
+        
+        -- *** NEW: Start monitoring this player in case they become a connection ***
+        monitorConnectionDeath(killerPlayer, data)
+    end
+end
+
+removeKillerEntry = function(killerUserId)
+    if killLogEntries[killerUserId] then
+        local data = killLogEntries[killerUserId]
+        if data.charAddedConnection then data.charAddedConnection:Disconnect() end
+        if data.diedConnection then data.diedConnection:Disconnect() end
+        data.entryHolder:Destroy()
+        if data.espGui then data.espGui:Destroy() end
+        killLogEntries[killerUserId] = nil
+        local targetPlayer = PlayerService:GetPlayerByUserId(killerUserId)
+        if targetPlayer then stopTeleportCycle(targetPlayer) end
+    end
+end
+
+PlayerService.PlayerRemoving:Connect(function(leavingPlayer) removeKillerEntry(leavingPlayer.UserId) end)
+uiListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() killLogFrame.CanvasSize = UDim2.new(0, 0, 0, uiListLayout.AbsoluteContentSize.Y) killLogFrame.CanvasPosition = Vector2.new(0, killLogFrame.CanvasSize.Y.Offset) end)
+local function onCharacterDied(humanoid) local killer = humanoid:FindFirstChild("creator") or humanoid.Parent:FindFirstChild("creator") if killer and killer.Value and killer.Value:IsA("Player") then addKillLogEntry(killer.Value) end end
+local function connectToHumanoidDied(character) local humanoid = character:WaitForChild("Humanoid", 5) if humanoid then humanoid.Died:Connect(function() onCharacterDied(humanoid) end) end end
+
+-- (Killing System Functions like findFirstAvailableTool, equipSword, etc. remain the same)
+local function findFirstAvailableTool(character) local backpack = player:FindFirstChild("Backpack") if backpack then for _, tool in ipairs(backpack:GetChildren()) do if tool:IsA("Tool") then return tool end end end if character then for _, tool in ipairs(character:GetChildren()) do if tool:IsA("Tool") then return tool end end end return nil end
+startAutoSwing = function(sword) if autoSwingConnection then autoSwingConnection:Disconnect() end if sword then autoSwingConnection = RunService.Heartbeat:Connect(function() sword:Activate() end) end end
+stopAutoSwing = function() if autoSwingConnection then autoSwingConnection:Disconnect(); autoSwingConnection = nil end end
+equipSword = function(character) if not character then return end local backpack = player:FindFirstChild("Backpack") if not backpack then return end if equippedSword then if equippedSword.Parent == character then if not autoSwingConnection then startAutoSwing(equippedSword) end return elseif equippedSword.Parent == backpack then equippedSword.Parent = character; startAutoSwing(equippedSword) return else equippedSword = nil; stopAutoSwing() end end local swordToEquip = findFirstAvailableTool(character) if swordToEquip then if swordToEquip.Parent ~= character then swordToEquip.Parent = character end equippedSword = swordToEquip; startAutoSwing(equippedSword) else equippedSword = nil; stopAutoSwing() end end
+unequipSword = function(character) if not character then return end local backpack = player:FindFirstChild("Backpack") if not backpack then return end if equippedSword then if equippedSword.Parent == character then stopAutoSwing(); equippedSword.Parent = backpack elseif equippedSword.Parent == backpack then stopAutoSwing() else stopAutoSwing(); equippedSword = nil end else stopAutoSwing() end end
+local function getDistance(p1, p2) local char1, char2 = p1.Character, p2.Character if not char1 or not char2 then return math.huge end local hrp1, hrp2 = char1:FindFirstChild("HumanoidRootPart"), char2:FindFirstChild("HumanoidRootPart") if not hrp1 or not hrp2 then return math.huge end return (hrp1.Position - hrp2.Position).Magnitude end
+local function teleportPlayerToLocal(targetPlayer) local character, targetCharacter = player.Character, targetPlayer.Character if not character or not targetCharacter then return end local localRoot, targetRoot = character:FindFirstChild("HumanoidRootPart"), targetCharacter:FindFirstChild("HumanoidRootPart") if not localRoot or not targetRoot then return end local targetPos = (localRoot.CFrame * TELEPORT_OFFSET).Position local lookAt = localRoot.Position local desiredCFrame = CFrame.lookAt(targetPos, lookAt) * CFrame.Angles(0, math.pi, 0) if (targetRoot.Position - targetPos).Magnitude > 0.02 then targetRoot.CFrame = desiredCFrame end end
+local function returnPlayerToOriginal(targetPlayer) local playerData = teleportedPlayers[targetPlayer] if playerData and playerData.originalCFrame then local targetCharacter = targetPlayer.Character if targetCharacter then local targetRoot = targetCharacter:FindFirstChild("HumanoidRootPart") if targetRoot then targetRoot.CFrame = playerData.originalCFrame end end end end
+stopTeleportCycle = function(targetPlayer) local playerData = teleportedPlayers[targetPlayer] if playerData then if playerData.teleportTimer then task.cancel(playerData.teleportTimer) end returnPlayerToOriginal(targetPlayer) teleportedPlayers[targetPlayer] = nil end end
+startTeleportCycle = function(targetPlayer) if not systemActive or isLocalPlayerDead then return end if teleportedPlayers[targetPlayer] and teleportedPlayers[targetPlayer].isTeleporting then return end local targetCharacter = targetPlayer.Character if not targetCharacter then return end local targetRoot = targetCharacter:FindFirstChild("HumanoidRootPart") if not targetRoot then return end if not teleportedPlayers[targetPlayer] then teleportedPlayers[targetPlayer] = { originalCFrame = targetRoot.CFrame, teleportTimer = nil, isTeleporting = false } else teleportedPlayers[targetPlayer].originalCFrame = targetRoot.CFrame end local playerData = teleportedPlayers[targetPlayer] playerData.isTeleporting = true local function cycleStep() if not systemActive or isLocalPlayerDead or not playerData.isTeleporting or not targetPlayer.Character then stopTeleportCycle(targetPlayer) return end teleportPlayerToLocal(targetPlayer) task.wait(TELEPORT_DURATION) if not systemActive or isLocalPlayerDead or not playerData.isTeleporting or not targetPlayer.Character then stopTeleportCycle(targetPlayer) return end returnPlayerToOriginal(targetPlayer) local distance = getDistance(player, targetPlayer) if distance <= TELEPORT_RANGE then playerData.teleportTimer = task.delay(0.1, cycleStep) else stopTeleportCycle(targetPlayer) end end playerData.teleportTimer = task.delay(0.1, cycleStep) end
+
+checkProximity = function()
+    -- *** MODIFIED: Halt if system is off OR if local player is dead ***
+    if not systemActive or isLocalPlayerDead then return end
+
+    local character = player.Character
+    if not character then return end
+
+    local playersInRange = false
+    local currentPlayersInRange = {}
+    for _, otherPlayer in pairs(PlayerService:GetPlayers()) do
+        if otherPlayer ~= player and otherPlayer.Character then
+            -- *** NEW: Strict health check to avoid teleporting dead players ***
+            local humanoid = otherPlayer.Character:FindFirstChildOfClass("Humanoid")
+            if not humanoid or humanoid.Health <= 0 then
+                stopTeleportCycle(otherPlayer) -- Ensure we stop trying to teleport them
+                continue -- Skip to the next player
+            end
+
+            local data = killLogEntries[otherPlayer.UserId]
+            if data and data.label.BackgroundColor3 ~= HIGHLIGHT_LABEL_COLOR then
+                local distance = getDistance(player, otherPlayer)
+                if distance <= TELEPORT_RANGE then
+                    playersInRange = true
+                    table.insert(currentPlayersInRange, otherPlayer)
+                    if not teleportedPlayers[otherPlayer] or not teleportedPlayers[otherPlayer].isTeleporting then
+                        startTeleportCycle(otherPlayer)
+                    end
+                end
+            else
+                stopTeleportCycle(otherPlayer)
+            end
+        end
+    end
+    if playersInRange then equipSword(character) else unequipSword(character) end
+    for p, _ in pairs(teleportedPlayers) do
+        local found = false
+        for _, inRangeP in ipairs(currentPlayersInRange) do if p == inRangeP then found = true; break end end
+        if not found then stopTeleportCycle(p) end
+    end
+end
+
+toggleSystem = function(activate)
+    systemActive = activate
+    if systemActive then
+        statusLabel.Text = "Status: Online"
+        statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+        onButton.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+        offButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+        if proximityConnection then proximityConnection:Disconnect() end
+        proximityConnection = RunService.Heartbeat:Connect(checkProximity)
+        table.insert(activeConnections, proximityConnection)
+        checkProximity()
+    else
+        statusLabel.Text = "Status: Offline"
+        statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+        onButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+        offButton.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
+        if proximityConnection then proximityConnection:Disconnect(); proximityConnection = nil end
+        if player.Character then unequipSword(player.Character) end
+        stopAutoSwing()
+        for p, _ in pairs(teleportedPlayers) do stopTeleportCycle(p) end
+    end
+end
+
+onButton.MouseButton1Click:Connect(function() toggleSystem(true) end)
+offButton.MouseButton1Click:Connect(function() toggleSystem(false) end)
+destroyButton.MouseButton1Click:Connect(function() for _, data in pairs(killLogEntries) do if data.espGui then data.espGui:Destroy() end end toggleSystem(false) for _, connection in pairs(activeConnections) do if connection and connection.Disconnect then pcall(function() connection:Disconnect() end) end end activeConnections = {} screenGui:Destroy() end)
+
+-- *** MODIFIED: Halts functions on death instead of turning system off ***
+local function onLocalPlayerDied()
+    isLocalPlayerDead = true
+    if player.Character then unequipSword(player.Character) end
+    stopAutoSwing()
+    for p, _ in pairs(teleportedPlayers) do stopTeleportCycle(p) end
+end
+
+player.CharacterAdded:Connect(function(character)
+    isLocalPlayerDead = false -- *** NEW: Resume functions on respawn
+    connectToHumanoidDied(character)
+    local humanoid = character:WaitForChild("Humanoid", 5)
+    if humanoid then
+        humanoid.Died:Connect(onLocalPlayerDied)
+    end
+end)
+
+if player.Character then
+    isLocalPlayerDead = false
+    connectToHumanoidDied(player.Character)
+    local humanoid = player.Character:FindFirstChild("Humanoid")
+    if humanoid then humanoid.Died:Connect(onLocalPlayerDied) end
+end
+
+local function onOtherPlayerRemoving(otherPlayer) if teleportedPlayers[otherPlayer] then stopTeleportCycle(otherPlayer) end removeKillerEntry(otherPlayer.UserId) end
+local function onOtherPlayerCharacterRemoving(otherPlayerCharacter) local otherPlayer = PlayerService:GetPlayerFromCharacter(otherPlayerCharacter) if otherPlayer and teleportedPlayers[otherPlayer] then stopTeleportCycle(otherPlayer) end end
+local playerRemovingConn = PlayerService.PlayerRemoving:Connect(onOtherPlayerRemoving) table.insert(activeConnections, playerRemovingConn)
+for _, p in pairs(PlayerService:GetPlayers()) do if p ~= player then local charRemovingConn = p.CharacterRemoving:Connect(function(char) onOtherPlayerCharacterRemoving(char) end) table.insert(activeConnections, charRemovingConn) end end
+local playerAddedConn = PlayerService.PlayerAdded:Connect(function(newPlayer) if newPlayer ~= player then local charRemovingConn = newPlayer.CharacterRemoving:Connect(function(char) onOtherPlayerCharacterRemoving(char) end) table.insert(activeConnections, charRemovingConn) end end) table.insert(activeConnections, playerAddedConn)
+
+onButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+offButton.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
