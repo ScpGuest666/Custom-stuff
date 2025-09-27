@@ -23,6 +23,7 @@ local LeftButton = Instance.new("TextButton")
 local RightButton = Instance.new("TextButton")
 local AntiLockButton = Instance.new("TextButton")
 local PitchButton = Instance.new("TextButton")
+local SmoothButton = Instance.new("TextButton") -- NEW INSTANCE
 
 -- Left Side Movement GUI
 local LeftSideGui = Instance.new("ScreenGui")
@@ -47,8 +48,11 @@ local unseatConnection = nil
 local flightWithoutFlyEnabled = false
 local isPitchOn = false
 
--- NEW GLOBAL VARIABLE for temporary yaw lock
+-- NEW GLOBAL VARIABLES
 local isYawLocked = false
+local isSmoothModeOn = false
+local smoothingFactor = 0.15 -- How quickly the velocity interpolates (0.15 is a good starting point)
+local currentVelocityVector = Vector3.new(0, 0, 0) -- Tracks the actual smoothed velocity
 
 -- Track Active Connections
 local activeConnections = {}
@@ -232,6 +236,17 @@ local function initializeGUI()
     ForwardButton.TextColor3 = Color3.fromRGB(255, 255, 255)
     ForwardButton.TextScaled = true
     originalButtonPositions[ForwardButton] = ForwardButton.Position
+
+    -- SmoothButton properties
+    SmoothButton.Parent = ControllerFrame
+    SmoothButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    SmoothButton.Size = UDim2.new(0, 50, 0, 30)
+    SmoothButton.Position = UDim2.new(0.84, -25, 0, 20) 
+    SmoothButton.Font = Enum.Font.GothamBold
+    SmoothButton.Text = "Smooth"
+    SmoothButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    SmoothButton.TextScaled = true
+    originalButtonPositions[SmoothButton] = SmoothButton.Position
 
     -- BackwardButton properties
     BackwardButton.Parent = ControllerFrame
@@ -426,8 +441,9 @@ local function DisableFlight()
         GyroHandler:Destroy()
         GyroHandler = nil
     end
-    -- Reset yaw lock state
+    -- Reset state variables
     isYawLocked = false
+    currentVelocityVector = Vector3.new(0, 0, 0)
 end
 
 local function resetControllerOnSpawn()
@@ -577,9 +593,21 @@ local function setupButtonConnections()
             end
         end
     end))
+
+    -- Smooth Button Logic
+    table.insert(activeConnections, SmoothButton.MouseButton1Click:Connect(function()
+        isSmoothModeOn = not isSmoothModeOn
+        if isSmoothModeOn then
+            SmoothButton.Text = "Smooth On"
+        else
+            SmoothButton.Text = "Smooth"
+            -- When turning off smooth mode, reset current velocity to prevent sudden jumps
+            currentVelocityVector = Vector3.new(0, 0, 0)
+        end
+    end))
 end
 
-local function handleInput()
+local function handleInput(dt)
     local character = player.Character
     if not character then
         return
@@ -604,83 +632,85 @@ local function handleInput()
         end
         
         local speed = tonumber(SpeedTextBox.Text) or 1
-        local velocity = Vector3.new()
+        local targetVelocity = Vector3.new()
         
         local movementCFrame
         
         -- Determine the CFrame used for calculating movement vectors
         if isAntiLockOn and humanoid.SeatPart then
-            -- Use the vehicle's orientation for movement vectors
             movementCFrame = humanoid.SeatPart.CFrame
         elseif isPitchOn and gyro then
-            -- Use the full gyro CFrame (which follows the camera)
             movementCFrame = gyro.CFrame
         elseif gyro then
-            -- Use the flattened gyro CFrame (which follows the camera yaw)
             local lookVector = gyro.CFrame.LookVector
             movementCFrame = CFrame.new(rootPart.Position, rootPart.Position + Vector3.new(lookVector.X, 0, lookVector.Z))
         else
             movementCFrame = rootPart.CFrame
         end
         
-        -- Calculate movement based on button inputs
+        -- Calculate Target Velocity based on button inputs (excluding rotation)
         for _, direction in ipairs(movementDirection) do
             if direction == "forward" then
-                velocity += movementCFrame.LookVector * forwardVelocity
+                targetVelocity += movementCFrame.LookVector * forwardVelocity
             elseif direction == "backward" then
-                velocity += -movementCFrame.LookVector * forwardVelocity
+                targetVelocity += -movementCFrame.LookVector * forwardVelocity
             elseif direction == "left" then
-                velocity += movementCFrame.RightVector * -leftVelocity
+                targetVelocity += movementCFrame.RightVector * -leftVelocity
             elseif direction == "right" then
-                velocity += movementCFrame.RightVector * rightVelocity
+                targetVelocity += movementCFrame.RightVector * rightVelocity
             elseif direction == "up" then
-                velocity += Vector3.new(0, upVelocity, 0)
+                targetVelocity += Vector3.new(0, upVelocity, 0)
             elseif direction == "down" then
-                velocity += Vector3.new(0, -downVelocity, 0)
-            elseif direction == "rotateLeft" and gyro then
-                -- Rotation input is always allowed, regardless of yaw lock
-                gyro.CFrame = gyro.CFrame * CFrame.Angles(0, math.rad(-rotationSpeed), 0)
-            elseif direction == "rotateRight" and gyro then
-                gyro.CFrame = gyro.CFrame * CFrame.Angles(0, math.rad(rotationSpeed), 0)
+                targetVelocity += Vector3.new(0, -downVelocity, 0)
             end
         end
         
-        -- Handle thumbstick input (assuming it's always relative to the camera/gyro)
+        -- Handle thumbstick input
         local thumbstickDirection = Vector2.new(0, 0)
         pcall(function()
             local controlModule = require(player.PlayerScripts:WaitForChild("PlayerModule"):WaitForChild("ControlModule"))
             thumbstickDirection = controlModule:GetMoveVector()
         end)
         
-        local combinedVelocity = velocity
-        
         if thumbstickDirection.Magnitude > 0 then
-            -- Determine the CFrame for thumbstick input
             local thumbstickCFrame = movementCFrame
             
-            combinedVelocity += (
+            targetVelocity += (
                 thumbstickCFrame.RightVector * thumbstickDirection.X * forwardVelocity * 2 +
                 thumbstickCFrame.LookVector * -thumbstickDirection.Z * forwardVelocity * 2
             )
         end
         
-        if #movementDirection > 0 or thumbstickDirection.Magnitude > 0 then
-            VelocityHandler.Velocity = combinedVelocity * speed
+        -- Apply Speed Multiplier to Target Velocity
+        targetVelocity *= speed
+        
+        -- === Velocity Smoothing Logic ===
+        if isSmoothModeOn then
+            -- Smoothly interpolate current velocity towards the target velocity
+            currentVelocityVector = currentVelocityVector:Lerp(targetVelocity, smoothingFactor)
+            VelocityHandler.Velocity = currentVelocityVector
         else
-            VelocityHandler.Velocity = Vector3.new()
+            -- Instantaneous movement
+            VelocityHandler.Velocity = targetVelocity
+            -- Keep currentVelocityVector updated for smooth transition if mode is toggled
+            currentVelocityVector = targetVelocity 
         end
         
         -- === Gyro Orientation Update Logic ===
+        -- Handle rotation input separately (it should remain instantaneous)
+        for _, direction in ipairs(movementDirection) do
+            if direction == "rotateLeft" and gyro then
+                gyro.CFrame = gyro.CFrame * CFrame.Angles(0, math.rad(-rotationSpeed), 0)
+            elseif direction == "rotateRight" and gyro then
+                gyro.CFrame = gyro.CFrame * CFrame.Angles(0, math.rad(rotationSpeed), 0)
+            end
+        end
+
         if gyro then
             if isAntiLockOn and humanoid.SeatPart then
                 if isYawLocked then
                     -- During the 0.5s lock, enforce the seat's CFrame
                     gyro.CFrame = humanoid.SeatPart.CFrame
-                else
-                    -- After the lock, allow the gyro to maintain its current CFrame
-                    -- (which can be rotated by the Rotate buttons)
-                    -- We don't update it here, as the rotation buttons handle it.
-                    -- If no rotation input is given, the BodyGyro naturally holds the last set CFrame.
                 end
             elseif not isAntiLockOn then
                 local camera = workspace.CurrentCamera
@@ -699,6 +729,8 @@ local function handleInput()
         if VelocityHandler then
             VelocityHandler.Velocity = Vector3.new()
         end
+        -- Ensure velocity tracker is reset when not flying
+        currentVelocityVector = Vector3.new(0, 0, 0)
     end
 end
 
@@ -716,8 +748,9 @@ end
 -- Event Listener Setup
 local function setupEventListeners()
     setupButtonConnections()
+    -- Note: RenderStepped passes delta time (dt), but Lerp smoothing factor is usually constant.
+    -- We keep the connection simple as the smoothing factor handles the rate.
     table.insert(activeConnections, game:GetService("RunService").RenderStepped:Connect(handleInput))
-    -- Connect the backup script to Heartbeat for continuous checking
     table.insert(activeConnections, game:GetService("RunService").Heartbeat:Connect(backupButtonPositions))
 end
 
@@ -766,6 +799,7 @@ local function handleSeatLock(humanoid)
         
         -- Unlock yaw after 0.5 seconds
         task.delay(0.5, function()
+            -- Only unlock if A-L is still on and the player is still seated
             if isAntiLockOn and humanoid.SeatPart then
                 isYawLocked = false
             end
