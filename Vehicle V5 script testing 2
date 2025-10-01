@@ -61,6 +61,8 @@ local isHelicopterOn = false
 local heliMaxPitchDeg = 12
 local heliMaxRollDeg = 8
 local heliPitchSmoothing = 0.12 -- smoothing for gyro pitch/roll interpolation
+local heliTargetY = nil -- NEW: store target altitude when enabling helicopter mode
+local HELI_P_GAIN = 20 -- P-gain for altitude stabilization when not actively moving up/down
 
 -- Track Active Connections
 local activeConnections = {}
@@ -464,8 +466,11 @@ local function DisableFlight()
     -- Reset state variables
     isYawLocked = false
     currentVelocityVector = Vector3.new(0, 0, 0)
+    
+    -- Reset Helicopter state
     isHelicopterOn = false
     HelicopterButton.Text = "Heli"
+    heliTargetY = nil
 end
 
 local function resetControllerOnSpawn()
@@ -601,6 +606,7 @@ local function setupButtonConnections()
             if isHelicopterOn then
                 isHelicopterOn = false
                 HelicopterButton.Text = "Heli"
+                heliTargetY = nil -- Reset altitude target
             end
         end
     end))
@@ -635,6 +641,9 @@ local function setupButtonConnections()
     
     -- Helicopter Button Logic: can only toggle if A-L is on
     table.insert(activeConnections, HelicopterButton.MouseButton1Click:Connect(function()
+        local char = player.Character
+        local humanoid = char and char:FindFirstChild("Humanoid")
+
         if not isAntiLockOn then
             -- Reject toggle, show requirement
             HelicopterButton.Text = "Heli (A-L req)"
@@ -648,20 +657,30 @@ local function setupButtonConnections()
 
         -- Toggle helicopter
         isHelicopterOn = not isHelicopterOn
-        HelicopterButton.Text = isHelicopterOn and "Heli On" or "Heli"
         
-        -- Helicopter requires sitting. If currently flying but not seated, disable.
-        local char = player.Character
-        local humanoid = char and char:FindFirstChild("Humanoid")
-        if isHelicopterOn and humanoid and not humanoid.SeatPart then
-            -- force off until seated
-            isHelicopterOn = false
-            HelicopterButton.Text = "Heli (seat)"
-            task.delay(1.2, function()
-                if HelicopterButton and HelicopterButton.Parent then
-                    HelicopterButton.Text = "Heli"
+        if isHelicopterOn then
+            HelicopterButton.Text = "Heli On"
+            
+            -- Helicopter requires sitting. If currently flying but not seated, disable.
+            if humanoid and not humanoid.SeatPart then
+                -- force off until seated
+                isHelicopterOn = false
+                HelicopterButton.Text = "Heli (seat)"
+                task.delay(1.2, function()
+                    if HelicopterButton and HelicopterButton.Parent then
+                        HelicopterButton.Text = "Heli"
+                    end
+                end)
+            else
+                -- If successfully enabled, set initial altitude target
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                if root then
+                    heliTargetY = root.Position.Y
                 end
-            end)
+            end
+        else
+            HelicopterButton.Text = "Heli"
+            heliTargetY = nil -- Reset altitude target
         end
     end))
     
@@ -701,7 +720,10 @@ local function handleInput(dt)
             -- Use the gyro's current CFrame for movement direction when A-L is on
             movementCFrame = gyro.CFrame 
         elseif isPitchOn and gyro then
-            movementCFrame = gyro.CFrame
+            -- When Pitch is on, we use the camera/HRP orientation for movement direction
+            local camera = workspace.CurrentCamera
+            local lookVector = camera.CFrame.LookVector
+            movementCFrame = CFrame.new(rootPart.Position, rootPart.Position + lookVector)
         elseif gyro then
             local lookVector = gyro.CFrame.LookVector
             movementCFrame = CFrame.new(rootPart.Position, rootPart.Position + Vector3.new(lookVector.X, 0, lookVector.Z))
@@ -710,36 +732,111 @@ local function handleInput(dt)
         end
         
         -- Calculate Target Velocity based on button inputs (excluding rotation)
-        for _, direction in ipairs(movementDirection) do
-            if direction == "forward" then
-                targetVelocity += movementCFrame.LookVector * forwardVelocity
-            elseif direction == "backward" then
-                targetVelocity += -movementCFrame.LookVector * forwardVelocity
-            elseif direction == "left" then
-                targetVelocity += movementCFrame.RightVector * -leftVelocity
-            elseif direction == "right" then
-                targetVelocity += movementCFrame.RightVector * rightVelocity
-            elseif direction == "up" then
-                targetVelocity += Vector3.new(0, upVelocity, 0)
-            elseif direction == "down" then
-                targetVelocity += Vector3.new(0, -downVelocity, 0)
-            end
-        end
-        
-        -- Handle thumbstick input
-        local thumbstickDirection = Vector2.new(0, 0)
-        pcall(function()
-            local controlModule = require(player.PlayerScripts:WaitForChild("PlayerModule"):WaitForChild("ControlModule"))
-            thumbstickDirection = controlModule:GetMoveVector()
-        end)
-        
-        if thumbstickDirection.Magnitude > 0 then
-            local thumbstickCFrame = movementCFrame
+        if isHelicopterOn and humanoid.SeatPart then
+            -- === HELICOPTER MODE VELOCITY CALCULATION (Altitude Lock) ===
+            local moveVecHorizontal = Vector3.new()
+            local verticalCorrection = 0
             
-            targetVelocity += (
-                thumbstickCFrame.RightVector * thumbstickDirection.X * forwardVelocity * 2 +
-                thumbstickCFrame.LookVector * -thumbstickDirection.Z * forwardVelocity * 2
-            )
+            -- 1. Calculate Horizontal Movement
+            for _, direction in ipairs(movementDirection) do
+                if direction == "forward" then
+                    moveVecHorizontal += movementCFrame.LookVector * forwardVelocity
+                elseif direction == "backward" then
+                    moveVecHorizontal += -movementCFrame.LookVector * forwardVelocity
+                elseif direction == "left" then
+                    moveVecHorizontal += movementCFrame.RightVector * -leftVelocity
+                elseif direction == "right" then
+                    moveVecHorizontal += movementCFrame.RightVector * rightVelocity
+                end
+            end
+            
+            -- Handle thumbstick input (Horizontal only)
+            local thumbstickDirection = Vector2.new(0, 0)
+            pcall(function()
+                local controlModule = require(player.PlayerScripts:WaitForChild("PlayerModule"):WaitForChild("ControlModule"))
+                thumbstickDirection = controlModule:GetMoveVector()
+            end)
+            
+            if thumbstickDirection.Magnitude > 0 then
+                moveVecHorizontal += (
+                    movementCFrame.RightVector * thumbstickDirection.X * forwardVelocity * 2 +
+                    movementCFrame.LookVector * -thumbstickDirection.Z * forwardVelocity * 2
+                )
+            end
+            
+            -- 2. Vertical Movement: Override stabilization if Up/Down is pressed
+            local isMovingUp = table.find(movementDirection, "up")
+            local isMovingDown = table.find(movementDirection, "down")
+            local isVerticalInputActive = isMovingUp or isMovingDown
+
+            if not heliTargetY then
+                heliTargetY = rootPart.Position.Y
+            end
+
+            if isVerticalInputActive then
+                -- Direct ascent/descent, no stabilization resistance
+                if isMovingUp then
+                    verticalCorrection = upVelocity
+                elseif isMovingDown then
+                    verticalCorrection = -downVelocity
+                end
+                
+                -- Continuously update heliTargetY while moving manually
+                -- This ensures that when the button is released, the target is already at the new altitude.
+                heliTargetY = rootPart.Position.Y + verticalCorrection * dt
+                
+            else
+                -- Stabilization is active (neither Up nor Down is pressed)
+                
+                -- CRITICAL FIX: If the character was just moving vertically (due to manual input), 
+                -- we must snap heliTargetY to the current Y before engaging the P-controller.
+                -- We check if the previous frame's vertical velocity was significant (meaning manual input just stopped).
+                if math.abs(currentVelocityVector.Y) > 1 then
+                    heliTargetY = rootPart.Position.Y
+                end
+                
+                local currentY = rootPart.Position.Y
+                -- Use HELI_P_GAIN (20) for stabilization
+                verticalCorrection = (heliTargetY - currentY) * HELI_P_GAIN 
+            end
+            
+            -- Combine horizontal movement and vertical correction
+            targetVelocity = Vector3.new(moveVecHorizontal.X, verticalCorrection, moveVecHorizontal.Z)
+            
+        else
+            -- === STANDARD FLY MODE VELOCITY CALCULATION ===
+            
+            for _, direction in ipairs(movementDirection) do
+                if direction == "forward" then
+                    targetVelocity += movementCFrame.LookVector * forwardVelocity
+                elseif direction == "backward" then
+                    targetVelocity += -movementCFrame.LookVector * forwardVelocity
+                elseif direction == "left" then
+                    targetVelocity += movementCFrame.RightVector * -leftVelocity
+                elseif direction == "right" then
+                    targetVelocity += movementCFrame.RightVector * rightVelocity
+                elseif direction == "up" then
+                    targetVelocity += Vector3.new(0, upVelocity, 0)
+                elseif direction == "down" then
+                    targetVelocity += Vector3.new(0, -downVelocity, 0)
+                end
+            end
+            
+            -- Handle thumbstick input
+            local thumbstickDirection = Vector2.new(0, 0)
+            pcall(function()
+                local controlModule = require(player.PlayerScripts:WaitForChild("PlayerModule"):WaitForChild("ControlModule"))
+                thumbstickDirection = controlModule:GetMoveVector()
+            end)
+            
+            if thumbstickDirection.Magnitude > 0 then
+                local thumbstickCFrame = movementCFrame
+                
+                targetVelocity += (
+                    thumbstickCFrame.RightVector * thumbstickDirection.X * forwardVelocity * 2 +
+                    thumbstickCFrame.LookVector * -thumbstickDirection.Z * forwardVelocity * 2
+                )
+            end
         end
         
         -- Apply Speed Multiplier to Target Velocity
@@ -777,16 +874,24 @@ local function handleInput(dt)
                 elseif isHelicopterOn then
                     -- Helicopter mode: Smoothly interpolate pitch/roll based on input, keep current yaw
                     
-                    -- Compute inputs contribution
+                    -- Compute inputs contribution (re-calculate inputs for pitch/roll)
                     local forwardInput = 0
                     local rightInput = 0
                     
+                    -- Use movementDirection for pitch/roll input
                     for _, dir in ipairs(movementDirection) do
                         if dir == "forward" then forwardInput = forwardInput + 1 end
                         if dir == "backward" then forwardInput = forwardInput - 1 end
                         if dir == "right" then rightInput = rightInput + 1 end
                         if dir == "left" then rightInput = rightInput - 1 end
                     end
+                    
+                    -- Use thumbstick input for pitch/roll input (re-read thumbstick if needed, or use cached)
+                    local thumbstickDirection = Vector2.new(0, 0)
+                    pcall(function()
+                        local controlModule = require(player.PlayerScripts:WaitForChild("PlayerModule"):WaitForChild("ControlModule"))
+                        thumbstickDirection = controlModule:GetMoveVector()
+                    end)
                     
                     if thumbstickDirection.Magnitude > 0 then
                         forwardInput = forwardInput + (-thumbstickDirection.Z)
@@ -807,22 +912,48 @@ local function handleInput(dt)
                     gyro.CFrame = gyro.CFrame:Lerp(targetCFrame, heliPitchSmoothing)
                 else
                     -- Standard Anti-Lock Mode (A-L On, Heli Off)
-                    -- FIX: Preserve manual yaw, but enforce ZERO pitch and roll (upright stabilization).
+                    -- Preserve manual yaw, but enforce ZERO pitch and roll (upright stabilization).
                     
-                    -- 1. Get the current yaw from the gyro (which includes button input)
-                    -- We use the gyro's current look vector projected onto the horizontal plane (X, Z)
                     local flatLookVector = gyro.CFrame.LookVector * Vector3.new(1, 0, 1)
-                    
-                    -- 2. Create a CFrame that only contains the current yaw, and is perfectly upright.
                     local targetCFrame = CFrame.new(rootPart.Position, rootPart.Position + flatLookVector)
                     
                     gyro.CFrame = targetCFrame
                 end
             elseif not isAntiLockOn then
+                -- === STANDARD FLY MODE (Non-AntiLock) ===
+                
                 local camera = workspace.CurrentCamera
+                
                 if isPitchOn then
-                    -- Full camera alignment including pitch
-                    gyro.CFrame = camera.CFrame
+                    -- PITCH LOGIC: Tilt based on velocity vector relative to HRP/Camera
+                    
+                    local moveDir = currentVelocityVector -- Use smoothed velocity
+                    
+                    if moveDir.Magnitude > 1 then
+                        -- Project velocity onto the camera's local axes to determine tilt
+                        local cameraCFrame = camera.CFrame
+                        local localMove = cameraCFrame:PointToObjectSpace(cameraCFrame.Position + moveDir)
+                        
+                        -- Forward/backward pitch (X rotation) and sideways roll (Z rotation)
+                        local maxHorizontalSpeed = forwardVelocity * speed
+                        
+                        local forwardTiltRatio = math.clamp(-localMove.Z / maxHorizontalSpeed, -1, 1)
+                        local sidewaysTiltRatio = math.clamp(localMove.X / maxHorizontalSpeed, -1, 1)
+                        
+                        local forwardTilt = forwardTiltRatio * math.rad(heliMaxPitchDeg)
+                        local sidewaysTilt = sidewaysTiltRatio * math.rad(heliMaxRollDeg)
+                        
+                        -- Base orientation from camera (Yaw)
+                        local baseCFrame = CFrame.new(rootPart.Position, rootPart.Position + cameraCFrame.LookVector)
+                        
+                        -- Apply tilt
+                        gyro.CFrame = baseCFrame * CFrame.Angles(forwardTilt, 0, sidewaysTilt)
+                    else
+                        -- No movement → align perfectly with camera yaw
+                        local flatLookVector = camera.CFrame.LookVector * Vector3.new(1, 0, 1)
+                        gyro.CFrame = CFrame.new(rootPart.Position, rootPart.Position + flatLookVector)
+                    end
+                    
                 else
                     -- Horizontal alignment only (yaw)
                     local flatLookVector = camera.CFrame.LookVector * Vector3.new(1, 0, 1)
@@ -837,6 +968,7 @@ local function handleInput(dt)
         end
         -- Ensure velocity tracker is reset when not flying
         currentVelocityVector = Vector3.new(0, 0, 0)
+        heliTargetY = nil -- Ensure altitude target is cleared when flight stops
     end
 end
 
@@ -854,8 +986,7 @@ end
 -- Event Listener Setup
 local function setupEventListeners()
     setupButtonConnections()
-    -- Note: RenderStepped passes delta time (dt), but Lerp smoothing factor is usually constant.
-    -- We keep the connection simple as the smoothing factor handles the rate.
+    -- Use RenderStepped for movement and gyro updates
     table.insert(activeConnections, game:GetService("RunService").RenderStepped:Connect(handleInput))
     table.insert(activeConnections, game:GetService("RunService").Heartbeat:Connect(backupButtonPositions))
 end
@@ -880,6 +1011,10 @@ local function cleanup()
     FlyEnabled = false
     flightWithoutFlyEnabled = false
     FwFButton.Text = "FwF"
+    
+    -- Reset Helicopter state
+    isHelicopterOn = false
+    heliTargetY = nil
     
     -- Destroy ALL relevant GUIs
     if ScreenGui then
@@ -942,24 +1077,31 @@ local function initialize()
                     unseatConnection:Disconnect()
                 end
                 
-                if humanoid.SeatPart then
-                    EnableFlight()
-                    handleSeatLock(humanoid) -- Initial check if already seated
-                else
-                    seatConnection = humanoid:GetPropertyChangedSignal("SeatPart"):Connect(function()
-                        if humanoid.SeatPart then
-                            EnableFlight()
-                            handleSeatLock(humanoid) -- Handle seating event
+                local function onSeatChange()
+                    if humanoid.SeatPart then
+                        EnableFlight()
+                        handleSeatLock(humanoid) -- Handle seating event
+                        
+                        -- If Helicopter mode is active, set initial altitude
+                        if isHelicopterOn then
+                            local root = character:FindFirstChild("HumanoidRootPart")
+                            if root then
+                                heliTargetY = root.Position.Y
+                            end
                         end
-                    end)
-                end
-                
-                unseatConnection = humanoid:GetPropertyChangedSignal("SeatPart"):Connect(function()
-                    if not humanoid.SeatPart then
+                    else
                         DisableFlight()
                         isYawLocked = false -- Ensure lock is off when unseating
+                        heliTargetY = nil -- Clear altitude target
                     end
-                end)
+                end
+
+                -- Initial check
+                onSeatChange()
+                
+                -- Connect future changes
+                seatConnection = humanoid:GetPropertyChangedSignal("SeatPart"):Connect(onSeatChange)
+                unseatConnection = humanoid:GetPropertyChangedSignal("SeatPart"):Connect(onSeatChange)
             end
         else
             FlyButton.Text = "Fly"
