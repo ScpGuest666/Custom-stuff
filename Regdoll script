@@ -1,0 +1,452 @@
+-- Wait for player to load
+local PlayerService = game:GetService("Players")
+local player = PlayerService.LocalPlayer
+if not player then
+    player = PlayerService.PlayerAdded:Wait()
+end
+
+-- Wait for player GUI to be ready
+player:WaitForChild("PlayerGui")
+
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = player.PlayerGui
+screenGui.ResetOnSpawn = false
+screenGui.Name = "GuiVersion2"
+
+-- Create Frame
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+frame.Size = UDim2.new(0, 200, 0, 100) -- Adjusted size for new buttons
+frame.Position = UDim2.new(0.3, 0, 0.5, -50) -- Adjusted position
+frame.Active = true
+frame.Draggable = true
+
+-- Create Activate Button (formerly On Button)
+local activateButton = Instance.new("TextButton")
+activateButton.Parent = frame
+activateButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+activateButton.Size = UDim2.new(0, 80, 0, 30)
+activateButton.Position = UDim2.new(0, 10, 0, 20)
+activateButton.Text = "Activate"
+activateButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+activateButton.TextScaled = true
+
+-- Create Recovery Button (formerly Off Button)
+local recoveryButton = Instance.new("TextButton")
+recoveryButton.Parent = frame
+recoveryButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+recoveryButton.Size = UDim2.new(0, 80, 0, 30)
+recoveryButton.Position = UDim2.new(0, 110, 0, 20)
+recoveryButton.Text = "Recovery"
+recoveryButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+recoveryButton.TextScaled = true
+
+-- Create Destroy Button
+local destroyButton = Instance.new("TextButton")
+destroyButton.Parent = frame
+destroyButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+destroyButton.Size = UDim2.new(0, 160, 0, 30)
+destroyButton.Position = UDim2.new(0, 20, 0, 60) -- Adjusted position
+destroyButton.Text = "Destroy"
+destroyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+destroyButton.TextScaled = true
+
+-- Create Status Indicator
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = frame
+statusLabel.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+statusLabel.Size = UDim2.new(0, 200, 0, 30)
+statusLabel.Position = UDim2.new(0, 0, 0, -30)
+statusLabel.Text = "Status: Offline" -- Initial status
+statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0) -- Initial color for Offline
+statusLabel.TextScaled = true
+
+-- Global Variables
+local activeConnections = {}
+
+-- Function to set status to Online
+local function setStatusOnline()
+    statusLabel.Text = "Status: Ragdoll Active"
+    statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+end
+
+-- Function to set status to Offline
+local function setStatusOffline()
+    statusLabel.Text = "Status: Offline"
+    statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+end
+
+-- Cleanup function
+local function cleanup()
+    for _, connection in pairs(activeConnections) do
+        if connection and connection.Disconnect then
+            connection:Disconnect()
+        end
+    end
+    activeConnections = {}
+    
+    -- Clean up ragdoll state if active
+    if isragdoll and player.Character then
+        local char = player.Character
+        stopmove()
+        if started then started:Disconnect() end
+        if finished then finished:Disconnect() end
+        if spacekey then spacekey:Disconnect() end
+
+        for _, d in ipairs(char:GetDescendants()) do
+            if (d:IsA("BallSocketConstraint") and d.Name=="RagdollConstraint")
+                or (d:IsA("Attachment") and d.Name:match("RagdollAttachment")) then
+                d:Destroy()
+            end
+        end
+
+        for _, data in ipairs(motors) do
+            local m = Instance.new("Motor6D")
+            m.Name = data.Name
+            m.Part0 = data.Part0
+            m.Part1 = data.Part1
+            m.C0 = data.C0
+            m.C1 = data.C1
+            m.Parent = data.Parent
+        end
+
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            for _, st in ipairs({
+                Enum.HumanoidStateType.GettingUp, Enum.HumanoidStateType.Jumping,
+                Enum.HumanoidStateType.Freefall, Enum.HumanoidStateType.Flying,
+                Enum.HumanoidStateType.Running, Enum.HumanoidStateType.Climbing,
+                Enum.HumanoidStateType.Landed,
+                }) do
+                humanoid:SetStateEnabled(st, true)
+            end
+            humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+            humanoid.PlatformStand = false
+        end
+
+        isragdoll = false
+    end
+
+    screenGui:Destroy()
+end
+
+destroyButton.MouseButton1Click:Connect(cleanup)
+
+-- RAGDOLL SCRIPT INTEGRATION
+
+local ragspeed = 6000 -- CHANGE THIS TO YOUR PREFERRED RAGDOLL SPEED
+
+local animcon = {}
+local tool = Instance.new("Tool")
+local handle = Instance.new("Part")
+local RunService = game:GetService('RunService')
+tool.Name = "Ragdoll"
+tool.CanBeDropped = false
+tool.RequiresHandle = true
+handle.Name = "Handle"
+handle.Size = Vector3.new(1,1,1)
+handle.Transparency = 1
+handle.CanCollide = false
+handle.Parent = tool
+
+local isragdoll = false
+local movevec = Vector3.zero
+local moveforce = nil
+local started, finished, spacekey, renderc
+local motors = {}
+
+local function nomoar()
+	if player.Character then
+		local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			local animator = humanoid:FindFirstChildOfClass("Animator")
+			if animator then
+				local con = animator.AnimationPlayed:Connect(function(track)
+					local id = track.Animation.AnimationId
+					if id:match("507766388") or id:match("507766666") or track.Name:lower():match("toolnone") then
+						track:Stop()
+					end
+				end)
+				table.insert(animcon, con)
+			end
+		end
+	end
+end
+
+local function startmove(root)
+	moveforce = Instance.new("BodyForce")
+	moveforce.Name = "MoveForce"
+	moveforce.Force = Vector3.zero
+	moveforce.Parent = root
+	renderc = game:GetService("RunService").RenderStepped:Connect(function()
+		if isragdoll and moveforce and workspace.CurrentCamera then
+			local cam = workspace.CurrentCamera
+			local forward = Vector3.new(cam.CFrame.LookVector.X,0,cam.CFrame.LookVector.Z).Unit
+			local right = Vector3.new(cam.CFrame.RightVector.X,0,cam.CFrame.RightVector.Z).Unit
+			local dir = (forward * movevec.Z + right * movevec.X)
+			if dir.Magnitude > 0 then
+				dir = dir.Unit
+			end
+			moveforce.Force = dir * ragspeed
+		end
+	end)
+end
+
+local function stopmove()
+	if renderc then renderc:Disconnect() end
+	if moveforce then moveforce:Destroy() end
+	moveforce = nil
+end
+
+local function controls(char)
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if root then
+		startmove(root)
+	end
+
+	local uis = game:GetService("UserInputService")
+	started = uis.InputBegan:Connect(function(input, gpe)
+		if gpe then return end
+		if input.UserInputType == Enum.UserInputType.Keyboard then
+			if input.KeyCode == Enum.KeyCode.W then movevec = Vector3.new(movevec.X,0,1) end
+			if input.KeyCode == Enum.KeyCode.S then movevec = Vector3.new(movevec.X,0,-1) end
+			if input.KeyCode == Enum.KeyCode.A then movevec = Vector3.new(-1,0,movevec.Z) end
+			if input.KeyCode == Enum.KeyCode.D then movevec = Vector3.new(1,0,movevec.Z) end
+		end
+	end)
+
+	finished = uis.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.Keyboard then
+			if input.KeyCode == Enum.KeyCode.W or input.KeyCode == Enum.KeyCode.S then
+				movevec = Vector3.new(movevec.X,0,0)
+			elseif input.KeyCode == Enum.KeyCode.A or input.KeyCode == Enum.KeyCode.D then
+				movevec = Vector3.new(0,0,movevec.Z)
+			end
+		end
+	end)
+
+    -- Note: The spacekey connection for recovery is now handled by the Recovery button
+end
+
+local function recovery()
+    if not isragdoll or not player.Character then return end
+
+    local char = player.Character
+    stopmove()
+    if started then started:Disconnect() end
+    if finished then finished:Disconnect() end
+    if spacekey then spacekey:Disconnect() end -- Disconnect if it was somehow active
+
+    for _, d in ipairs(char:GetDescendants()) do
+        if (d:IsA("BallSocketConstraint") and d.Name=="RagdollConstraint")
+            or (d:IsA("Attachment") and d.Name:match("RagdollAttachment")) then
+            d:Destroy()
+        end
+    end
+
+    for _, data in ipairs(motors) do
+        local m = Instance.new("Motor6D")
+        m.Name = data.Name
+        m.Part0 = data.Part0
+        m.Part1 = data.Part1
+        m.C0 = data.C0
+        m.C1 = data.C1
+        m.Parent = data.Parent
+    end
+
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        for _, st in ipairs({
+            Enum.HumanoidStateType.GettingUp, Enum.HumanoidStateType.Jumping,
+            Enum.HumanoidStateType.Freefall, Enum.HumanoidStateType.Flying,
+            Enum.HumanoidStateType.Running, Enum.HumanoidStateType.Climbing,
+            Enum.HumanoidStateType.Landed,
+            }) do
+            humanoid:SetStateEnabled(st, true)
+        end
+        humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+        humanoid.PlatformStand = false
+    end
+
+    isragdoll = false
+    setStatusOffline()
+end
+
+local function ragdoll(char)
+	if isragdoll then return end
+	isragdoll = true
+	motors = {}
+
+	for _, motor in ipairs(char:GetDescendants()) do
+		if motor:IsA("Motor6D") and motor.Part0 and motor.Part1 then
+			table.insert(motors, {
+				Name = motor.Name, Parent = motor.Parent,
+				Part0 = motor.Part0, Part1 = motor.Part1,
+				C0 = motor.C0, C1 = motor.C1
+			})
+			local a0 = Instance.new("Attachment", motor.Part0)
+			a0.Name = "RagdollAttachment0"; a0.CFrame = motor.C0
+			local a1 = Instance.new("Attachment", motor.Part1)
+			a1.Name = "RagdollAttachment1"; a1.CFrame = motor.C1
+			local c = Instance.new("BallSocketConstraint", motor.Part0)
+			c.Name = "RagdollConstraint"; c.Attachment0 = a0; c.Attachment1 = a1
+			motor:Destroy()
+		end
+	end
+
+	for _, part in ipairs(char:GetChildren()) do
+		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+			part.CanCollide = true
+		end
+	end
+
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		for _, st in ipairs({
+			Enum.HumanoidStateType.GettingUp, Enum.HumanoidStateType.Jumping,
+			Enum.HumanoidStateType.Freefall, Enum.HumanoidStateType.Flying,
+			Enum.HumanoidStateType.Running, Enum.HumanoidStateType.Climbing,
+			Enum.HumanoidStateType.Landed,
+			}) do
+			humanoid:SetStateEnabled(st, false)
+		end
+		humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+		humanoid.PlatformStand = true
+	end
+
+	controls(char)
+    setStatusOnline()
+end
+
+-- PROMPT UI INTEGRATION
+
+local ragdollPrompt = Instance.new("ScreenGui")
+ragdollPrompt.Parent = player.PlayerGui
+ragdollPrompt.ResetOnSpawn = false
+ragdollPrompt.Name = "RagdollPrompt"
+
+local promptFrame = Instance.new("Frame", ragdollPrompt)
+promptFrame.Size = UDim2.new(0, 300, 0, 150)
+promptFrame.Position = UDim2.new(0.5, -150, 0.5, -75)
+promptFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+promptFrame.BorderSizePixel = 0
+promptFrame.Visible = false
+
+local promptTextLabel = Instance.new("TextLabel", promptFrame)
+promptTextLabel.Size = UDim2.new(1, 0, 0.6, 0)
+promptTextLabel.Position = UDim2.new(0, 0, 0, 0)
+promptTextLabel.Text = "THIS WILL RESET YOU. ARE YOU SURE?"
+promptTextLabel.TextColor3 = Color3.new(1, 1, 1)
+promptTextLabel.BackgroundTransparency = 1
+promptTextLabel.Font = Enum.Font.SourceSansBold
+promptTextLabel.TextScaled = true
+
+local yesButton = Instance.new("TextButton", promptFrame)
+yesButton.Size = UDim2.new(0.5, 0, 0.4, 0)
+yesButton.Position = UDim2.new(0, 0, 0.6, 0)
+yesButton.Text = "Yes"
+yesButton.BackgroundColor3 = Color3.fromRGB(70, 130, 180)
+yesButton.TextColor3 = Color3.new(1, 1, 1)
+yesButton.Font = Enum.Font.SourceSansBold
+yesButton.TextScaled = true
+
+local noButton = Instance.new("TextButton", promptFrame)
+noButton.Size = UDim2.new(0.5, 0, 0.4, 0)
+noButton.Position = UDim2.new(0.5, 0, 0.6, 0)
+noButton.Text = "No"
+noButton.BackgroundColor3 = Color3.fromRGB(150, 50, 50)
+noButton.TextColor3 = Color3.new(1, 1, 1)
+noButton.Font = Enum.Font.SourceSansBold
+noButton.TextScaled = true
+
+-- Button Functions
+
+activateButton.MouseButton1Click:Connect(function()
+    if isragdoll then
+        -- If already ragdolled, just ensure controls are active
+        if player.Character then
+            controls(player.Character)
+        end
+        setStatusOnline()
+    else
+        -- Show prompt
+        promptFrame.Visible = true
+    end
+end)
+
+recoveryButton.MouseButton1Click:Connect(recovery)
+
+yesButton.Activated:Connect(function()
+    promptFrame.Visible = false
+    if player.Character and player.Character:FindFirstChildOfClass("Humanoid") then
+        -- Reset the character to trigger the ragdoll on spawn logic
+        player.Character.Humanoid.Health = 0
+    end
+
+    -- Ensure the tool is in the backpack to be equipped on spawn
+    tool.Parent = player.Backpack
+
+    -- Notify the user (optional, based on original script)
+    game.StarterGui:SetCore("SendNotification", {
+        Title = "FE Ragdoll",
+        Icon = "rbxassetid://16142074920",
+        Text = "Ragdoll activated on next spawn.",
+        Duration = "3"
+    })
+end)
+
+noButton.Activated:Connect(function()
+    promptFrame.Visible = false
+end)
+
+-- Character Handling for Ragdoll
+
+local function onCharacterAdded(char)
+    -- Equip the tool immediately if it's in the backpack
+    if tool.Parent == player.Backpack then
+        player.Character:WaitForChild("Humanoid"):EquipTool(tool)
+    end
+end
+
+if player.Character then
+    onCharacterAdded(player.Character)
+end
+
+player.CharacterAdded:Connect(onCharacterAdded)
+
+-- Tool logic (simplified for UI integration)
+
+tool.Equipped:Connect(function()
+	nomoar()
+	if isragdoll then
+		controls(player.Character)
+	end
+end)
+
+local clicked = false
+tool.Activated:Connect(function()
+	if not clicked and not isragdoll and player.Character then
+		clicked = true
+		ragdoll(player.Character)
+		wait(0.5)
+		clicked = false
+	end
+end)
+
+tool.Unequipped:Connect(function()
+	if started then started:Disconnect() end
+	if finished then finished:Disconnect() end
+	if spacekey then spacekey:Disconnect() end
+	coroutine.wrap(function()
+		for _, c in ipairs(animcon) do c:Disconnect() end
+		animcon = {}
+	end)()
+	stopmove()
+    -- Do not set isragdoll = false here, as unequipping the tool shouldn't stop the ragdoll state
+    -- The recovery button handles stopping the ragdoll state.
+end
+
+-- Ensure the tool is parented correctly initially
+tool.Parent = player.Backpack
