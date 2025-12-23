@@ -1,0 +1,726 @@
+local HttpService = game:GetService("HttpService")
+local PlayerService = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage") -- Added ReplicatedStorage
+
+local player = PlayerService.LocalPlayer
+if not player then player = PlayerService.PlayerAdded:Wait() end
+player:WaitForChild("PlayerGui")
+
+-- ============================================================================
+-- UI SETUP
+-- ============================================================================
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = player.PlayerGui
+screenGui.ResetOnSpawn = false
+screenGui.Name = "BABFT_AutoBuilder_V3"
+
+-- Main Frame
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+frame.Size = UDim2.new(0, 220, 0, 130)
+frame.Position = UDim2.new(0.3, 0, 0.5, -65)
+frame.Active = true
+frame.Draggable = true
+frame.BorderSizePixel = 2
+frame.BorderColor3 = Color3.fromRGB(0, 0, 0)
+
+-- [+] Button
+local plusButton = Instance.new("TextButton")
+plusButton.Parent = frame
+plusButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+plusButton.BorderSizePixel = 2
+plusButton.BorderColor3 = Color3.fromRGB(0, 255, 0)
+plusButton.Size = UDim2.new(0, 30, 0, 30)
+plusButton.Position = UDim2.new(0, -35, 0, 0)
+plusButton.Text = "+"
+plusButton.TextColor3 = Color3.fromRGB(0, 255, 0)
+plusButton.TextScaled = true
+plusButton.Font = Enum.Font.GothamBold
+
+-- Second Frame (Settings)
+local secondFrame = Instance.new("Frame")
+secondFrame.Parent = screenGui
+secondFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+secondFrame.Size = UDim2.new(0, 200, 0, 260)
+secondFrame.Position = UDim2.new(0.3, 230, 0.5, -130)
+secondFrame.Visible = false
+secondFrame.Active = true
+secondFrame.Draggable = true
+secondFrame.BorderSizePixel = 2
+secondFrame.BorderColor3 = Color3.fromRGB(0, 0, 0)
+
+local secondTitle = Instance.new("TextLabel")
+secondTitle.Parent = secondFrame
+secondTitle.Size = UDim2.new(1, 0, 0, 25)
+secondTitle.BackgroundTransparency = 1
+secondTitle.Text = "  SETTINGS"
+secondTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+secondTitle.TextXAlignment = Enum.TextXAlignment.Left
+secondTitle.Font = Enum.Font.GothamBold
+secondTitle.TextSize = 14
+
+-- Settings: Block Size
+local sizeLabel = Instance.new("TextLabel")
+sizeLabel.Parent = secondFrame
+sizeLabel.Position = UDim2.new(0, 10, 0, 30)
+sizeLabel.Size = UDim2.new(0, 80, 0, 20)
+sizeLabel.BackgroundTransparency = 1
+sizeLabel.Text = "Block Size:"
+sizeLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+sizeLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local sizeInput = Instance.new("TextBox")
+sizeInput.Parent = secondFrame
+sizeInput.Position = UDim2.new(0, 90, 0, 30)
+sizeInput.Size = UDim2.new(0, 40, 0, 20)
+sizeInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+sizeInput.Text = "2"
+sizeInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+
+-- Settings: Move (Grid Snap)
+local moveLabel = Instance.new("TextLabel")
+moveLabel.Parent = secondFrame
+moveLabel.Position = UDim2.new(0, 10, 0, 55)
+moveLabel.Size = UDim2.new(0, 80, 0, 20)
+moveLabel.BackgroundTransparency = 1
+moveLabel.Text = "Move Grid:"
+moveLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+moveLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local moveInput = Instance.new("TextBox")
+moveInput.Parent = secondFrame
+moveInput.Position = UDim2.new(0, 90, 0, 55)
+moveInput.Size = UDim2.new(0, 40, 0, 20)
+moveInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+moveInput.Text = "1"
+moveInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+
+-- Settings: Show Size
+local showSizeButton = Instance.new("TextButton")
+showSizeButton.Parent = secondFrame
+showSizeButton.Position = UDim2.new(0, 10, 0, 90)
+showSizeButton.Size = UDim2.new(0, 180, 0, 30)
+showSizeButton.BackgroundColor3 = Color3.fromRGB(60, 60, 100)
+showSizeButton.Text = "Show Size / Outline"
+showSizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+showSizeButton.Font = Enum.Font.Gotham
+
+-- Settings: Rotate
+local rotateButton = Instance.new("TextButton")
+rotateButton.Parent = secondFrame
+rotateButton.Position = UDim2.new(0, 10, 0, 130)
+rotateButton.Size = UDim2.new(0, 180, 0, 30)
+rotateButton.BackgroundColor3 = Color3.fromRGB(100, 60, 60)
+rotateButton.Text = "Rotate Outline (90°)"
+rotateButton.TextColor3 = Color3.fromRGB(150, 150, 150)
+rotateButton.Font = Enum.Font.Gotham
+rotateButton.AutoButtonColor = false
+
+-- Settings: Set Position
+local posButton = Instance.new("TextButton")
+posButton.Parent = secondFrame
+posButton.Position = UDim2.new(0, 10, 0, 170)
+posButton.Size = UDim2.new(0, 180, 0, 30)
+posButton.BackgroundColor3 = Color3.fromRGB(100, 100, 60)
+posButton.Text = "Set Position: OFF"
+posButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+posButton.Font = Enum.Font.Gotham
+
+-- Settings: Build Mode Toggle
+local buildModeButton = Instance.new("TextButton")
+buildModeButton.Parent = secondFrame
+buildModeButton.Position = UDim2.new(0, 10, 0, 210)
+buildModeButton.Size = UDim2.new(0, 180, 0, 30)
+buildModeButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+buildModeButton.Text = "Mode: VISUAL ONLY"
+buildModeButton.TextColor3 = Color3.fromRGB(255, 200, 200)
+buildModeButton.Font = Enum.Font.GothamBold
+
+-- Main UI Inputs
+local textBox = Instance.new("TextBox")
+textBox.Parent = frame
+textBox.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+textBox.BorderSizePixel = 0
+textBox.Position = UDim2.new(0, 10, 0, 10)
+textBox.Size = UDim2.new(0, 200, 0, 30)
+textBox.PlaceholderText = "Paste Link or JSON..."
+textBox.Text = ""
+textBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+textBox.TextScaled = true
+textBox.ClearTextOnFocus = true 
+
+local onButton = Instance.new("TextButton")
+onButton.Parent = frame
+onButton.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
+onButton.Size = UDim2.new(0, 95, 0, 30)
+onButton.Position = UDim2.new(0, 10, 0, 50)
+onButton.Text = "Spawn"
+onButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+onButton.Font = Enum.Font.GothamBold
+onButton.TextSize = 14
+
+local offButton = Instance.new("TextButton")
+offButton.Parent = frame
+offButton.BackgroundColor3 = Color3.fromRGB(120, 0, 0)
+offButton.Size = UDim2.new(0, 95, 0, 30)
+offButton.Position = UDim2.new(0, 115, 0, 50)
+offButton.Text = "Clear"
+offButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+offButton.Font = Enum.Font.GothamBold
+offButton.TextSize = 14
+
+local destroyButton = Instance.new("TextButton")
+destroyButton.Parent = frame
+destroyButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+destroyButton.Size = UDim2.new(0, 200, 0, 25)
+destroyButton.Position = UDim2.new(0, 10, 0, 90)
+destroyButton.Text = "Destroy GUI"
+destroyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+destroyButton.Font = Enum.Font.Gotham
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = frame
+statusLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+statusLabel.Size = UDim2.new(0, 220, 0, 20)
+statusLabel.Position = UDim2.new(0, 0, 1, 0)
+statusLabel.Text = "Ready"
+statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+statusLabel.TextSize = 12
+statusLabel.Font = Enum.Font.Gotham
+
+-- ============================================================================
+-- LOGIC VARIABLES
+-- ============================================================================
+
+local imageContainer = nil 
+local previewPart = nil
+local previewSelectionBox = nil
+local rainbowConnection = nil
+
+local isSpawning = false
+local isClearing = false
+local isPreviewing = false
+local isPositioning = false 
+local isBuildMode = false 
+
+local currentRotation = 0 
+local cachedGrid = nil 
+local cachedStartPos = nil 
+local ghostPart = nil 
+local positionConnection = nil
+
+-- ============================================================================
+-- HELPER FUNCTIONS
+-- ============================================================================
+
+plusButton.MouseButton1Click:Connect(function()
+    secondFrame.Visible = not secondFrame.Visible
+end)
+
+buildModeButton.MouseButton1Click:Connect(function()
+    isBuildMode = not isBuildMode
+    if isBuildMode then
+        buildModeButton.Text = "Mode: AUTO-BUILD (Equipped)"
+        buildModeButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+        buildModeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+        statusLabel.Text = "Hold the block you want to use!"
+    else
+        buildModeButton.Text = "Mode: VISUAL ONLY"
+        buildModeButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+        buildModeButton.TextColor3 = Color3.fromRGB(255, 200, 200)
+    end
+end)
+
+sizeInput.FocusLost:Connect(function()
+    if not tonumber(sizeInput.Text) then sizeInput.Text = "2" end
+end)
+
+moveInput.FocusLost:Connect(function()
+    if not tonumber(moveInput.Text) then moveInput.Text = "1" end
+end)
+
+local function cleanJsonString(rawText)
+    local firstBrace = rawText:find("{")
+    local lastBrace = rawText:match("^.*()%}")
+    if firstBrace and lastBrace then return rawText:sub(firstBrace, lastBrace) end
+    return rawText
+end
+
+local function getSettings()
+    return tonumber(sizeInput.Text) or 2, tonumber(moveInput.Text) or 1
+end
+
+local function clearImage()
+    if isClearing then return end
+    isSpawning = false
+    
+    if previewPart then previewPart:Destroy() previewPart = nil end
+    if rainbowConnection then rainbowConnection:Disconnect() rainbowConnection = nil end
+    isPreviewing = false
+    rotateButton.TextColor3 = Color3.fromRGB(150, 150, 150)
+
+    if not imageContainer then 
+        statusLabel.Text = "Nothing to clear"
+        return 
+    end
+
+    isClearing = true
+    statusLabel.Text = "Clearing..."
+    
+    local parts = imageContainer:GetChildren()
+    local total = #parts
+    
+    if total > 500 then
+        for i, part in ipairs(parts) do
+            part:Destroy()
+            if i % 500 == 0 then
+                statusLabel.Text = "Clearing: " .. math.floor((i/total)*100) .. "%"
+                RunService.Heartbeat:Wait()
+            end
+        end
+    else
+        imageContainer:ClearAllChildren()
+    end
+
+    imageContainer:Destroy()
+    imageContainer = nil
+    isClearing = false
+    statusLabel.Text = "Cleared!"
+    statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+end
+
+local function parseToGrid(rawInput)
+    local finalJson = rawInput
+    local foundUrl = rawInput:match("https?://[%w-_%.%?%.:/%+=&]+")
+    
+    if foundUrl then
+        statusLabel.Text = "Downloading..."
+        local success, response = pcall(function() return game:HttpGet(foundUrl) end)
+        if success then 
+            if response:find("404: Not Found") then return nil, "Error: 404" end
+            finalJson = response 
+        else return nil, "Download Failed" end
+    end
+
+    local cleanedJson = cleanJsonString(finalJson)
+    local success, data = pcall(function() return HttpService:JSONDecode(cleanedJson) end)
+    if not success or not data then return nil, "Invalid JSON" end
+
+    local grid = {}
+    local minX, maxX, minY, maxY = math.huge, -math.huge, math.huge, -math.huge
+
+    local function addPixel(x, y, r, g, b, a)
+        if not grid[y] then grid[y] = {} end
+        grid[y][x] = {r, g, b, a}
+        if x < minX then minX = x end
+        if x > maxX then maxX = x end
+        if y < minY then minY = y end
+        if y > maxY then maxY = y end
+    end
+
+    if data.parts then
+        for _, p in ipairs(data.parts) do
+            local x = p.px or (p.pos and p.pos.x) or 0
+            local y = p.py or (p.pos and p.pos.z) or 0
+            addPixel(x, y, p.r, p.g, p.b, p.a)
+        end
+    elseif data.pixels then
+        for y, row in ipairs(data.pixels) do
+            for x, rgba in ipairs(row) do
+                addPixel(x-1, y-1, rgba[1], rgba[2], rgba[3], rgba[4])
+            end
+        end
+    end
+
+    return {grid = grid, minX = minX, maxX = maxX, minY = minY, maxY = maxY}, "Success"
+end
+
+-- ============================================================================
+-- POSITIONING LOGIC
+-- ============================================================================
+
+local function getMouseHitPosition()
+    local camera = workspace.CurrentCamera
+    local mouseLocation = UserInputService:GetMouseLocation()
+    local unitRay = camera:ViewportPointToRay(mouseLocation.X, mouseLocation.Y)
+    
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = {player.Character, ghostPart, previewPart, imageContainer}
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    
+    local rayResult = workspace:Raycast(unitRay.Origin, unitRay.Direction * 500, params)
+    
+    if rayResult then
+        local blockSize, moveSnap = getSettings()
+        local hitPart = rayResult.Instance
+        local hitPos = rayResult.Position
+        local normal = rayResult.Normal
+        
+        local localHit = hitPart.CFrame:PointToObjectSpace(hitPos)
+        local snappedX = math.round(localHit.X / moveSnap) * moveSnap
+        local snappedY = math.round(localHit.Y / moveSnap) * moveSnap
+        local snappedZ = math.round(localHit.Z / moveSnap) * moveSnap
+        local snappedWorldPos = hitPart.CFrame:PointToWorldSpace(Vector3.new(snappedX, snappedY, snappedZ))
+        
+        local finalPos = snappedWorldPos + (normal * (blockSize / 2))
+        return finalPos
+    end
+    return nil
+end
+
+local function updateGhost()
+    local pos = getMouseHitPosition()
+    if pos then
+        cachedStartPos = pos
+        if ghostPart then ghostPart.Position = pos end
+    end
+end
+
+posButton.MouseButton1Click:Connect(function()
+    isPositioning = not isPositioning
+    
+    if isPositioning then
+        posButton.Text = "Double Tap to Set"
+        posButton.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+        
+        local blockSize, _ = getSettings()
+        if not ghostPart then
+            ghostPart = Instance.new("Part")
+            ghostPart.Name = "GhostAnchor"
+            ghostPart.Size = Vector3.new(blockSize, blockSize, blockSize)
+            ghostPart.Color = Color3.fromRGB(0, 255, 0)
+            ghostPart.Transparency = 0.5
+            ghostPart.Material = Enum.Material.Neon
+            ghostPart.Anchored = true
+            ghostPart.CanCollide = false
+            ghostPart.Parent = workspace
+            if cachedStartPos then ghostPart.Position = cachedStartPos end
+        end
+        
+        local lastTapTime = 0
+        positionConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+            if gameProcessed then return end
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                local currTime = tick()
+                if (currTime - lastTapTime) < 0.3 then
+                    updateGhost()
+                end
+                lastTapTime = currTime
+            end
+        end)
+    else
+        posButton.Text = "Set Position: OFF (Locked)"
+        posButton.BackgroundColor3 = Color3.fromRGB(100, 100, 60)
+        if ghostPart then ghostPart:Destroy() ghostPart = nil end
+        if positionConnection then positionConnection:Disconnect() positionConnection = nil end
+    end
+end)
+
+-- ============================================================================
+-- PREVIEW & ROTATION
+-- ============================================================================
+
+local function updatePreview()
+    if not isPreviewing or not cachedGrid then return end
+    
+    local blockSize, _ = getSettings()
+    local sizeX = (cachedGrid.maxX - cachedGrid.minX + 1) * blockSize
+    local sizeZ = (cachedGrid.maxY - cachedGrid.minY + 1) * blockSize
+    
+    local relCx = (cachedGrid.minX - cachedGrid.maxX) / 2 * blockSize
+    local relCz = (cachedGrid.minY - cachedGrid.maxY) / 2 * blockSize
+    
+    local finalCx, finalCz, finalSizeX, finalSizeZ
+
+    if currentRotation == 0 then
+        finalCx, finalCz = relCx, relCz
+        finalSizeX, finalSizeZ = sizeX, sizeZ
+    elseif currentRotation == 1 then 
+        finalCx, finalCz = -relCz, relCx
+        finalSizeX, finalSizeZ = sizeZ, sizeX
+    elseif currentRotation == 2 then 
+        finalCx, finalCz = -relCx, -relCz
+        finalSizeX, finalSizeZ = sizeX, sizeZ
+    elseif currentRotation == 3 then 
+        finalCx, finalCz = relCz, -relCx
+        finalSizeX, finalSizeZ = sizeZ, sizeX
+    end
+
+    if not previewPart then
+        previewPart = Instance.new("Part")
+        previewPart.Name = "PreviewBounds"
+        previewPart.Anchored = true
+        previewPart.CanCollide = false
+        previewPart.Transparency = 1
+        previewPart.Parent = workspace
+        
+        previewSelectionBox = Instance.new("SelectionBox")
+        previewSelectionBox.Adornee = previewPart
+        previewSelectionBox.LineThickness = 0.1
+        previewSelectionBox.Parent = previewPart
+        
+        rainbowConnection = RunService.Heartbeat:Connect(function()
+            local hue = (tick() % 2) / 2
+            if previewSelectionBox then previewSelectionBox.Color3 = Color3.fromHSV(hue, 1, 1) end
+            if isPositioning and previewPart and cachedStartPos then
+                 previewPart.Position = cachedStartPos + Vector3.new(finalCx, 0, finalCz)
+            end
+        end)
+    end
+    
+    local startPos = cachedStartPos or Vector3.new(0,10,0)
+    previewPart.Size = Vector3.new(finalSizeX, blockSize, finalSizeZ)
+    previewPart.Position = startPos + Vector3.new(finalCx, 0, finalCz)
+end
+
+showSizeButton.MouseButton1Click:Connect(function()
+    if isPreviewing then
+        if previewPart then previewPart:Destroy() previewPart = nil end
+        if rainbowConnection then rainbowConnection:Disconnect() rainbowConnection = nil end
+        isPreviewing = false
+        rotateButton.TextColor3 = Color3.fromRGB(150, 150, 150)
+        statusLabel.Text = "Preview Off"
+    else
+        local data, msg = parseToGrid(textBox.Text)
+        if not data then
+            statusLabel.Text = msg
+            statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+            return
+        end
+        cachedGrid = data
+        isPreviewing = true
+        rotateButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+        statusLabel.Text = "Preview On"
+        statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+        updatePreview()
+    end
+end)
+
+rotateButton.MouseButton1Click:Connect(function()
+    if not isPreviewing then return end
+    currentRotation = (currentRotation + 1) % 4
+    statusLabel.Text = "Rotation: " .. (currentRotation * 90) .. "°"
+    updatePreview()
+end)
+
+-- ============================================================================
+-- SPAWNING LOGIC (VISUAL & BUILD)
+-- ============================================================================
+
+local function getBuildRemotes()
+    local server = ReplicatedStorage:WaitForChild("BuildABoatServer", 5)
+    if not server then return end
+
+    local building = server:WaitForChild("Building", 5)
+    if not building then return end
+
+    return building:WaitForChild("BuildBlock"),
+           building:WaitForChild("PaintBlock")
+end
+
+local function getEquippedBlockId()
+    local char = player.Character
+    if not char then return end
+
+    local tool = char:FindFirstChildOfClass("Tool")
+    if not tool then return end
+
+    local block = tool:FindFirstChild("Block")
+    if block and block:IsA("IntValue") then
+        return block.Value
+    end
+end
+
+local function placeBlock(position, color)
+    local buildRemote, paintRemote = getBuildRemotes()
+    if not buildRemote or not paintRemote then return end
+
+    local blockId = getEquippedBlockId()
+    if not blockId then
+        warn("No block selected")
+        return
+    end
+
+    -- BUILD (RemoteEvent, NOT InvokeServer)
+    buildRemote:FireServer(
+        blockId,
+        CFrame.new(position),
+        false -- collision
+    )
+
+    -- PAINT (server finds last placed block)
+    task.wait(0.05)
+
+    paintRemote:FireServer(
+        blockId,
+        color
+    )
+end
+
+local function spawnImage()
+    if isSpawning or isClearing then return end
+    
+    if not cachedGrid then
+        local data, msg = parseToGrid(textBox.Text)
+        if not data then
+            statusLabel.Text = msg
+            statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+            return
+        end
+        cachedGrid = data
+    end
+    
+    if imageContainer then 
+        isClearing = true
+        imageContainer:Destroy() 
+        isClearing = false
+    end
+    
+    isSpawning = true
+    statusLabel.Text = isBuildMode and "Building..." or "Meshing..."
+    statusLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+    task.wait()
+
+    local blockSize, _ = getSettings()
+    local startPos = cachedStartPos
+    if not startPos then
+        local char = player.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            startPos = char.HumanoidRootPart.Position - Vector3.new(0,3,0)
+        else
+            statusLabel.Text = "No Position Set!"
+            isSpawning = false
+            return
+        end
+    end
+    
+    imageContainer = Instance.new("Folder")
+    imageContainer.Name = "BABFT_Image"
+    imageContainer.Parent = game.Workspace
+
+    local grid = cachedGrid.grid
+    local minX, maxX, minY, maxY = cachedGrid.minX, cachedGrid.maxX, cachedGrid.minY, cachedGrid.maxY
+    local visited = {}
+    local partsCount = 0
+
+    for y = minY, maxY do
+        for x = minX, maxX do
+            if not isSpawning then break end
+            
+            if grid[y] and grid[y][x] and not (visited[y] and visited[y][x]) then
+                local color = grid[y][x]
+                local r, g, b, a = color[1], color[2], color[3], color[4]
+                local finalColor = Color3.fromRGB(r, g, b)
+                
+                -- Determine Width/Height
+                local width, height = 1, 1
+                
+                -- ONLY use Greedy Meshing if NOT in Build Mode
+                if not isBuildMode then
+                    -- Greedy X
+                    while (x + width <= maxX) and grid[y][x+width] and not (visited[y] and visited[y][x+width]) do
+                        local nextColor = grid[y][x+width]
+                        if nextColor[1] == r and nextColor[2] == g and nextColor[3] == b and nextColor[4] == a then
+                            width = width + 1
+                        else break end
+                    end
+                    -- Greedy Y
+                    local canExtend = true
+                    while (y + height <= maxY) and canExtend do
+                        for k = 0, width - 1 do
+                            local nextY = y + height
+                            local nextX = x + k
+                            if not grid[nextY] or not grid[nextY][nextX] or (visited[nextY] and visited[nextY][nextX]) then
+                                canExtend = false
+                                break
+                            end
+                            local nextColor = grid[nextY][nextX]
+                            if nextColor[1] ~= r or nextColor[2] ~= g or nextColor[3] ~= b or nextColor[4] ~= a then
+                                canExtend = false
+                                break
+                            end
+                        end
+                        if canExtend then height = height + 1 end
+                    end
+                end
+                
+                -- Mark Visited
+                for dy = 0, height - 1 do
+                    if not visited[y+dy] then visited[y+dy] = {} end
+                    for dx = 0, width - 1 do visited[y+dy][x+dx] = true end
+                end
+                
+                -- Calculate Position
+                local sizeX = width * blockSize
+                local sizeZ = height * blockSize
+                
+                local relCenterX = (x + (width - 1) / 2) - maxX
+                local relCenterZ = (y + (height - 1) / 2) - maxY
+                local centerX = relCenterX * blockSize
+                local centerZ = relCenterZ * blockSize
+                
+                local finalX, finalZ
+                if currentRotation == 0 then
+                    finalX, finalZ = centerX, centerZ
+                elseif currentRotation == 1 then 
+                    finalX, finalZ = -centerZ, centerX
+                    if not isBuildMode then sizeX, sizeZ = sizeZ, sizeX end -- Swap size only for visual
+                elseif currentRotation == 2 then 
+                    finalX, finalZ = -centerX, -centerZ
+                elseif currentRotation == 3 then 
+                    finalX, finalZ = centerZ, -centerX
+                    if not isBuildMode then sizeX, sizeZ = sizeZ, sizeX end
+                end
+                
+                local finalPos = startPos + Vector3.new(finalX, 0, finalZ)
+
+                if isBuildMode then
+                    -- AUTO BUILDER LOGIC
+                    if not getEquippedBlockId() then
+                        statusLabel.Text = "Equip a block!"
+                        statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+                        isSpawning = false
+                        return
+                    end
+                    
+                    placeBlock(finalPos, finalColor)
+                    task.wait(0.15) -- SLOW DOWN to prevent kick
+                else
+                    -- VISUAL SPAWNER LOGIC
+                    local part = Instance.new("Part")
+                    part.Anchored = true
+                    part.CanCollide = false
+                    part.Material = Enum.Material.SmoothPlastic
+                    part.Color = finalColor
+                    if a then part.Transparency = 1 - (a / 255) end
+                    part.Size = Vector3.new(sizeX, 0.5, sizeZ)
+                    part.Position = finalPos
+                    part.Parent = imageContainer
+                end
+                
+                partsCount = partsCount + 1
+                if partsCount % 200 == 0 then
+                    statusLabel.Text = isBuildMode and ("Building: " .. partsCount) or ("Meshing: " .. partsCount)
+                    RunService.Heartbeat:Wait()
+                end
+            end
+        end
+    end
+    
+    statusLabel.Text = "Done! Parts: " .. partsCount
+    statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+    isSpawning = false
+end
+
+onButton.MouseButton1Click:Connect(spawnImage)
+offButton.MouseButton1Click:Connect(clearImage)
+
+destroyButton.MouseButton1Click:Connect(function()
+    clearImage()
+    while isClearing do task.wait() end
+    screenGui:Destroy()
+end)
