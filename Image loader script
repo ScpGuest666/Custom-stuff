@@ -14,7 +14,7 @@ player:WaitForChild("PlayerGui")
 local screenGui = Instance.new("ScreenGui")
 screenGui.Parent = player.PlayerGui
 screenGui.ResetOnSpawn = false
-screenGui.Name = "BABFT_RainbowRGB_Loader"
+screenGui.Name = "BABFT_Snap_Optimizer"
 
 -- Main Frame
 local frame = Instance.new("Frame")
@@ -44,8 +44,8 @@ plusButton.Font = Enum.Font.GothamBold
 local secondFrame = Instance.new("Frame")
 secondFrame.Parent = screenGui
 secondFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-secondFrame.Size = UDim2.new(0, 200, 0, 360)
-secondFrame.Position = UDim2.new(0.3, 230, 0.5, -180)
+secondFrame.Size = UDim2.new(0, 200, 0, 390) -- Increased Height
+secondFrame.Position = UDim2.new(0.3, 230, 0.5, -195)
 secondFrame.Visible = false
 secondFrame.Active = true
 secondFrame.Draggable = true
@@ -147,10 +147,28 @@ tolInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
 tolInput.Text = "15"
 tolInput.TextColor3 = Color3.fromRGB(255, 255, 0)
 
--- Settings: RGB Display (NEW RAINBOW STROKE)
+-- Settings: Color Snap (NEW)
+local snapLabel = Instance.new("TextLabel")
+snapLabel.Parent = secondFrame
+snapLabel.Position = UDim2.new(0, 10, 0, 235)
+snapLabel.Size = UDim2.new(0, 140, 0, 20)
+snapLabel.BackgroundTransparency = 1
+snapLabel.Text = "Color Snap (1-50):"
+snapLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+snapLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local snapInput = Instance.new("TextBox")
+snapInput.Parent = secondFrame
+snapInput.Position = UDim2.new(0, 150, 0, 235)
+snapInput.Size = UDim2.new(0, 40, 0, 20)
+snapInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+snapInput.Text = "5" -- Default 5 to reduce noise
+snapInput.TextColor3 = Color3.fromRGB(0, 255, 255)
+
+-- Settings: RGB Display
 local rgbLabel = Instance.new("TextLabel")
 rgbLabel.Parent = secondFrame
-rgbLabel.Position = UDim2.new(0, 10, 0, 235)
+rgbLabel.Position = UDim2.new(0, 10, 0, 265)
 rgbLabel.Size = UDim2.new(0, 180, 0, 20)
 rgbLabel.BackgroundTransparency = 1
 rgbLabel.Text = "RGB: None"
@@ -158,7 +176,6 @@ rgbLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
 rgbLabel.Font = Enum.Font.GothamBold
 rgbLabel.TextSize = 14
 
--- Add Stroke for Rainbow Effect
 local rgbStroke = Instance.new("UIStroke")
 rgbStroke.Parent = rgbLabel
 rgbStroke.Thickness = 2
@@ -167,7 +184,7 @@ rgbStroke.Transparency = 0
 -- Settings: Shadows Toggle
 local shadowButton = Instance.new("TextButton")
 shadowButton.Parent = secondFrame
-shadowButton.Position = UDim2.new(0, 10, 0, 265)
+shadowButton.Position = UDim2.new(0, 10, 0, 295)
 shadowButton.Size = UDim2.new(0, 180, 0, 30)
 shadowButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
 shadowButton.Text = "Shadows: OFF"
@@ -177,7 +194,7 @@ shadowButton.Font = Enum.Font.GothamBold
 -- Settings: Manual Color Picker
 local pickColorBtn = Instance.new("TextButton")
 pickColorBtn.Parent = secondFrame
-pickColorBtn.Position = UDim2.new(0, 10, 0, 305)
+pickColorBtn.Position = UDim2.new(0, 10, 0, 335)
 pickColorBtn.Size = UDim2.new(0, 90, 0, 30)
 pickColorBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
 pickColorBtn.Text = "Pick Color"
@@ -186,7 +203,7 @@ pickColorBtn.Font = Enum.Font.GothamBold
 
 local showAllBtn = Instance.new("TextButton")
 showAllBtn.Parent = secondFrame
-showAllBtn.Position = UDim2.new(0, 110, 0, 305)
+showAllBtn.Position = UDim2.new(0, 110, 0, 335)
 showAllBtn.Size = UDim2.new(0, 80, 0, 30)
 showAllBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 showAllBtn.Text = "Show All"
@@ -272,23 +289,11 @@ local pickerConnection = nil
 -- ============================================================================
 
 RunService.RenderStepped:Connect(function()
-    local hue = (tick() % 3) / 3 -- 3 second cycle
+    local hue = (tick() % 3) / 3 
     local rainbowColor = Color3.fromHSV(hue, 1, 1)
     
-    -- Animate RGB Label Border
-    if rgbStroke then
-        rgbStroke.Color = rainbowColor
-    end
-    
-    -- Animate Preview Box
-    if previewSelectionBox then
-        previewSelectionBox.Color3 = rainbowColor
-    end
-    
-    -- Update Ghost Position if active
-    if isPositioning and ghostPart and cachedStartPos then
-        -- Logic handled in InputBegan, but visual updates can go here if needed
-    end
+    if rgbStroke then rgbStroke.Color = rainbowColor end
+    if previewSelectionBox then previewSelectionBox.Color3 = rainbowColor end
 end)
 
 -- ============================================================================
@@ -324,6 +329,10 @@ tolInput.FocusLost:Connect(function()
     if not tonumber(tolInput.Text) then tolInput.Text = "15" end
 end)
 
+snapInput.FocusLost:Connect(function()
+    if not tonumber(snapInput.Text) then snapInput.Text = "5" end
+end)
+
 local function cleanJsonString(rawText)
     local firstBrace = rawText:find("{")
     local lastBrace = rawText:match("^.*()%}")
@@ -339,18 +348,21 @@ local function getTolerance()
     return tonumber(tolInput.Text) or 15
 end
 
+local function getSnap()
+    return tonumber(snapInput.Text) or 5
+end
+
+-- Snap a single color value (0-255)
+local function snapValue(val, snap)
+    if snap <= 1 then return val end
+    return math.clamp(math.round(val / snap) * snap, 0, 255)
+end
+
 local function areColor3sSimilar(c1, c2, tolerance)
-    if tolerance == 0 then
-        return c1 == c2
-    end
-    
+    if tolerance == 0 then return c1 == c2 end
     local r1, g1, b1 = c1.R * 255, c1.G * 255, c1.B * 255
     local r2, g2, b2 = c2.R * 255, c2.G * 255, c2.B * 255
-    
-    local rDiff = r1 - r2
-    local gDiff = g1 - g2
-    local bDiff = b1 - b2
-    
+    local rDiff, gDiff, bDiff = r1 - r2, g1 - g2, b1 - b2
     local distSq = (rDiff*rDiff) + (gDiff*gDiff) + (bDiff*bDiff)
     return distSq <= (tolerance * tolerance)
 end
@@ -360,9 +372,7 @@ local function areRawColorsSimilar(c1, c2, tolerance)
         return c1[1] == c2[1] and c1[2] == c2[2] and c1[3] == c2[3] and c1[4] == c2[4]
     end
     if math.abs(c1[4] - c2[4]) > 5 then return false end
-    local rDiff = c1[1] - c2[1]
-    local gDiff = c1[2] - c2[2]
-    local bDiff = c1[3] - c2[3]
+    local rDiff, gDiff, bDiff = c1[1] - c2[1], c1[2] - c2[2], c1[3] - c2[3]
     local distSq = (rDiff*rDiff) + (gDiff*gDiff) + (bDiff*bDiff)
     return distSq <= (tolerance * tolerance)
 end
@@ -458,7 +468,7 @@ local function parseToGrid(rawInput)
 end
 
 -- ============================================================================
--- FILTER LOGIC (MANUAL PICKER WITH TOLERANCE)
+-- FILTER LOGIC
 -- ============================================================================
 
 local function applyFilter(targetColor)
@@ -466,14 +476,12 @@ local function applyFilter(targetColor)
     
     local tolerance = getTolerance()
     
-    -- Update UI
     if targetColor then
         pickColorBtn.Text = "Active"
         pickColorBtn.BackgroundColor3 = targetColor
         local brightness = (targetColor.R + targetColor.G + targetColor.B) / 3
         pickColorBtn.TextColor3 = brightness > 0.5 and Color3.new(0,0,0) or Color3.new(1,1,1)
         
-        -- Update RGB Label
         local r = math.round(targetColor.R * 255)
         local g = math.round(targetColor.G * 255)
         local b = math.round(targetColor.B * 255)
@@ -490,7 +498,6 @@ local function applyFilter(targetColor)
     for _, part in ipairs(imageContainer:GetChildren()) do
         if part:IsA("Part") then
             if targetColor then
-                -- Use Tolerance Check here!
                 if areColor3sSimilar(part.Color, targetColor, tolerance) then
                     part.Transparency = 0
                 else
@@ -673,7 +680,6 @@ local function updatePreview()
         previewSelectionBox.LineThickness = 0.1
         previewSelectionBox.Parent = previewPart
         
-        -- Rainbow logic moved to global loop
         if isPositioning and previewPart and cachedStartPos then
              previewPart.Position = cachedStartPos + Vector3.new(finalCx, 0, finalCz)
         end
@@ -743,6 +749,7 @@ local function spawnImage()
 
     local blockSize, _ = getSettings()
     local tolerance = getTolerance()
+    local snap = getSnap()
     
     local startPos = cachedStartPos
     if not startPos then
@@ -770,15 +777,29 @@ local function spawnImage()
             if not isSpawning then break end
             
             if grid[y] and grid[y][x] and not (visited[y] and visited[y][x]) then
-                local color = grid[y][x]
-                local r, g, b, a = color[1], color[2], color[3], color[4]
+                local rawColor = grid[y][x]
+                
+                -- APPLY SNAP HERE
+                local r = snapValue(rawColor[1], snap)
+                local g = snapValue(rawColor[2], snap)
+                local b = snapValue(rawColor[3], snap)
+                local a = rawColor[4]
+                
+                local color = {r, g, b, a}
                 local finalColor = Color3.fromRGB(r, g, b)
                 
                 local width, height = 1, 1
                 
                 -- Greedy X
                 while (x + width <= maxX) and grid[y][x+width] and not (visited[y] and visited[y][x+width]) do
-                    local nextColor = grid[y][x+width]
+                    local nextRaw = grid[y][x+width]
+                    local nextColor = {
+                        snapValue(nextRaw[1], snap),
+                        snapValue(nextRaw[2], snap),
+                        snapValue(nextRaw[3], snap),
+                        nextRaw[4]
+                    }
+                    
                     if areRawColorsSimilar(color, nextColor, tolerance) then
                         width = width + 1
                     else break end
@@ -794,7 +815,13 @@ local function spawnImage()
                             canExtend = false
                             break
                         end
-                        local nextColor = grid[nextY][nextX]
+                        local nextRaw = grid[nextY][nextX]
+                        local nextColor = {
+                            snapValue(nextRaw[1], snap),
+                            snapValue(nextRaw[2], snap),
+                            snapValue(nextRaw[3], snap),
+                            nextRaw[4]
+                        }
                         if not areRawColorsSimilar(color, nextColor, tolerance) then
                             canExtend = false
                             break
@@ -835,10 +862,9 @@ local function spawnImage()
                 part.Anchored = true
                 part.CanCollide = false
                 
-                -- SMOOTH BLOCK LOGIC
                 part.TopSurface = Enum.SurfaceType.Smooth
                 part.BottomSurface = Enum.SurfaceType.Smooth
-                part.Material = Enum.Material.Plastic -- Matte finish
+                part.Material = Enum.Material.Plastic 
                 part.CastShadow = useShadows
                 
                 part.Color = finalColor
