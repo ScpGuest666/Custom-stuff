@@ -14,7 +14,7 @@ player:WaitForChild("PlayerGui")
 local screenGui = Instance.new("ScreenGui")
 screenGui.Parent = player.PlayerGui
 screenGui.ResetOnSpawn = false
-screenGui.Name = "BABFT_SmartFilter_Loader"
+screenGui.Name = "BABFT_RainbowRGB_Loader"
 
 -- Main Frame
 local frame = Instance.new("Frame")
@@ -44,8 +44,8 @@ plusButton.Font = Enum.Font.GothamBold
 local secondFrame = Instance.new("Frame")
 secondFrame.Parent = screenGui
 secondFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-secondFrame.Size = UDim2.new(0, 200, 0, 340)
-secondFrame.Position = UDim2.new(0.3, 230, 0.5, -170)
+secondFrame.Size = UDim2.new(0, 200, 0, 360)
+secondFrame.Position = UDim2.new(0.3, 230, 0.5, -180)
 secondFrame.Visible = false
 secondFrame.Active = true
 secondFrame.Draggable = true
@@ -147,10 +147,27 @@ tolInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
 tolInput.Text = "15"
 tolInput.TextColor3 = Color3.fromRGB(255, 255, 0)
 
+-- Settings: RGB Display (NEW RAINBOW STROKE)
+local rgbLabel = Instance.new("TextLabel")
+rgbLabel.Parent = secondFrame
+rgbLabel.Position = UDim2.new(0, 10, 0, 235)
+rgbLabel.Size = UDim2.new(0, 180, 0, 20)
+rgbLabel.BackgroundTransparency = 1
+rgbLabel.Text = "RGB: None"
+rgbLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+rgbLabel.Font = Enum.Font.GothamBold
+rgbLabel.TextSize = 14
+
+-- Add Stroke for Rainbow Effect
+local rgbStroke = Instance.new("UIStroke")
+rgbStroke.Parent = rgbLabel
+rgbStroke.Thickness = 2
+rgbStroke.Transparency = 0
+
 -- Settings: Shadows Toggle
 local shadowButton = Instance.new("TextButton")
 shadowButton.Parent = secondFrame
-shadowButton.Position = UDim2.new(0, 10, 0, 250)
+shadowButton.Position = UDim2.new(0, 10, 0, 265)
 shadowButton.Size = UDim2.new(0, 180, 0, 30)
 shadowButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
 shadowButton.Text = "Shadows: OFF"
@@ -160,7 +177,7 @@ shadowButton.Font = Enum.Font.GothamBold
 -- Settings: Manual Color Picker
 local pickColorBtn = Instance.new("TextButton")
 pickColorBtn.Parent = secondFrame
-pickColorBtn.Position = UDim2.new(0, 10, 0, 290)
+pickColorBtn.Position = UDim2.new(0, 10, 0, 305)
 pickColorBtn.Size = UDim2.new(0, 90, 0, 30)
 pickColorBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
 pickColorBtn.Text = "Pick Color"
@@ -169,7 +186,7 @@ pickColorBtn.Font = Enum.Font.GothamBold
 
 local showAllBtn = Instance.new("TextButton")
 showAllBtn.Parent = secondFrame
-showAllBtn.Position = UDim2.new(0, 110, 0, 290)
+showAllBtn.Position = UDim2.new(0, 110, 0, 305)
 showAllBtn.Size = UDim2.new(0, 80, 0, 30)
 showAllBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 showAllBtn.Text = "Show All"
@@ -235,7 +252,6 @@ statusLabel.Font = Enum.Font.Gotham
 local imageContainer = nil 
 local previewPart = nil
 local previewSelectionBox = nil
-local rainbowConnection = nil
 
 local isSpawning = false
 local isClearing = false
@@ -250,6 +266,30 @@ local cachedStartPos = nil
 local ghostPart = nil 
 local positionConnection = nil
 local pickerConnection = nil
+
+-- ============================================================================
+-- GLOBAL ANIMATION LOOP (Rainbow)
+-- ============================================================================
+
+RunService.RenderStepped:Connect(function()
+    local hue = (tick() % 3) / 3 -- 3 second cycle
+    local rainbowColor = Color3.fromHSV(hue, 1, 1)
+    
+    -- Animate RGB Label Border
+    if rgbStroke then
+        rgbStroke.Color = rainbowColor
+    end
+    
+    -- Animate Preview Box
+    if previewSelectionBox then
+        previewSelectionBox.Color3 = rainbowColor
+    end
+    
+    -- Update Ghost Position if active
+    if isPositioning and ghostPart and cachedStartPos then
+        -- Logic handled in InputBegan, but visual updates can go here if needed
+    end
+end)
 
 -- ============================================================================
 -- HELPER FUNCTIONS
@@ -299,7 +339,6 @@ local function getTolerance()
     return tonumber(tolInput.Text) or 15
 end
 
--- Helper to compare Color3 objects with tolerance (0-255 scale)
 local function areColor3sSimilar(c1, c2, tolerance)
     if tolerance == 0 then
         return c1 == c2
@@ -316,7 +355,6 @@ local function areColor3sSimilar(c1, c2, tolerance)
     return distSq <= (tolerance * tolerance)
 end
 
--- Helper for raw data comparison (used in meshing)
 local function areRawColorsSimilar(c1, c2, tolerance)
     if tolerance == 0 then
         return c1[1] == c2[1] and c1[2] == c2[2] and c1[3] == c2[3] and c1[4] == c2[4]
@@ -334,7 +372,6 @@ local function clearImage()
     isSpawning = false
     
     if previewPart then previewPart:Destroy() previewPart = nil end
-    if rainbowConnection then rainbowConnection:Disconnect() rainbowConnection = nil end
     isPreviewing = false
     rotateButton.TextColor3 = Color3.fromRGB(150, 150, 150)
 
@@ -370,6 +407,8 @@ local function clearImage()
     pickColorBtn.Text = "Pick Color"
     pickColorBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
     pickColorBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    rgbLabel.Text = "RGB: None"
+    rgbLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
 end
 
 local function parseToGrid(rawInput)
@@ -433,10 +472,19 @@ local function applyFilter(targetColor)
         pickColorBtn.BackgroundColor3 = targetColor
         local brightness = (targetColor.R + targetColor.G + targetColor.B) / 3
         pickColorBtn.TextColor3 = brightness > 0.5 and Color3.new(0,0,0) or Color3.new(1,1,1)
+        
+        -- Update RGB Label
+        local r = math.round(targetColor.R * 255)
+        local g = math.round(targetColor.G * 255)
+        local b = math.round(targetColor.B * 255)
+        rgbLabel.Text = string.format("RGB: %d, %d, %d", r, g, b)
+        rgbLabel.TextColor3 = targetColor
     else
         pickColorBtn.Text = "Pick Color"
         pickColorBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
         pickColorBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        rgbLabel.Text = "RGB: None"
+        rgbLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
     end
     
     for _, part in ipairs(imageContainer:GetChildren()) do
@@ -625,13 +673,10 @@ local function updatePreview()
         previewSelectionBox.LineThickness = 0.1
         previewSelectionBox.Parent = previewPart
         
-        rainbowConnection = RunService.Heartbeat:Connect(function()
-            local hue = (tick() % 2) / 2
-            if previewSelectionBox then previewSelectionBox.Color3 = Color3.fromHSV(hue, 1, 1) end
-            if isPositioning and previewPart and cachedStartPos then
-                 previewPart.Position = cachedStartPos + Vector3.new(finalCx, 0, finalCz)
-            end
-        end)
+        -- Rainbow logic moved to global loop
+        if isPositioning and previewPart and cachedStartPos then
+             previewPart.Position = cachedStartPos + Vector3.new(finalCx, 0, finalCz)
+        end
     end
     
     local startPos = cachedStartPos or Vector3.new(0,10,0)
@@ -642,7 +687,6 @@ end
 showSizeButton.MouseButton1Click:Connect(function()
     if isPreviewing then
         if previewPart then previewPart:Destroy() previewPart = nil end
-        if rainbowConnection then rainbowConnection:Disconnect() rainbowConnection = nil end
         isPreviewing = false
         rotateButton.TextColor3 = Color3.fromRGB(150, 150, 150)
         statusLabel.Text = "Preview Off"
