@@ -14,7 +14,7 @@ player:WaitForChild("PlayerGui")
 local screenGui = Instance.new("ScreenGui")
 screenGui.Parent = player.PlayerGui
 screenGui.ResetOnSpawn = false
-screenGui.Name = "BABFT_Snap_Optimizer"
+screenGui.Name = "BABFT_RainbowGlow_Loader"
 
 -- Main Frame
 local frame = Instance.new("Frame")
@@ -44,7 +44,7 @@ plusButton.Font = Enum.Font.GothamBold
 local secondFrame = Instance.new("Frame")
 secondFrame.Parent = screenGui
 secondFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-secondFrame.Size = UDim2.new(0, 200, 0, 390) -- Increased Height
+secondFrame.Size = UDim2.new(0, 200, 0, 390)
 secondFrame.Position = UDim2.new(0.3, 230, 0.5, -195)
 secondFrame.Visible = false
 secondFrame.Active = true
@@ -147,7 +147,7 @@ tolInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
 tolInput.Text = "15"
 tolInput.TextColor3 = Color3.fromRGB(255, 255, 0)
 
--- Settings: Color Snap (NEW)
+-- Settings: Color Snap
 local snapLabel = Instance.new("TextLabel")
 snapLabel.Parent = secondFrame
 snapLabel.Position = UDim2.new(0, 10, 0, 235)
@@ -162,7 +162,7 @@ snapInput.Parent = secondFrame
 snapInput.Position = UDim2.new(0, 150, 0, 235)
 snapInput.Size = UDim2.new(0, 40, 0, 20)
 snapInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-snapInput.Text = "5" -- Default 5 to reduce noise
+snapInput.Text = "5"
 snapInput.TextColor3 = Color3.fromRGB(0, 255, 255)
 
 -- Settings: RGB Display
@@ -269,6 +269,7 @@ statusLabel.Font = Enum.Font.Gotham
 local imageContainer = nil 
 local previewPart = nil
 local previewSelectionBox = nil
+local activeSelectionBoxes = {} -- Stores the rainbow outlines for filtered blocks
 
 local isSpawning = false
 local isClearing = false
@@ -294,6 +295,13 @@ RunService.RenderStepped:Connect(function()
     
     if rgbStroke then rgbStroke.Color = rainbowColor end
     if previewSelectionBox then previewSelectionBox.Color3 = rainbowColor end
+    
+    -- Animate all active selection boxes for filtered blocks
+    for _, box in ipairs(activeSelectionBoxes) do
+        if box.Parent then
+            box.Color3 = rainbowColor
+        end
+    end
 end)
 
 -- ============================================================================
@@ -352,7 +360,6 @@ local function getSnap()
     return tonumber(snapInput.Text) or 5
 end
 
--- Snap a single color value (0-255)
 local function snapValue(val, snap)
     if snap <= 1 then return val end
     return math.clamp(math.round(val / snap) * snap, 0, 255)
@@ -392,6 +399,10 @@ local function clearImage()
 
     isClearing = true
     statusLabel.Text = "Clearing..."
+    
+    -- Clear selection boxes
+    for _, box in ipairs(activeSelectionBoxes) do box:Destroy() end
+    activeSelectionBoxes = {}
     
     local parts = imageContainer:GetChildren()
     local total = #parts
@@ -468,7 +479,7 @@ local function parseToGrid(rawInput)
 end
 
 -- ============================================================================
--- FILTER LOGIC
+-- FILTER LOGIC (MANUAL PICKER WITH TOLERANCE & RAINBOW GLOW)
 -- ============================================================================
 
 local function applyFilter(targetColor)
@@ -476,6 +487,11 @@ local function applyFilter(targetColor)
     
     local tolerance = getTolerance()
     
+    -- Clear old selection boxes
+    for _, box in ipairs(activeSelectionBoxes) do box:Destroy() end
+    activeSelectionBoxes = {}
+    
+    -- Update UI
     if targetColor then
         pickColorBtn.Text = "Active"
         pickColorBtn.BackgroundColor3 = targetColor
@@ -500,6 +516,14 @@ local function applyFilter(targetColor)
             if targetColor then
                 if areColor3sSimilar(part.Color, targetColor, tolerance) then
                     part.Transparency = 0
+                    
+                    -- Add Rainbow Glow Box
+                    local box = Instance.new("SelectionBox")
+                    box.Adornee = part
+                    box.Parent = part
+                    box.LineThickness = 0.05 -- Thin outline
+                    box.Transparency = 0
+                    table.insert(activeSelectionBoxes, box)
                 else
                     part.Transparency = 1
                 end
@@ -779,7 +803,6 @@ local function spawnImage()
             if grid[y] and grid[y][x] and not (visited[y] and visited[y][x]) then
                 local rawColor = grid[y][x]
                 
-                -- APPLY SNAP HERE
                 local r = snapValue(rawColor[1], snap)
                 local g = snapValue(rawColor[2], snap)
                 local b = snapValue(rawColor[3], snap)
