@@ -1,0 +1,1024 @@
+local HttpService = game:GetService("HttpService")
+local PlayerService = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = PlayerService.LocalPlayer
+if not player then player = PlayerService.PlayerAdded:Wait() end
+player:WaitForChild("PlayerGui")
+
+-- ============================================================================
+-- UI SETUP
+-- ============================================================================
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = player.PlayerGui
+screenGui.ResetOnSpawn = false
+screenGui.Name = "BABFT_RainbowGlow_Loader_V3"
+
+-- Main Frame
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+frame.Size = UDim2.new(0, 220, 0, 160)
+frame.Position = UDim2.new(0.3, 0, 0.5, -80)
+frame.Active = true
+frame.Draggable = true
+frame.BorderSizePixel = 2
+frame.BorderColor3 = Color3.fromRGB(0, 0, 0)
+
+-- [+] Button
+local plusButton = Instance.new("TextButton")
+plusButton.Parent = frame
+plusButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+plusButton.BorderSizePixel = 2
+plusButton.BorderColor3 = Color3.fromRGB(0, 255, 0)
+plusButton.Size = UDim2.new(0, 30, 0, 30)
+plusButton.Position = UDim2.new(0, -35, 0, 0)
+plusButton.Text = "+"
+plusButton.TextColor3 = Color3.fromRGB(0, 255, 0)
+plusButton.TextScaled = true
+plusButton.Font = Enum.Font.GothamBold
+
+-- Second Frame (Settings)
+local secondFrame = Instance.new("Frame")
+secondFrame.Parent = screenGui
+secondFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+secondFrame.Size = UDim2.new(0, 200, 0, 390)
+secondFrame.Position = UDim2.new(0.3, 230, 0.5, -195)
+secondFrame.Visible = false
+secondFrame.Active = true
+secondFrame.Draggable = true
+secondFrame.BorderSizePixel = 2
+secondFrame.BorderColor3 = Color3.fromRGB(0, 0, 0)
+
+local secondTitle = Instance.new("TextLabel")
+secondTitle.Parent = secondFrame
+secondTitle.Size = UDim2.new(1, 0, 0, 25)
+secondTitle.BackgroundTransparency = 1
+secondTitle.Text = "  SETTINGS"
+secondTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+secondTitle.TextXAlignment = Enum.TextXAlignment.Left
+secondTitle.Font = Enum.Font.GothamBold
+secondTitle.TextSize = 14
+
+-- Settings: Block Size
+local sizeLabel = Instance.new("TextLabel")
+sizeLabel.Parent = secondFrame
+sizeLabel.Position = UDim2.new(0, 10, 0, 30)
+sizeLabel.Size = UDim2.new(0, 80, 0, 20)
+sizeLabel.BackgroundTransparency = 1
+sizeLabel.Text = "Block Size:"
+sizeLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+sizeLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local sizeInput = Instance.new("TextBox")
+sizeInput.Parent = secondFrame
+sizeInput.Position = UDim2.new(0, 90, 0, 30)
+sizeInput.Size = UDim2.new(0, 40, 0, 20)
+sizeInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+sizeInput.Text = "2"
+sizeInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+
+-- Settings: Move (Grid Snap)
+local moveLabel = Instance.new("TextLabel")
+moveLabel.Parent = secondFrame
+moveLabel.Position = UDim2.new(0, 10, 0, 55)
+moveLabel.Size = UDim2.new(0, 80, 0, 20)
+moveLabel.BackgroundTransparency = 1
+moveLabel.Text = "Move Grid:"
+moveLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+moveLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local moveInput = Instance.new("TextBox")
+moveInput.Parent = secondFrame
+moveInput.Position = UDim2.new(0, 90, 0, 55)
+moveInput.Size = UDim2.new(0, 40, 0, 20)
+moveInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+moveInput.Text = "1"
+moveInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+
+-- Settings: Show Size
+local showSizeButton = Instance.new("TextButton")
+showSizeButton.Parent = secondFrame
+showSizeButton.Position = UDim2.new(0, 10, 0, 90)
+showSizeButton.Size = UDim2.new(0, 180, 0, 30)
+showSizeButton.BackgroundColor3 = Color3.fromRGB(60, 60, 100)
+showSizeButton.Text = "Show Size / Outline"
+showSizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+showSizeButton.Font = Enum.Font.Gotham
+
+-- Settings: Rotate
+local rotateButton = Instance.new("TextButton")
+rotateButton.Parent = secondFrame
+rotateButton.Position = UDim2.new(0, 10, 0, 130)
+rotateButton.Size = UDim2.new(0, 180, 0, 30)
+rotateButton.BackgroundColor3 = Color3.fromRGB(100, 60, 60)
+rotateButton.Text = "Rotate Outline (90°)"
+rotateButton.TextColor3 = Color3.fromRGB(150, 150, 150)
+rotateButton.Font = Enum.Font.Gotham
+rotateButton.AutoButtonColor = false
+
+-- Settings: Set Position
+local posButton = Instance.new("TextButton")
+posButton.Parent = secondFrame
+posButton.Position = UDim2.new(0, 10, 0, 170)
+posButton.Size = UDim2.new(0, 180, 0, 30)
+posButton.BackgroundColor3 = Color3.fromRGB(100, 100, 60)
+posButton.Text = "Set Position: OFF"
+posButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+posButton.Font = Enum.Font.Gotham
+
+-- Settings: Color Tolerance
+local tolLabel = Instance.new("TextLabel")
+tolLabel.Parent = secondFrame
+tolLabel.Position = UDim2.new(0, 10, 0, 210)
+tolLabel.Size = UDim2.new(0, 140, 0, 20)
+tolLabel.BackgroundTransparency = 1
+tolLabel.Text = "Color Tolerance (0-255):"
+tolLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+tolLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local tolInput = Instance.new("TextBox")
+tolInput.Parent = secondFrame
+tolInput.Position = UDim2.new(0, 150, 0, 210)
+tolInput.Size = UDim2.new(0, 40, 0, 20)
+tolInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+tolInput.Text = "15"
+tolInput.TextColor3 = Color3.fromRGB(255, 255, 0)
+
+-- Settings: Color Snap
+local snapLabel = Instance.new("TextLabel")
+snapLabel.Parent = secondFrame
+snapLabel.Position = UDim2.new(0, 10, 0, 235)
+snapLabel.Size = UDim2.new(0, 140, 0, 20)
+snapLabel.BackgroundTransparency = 1
+snapLabel.Text = "Color Snap (1-50):"
+snapLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+snapLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local snapInput = Instance.new("TextBox")
+snapInput.Parent = secondFrame
+snapInput.Position = UDim2.new(0, 150, 0, 235)
+snapInput.Size = UDim2.new(0, 40, 0, 20)
+snapInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+snapInput.Text = "5"
+snapInput.TextColor3 = Color3.fromRGB(0, 255, 255)
+
+-- Settings: RGB Display
+local rgbLabel = Instance.new("TextLabel")
+rgbLabel.Parent = secondFrame
+rgbLabel.Position = UDim2.new(0, 10, 0, 265)
+rgbLabel.Size = UDim2.new(0, 180, 0, 20)
+rgbLabel.BackgroundTransparency = 1
+rgbLabel.Text = "RGB: None"
+rgbLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+rgbLabel.Font = Enum.Font.GothamBold
+rgbLabel.TextSize = 14
+
+local rgbStroke = Instance.new("UIStroke")
+rgbStroke.Parent = rgbLabel
+rgbStroke.Thickness = 2
+rgbStroke.Transparency = 0
+
+-- Settings: Shadows Toggle
+local shadowButton = Instance.new("TextButton")
+shadowButton.Parent = secondFrame
+shadowButton.Position = UDim2.new(0, 10, 0, 295)
+shadowButton.Size = UDim2.new(0, 180, 0, 30)
+shadowButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+shadowButton.Text = "Shadows: OFF"
+shadowButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+shadowButton.Font = Enum.Font.GothamBold
+
+-- Settings: Manual Color Picker
+local pickColorBtn = Instance.new("TextButton")
+pickColorBtn.Parent = secondFrame
+pickColorBtn.Position = UDim2.new(0, 10, 0, 335)
+pickColorBtn.Size = UDim2.new(0, 90, 0, 30)
+pickColorBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+pickColorBtn.Text = "Pick Color"
+pickColorBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+pickColorBtn.Font = Enum.Font.GothamBold
+
+local showAllBtn = Instance.new("TextButton")
+showAllBtn.Parent = secondFrame
+showAllBtn.Position = UDim2.new(0, 110, 0, 335)
+showAllBtn.Size = UDim2.new(0, 80, 0, 30)
+showAllBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+showAllBtn.Text = "Show All"
+showAllBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+showAllBtn.Font = Enum.Font.GothamBold
+
+-- ============================================================================
+-- SWITCHER UI
+-- ============================================================================
+
+local prevButton = Instance.new("TextButton")
+prevButton.Parent = frame
+prevButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+prevButton.Size = UDim2.new(0, 30, 0, 20)
+prevButton.Position = UDim2.new(0, 10, 0, 5)
+prevButton.Text = "<"
+prevButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+prevButton.Font = Enum.Font.GothamBold
+
+local nextButton = Instance.new("TextButton")
+nextButton.Parent = frame
+nextButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+nextButton.Size = UDim2.new(0, 30, 0, 20)
+nextButton.Position = UDim2.new(0, 180, 0, 5)
+nextButton.Text = ">"
+nextButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+nextButton.Font = Enum.Font.GothamBold
+
+local countLabel = Instance.new("TextLabel")
+countLabel.Parent = frame
+countLabel.BackgroundTransparency = 1
+countLabel.Size = UDim2.new(0, 130, 0, 20)
+countLabel.Position = UDim2.new(0, 45, 0, 5)
+countLabel.Text = "1 / 1"
+countLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+countLabel.Font = Enum.Font.GothamBold
+countLabel.TextSize = 12
+
+-- Main UI Inputs
+local textBox = Instance.new("TextBox")
+textBox.Parent = frame
+textBox.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+textBox.BorderSizePixel = 0
+textBox.Position = UDim2.new(0, 10, 0, 30)
+textBox.Size = UDim2.new(0, 200, 0, 30)
+textBox.PlaceholderText = "Paste Links (Newlines)..."
+textBox.Text = ""
+textBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+textBox.TextScaled = true
+textBox.ClearTextOnFocus = true -- CHANGED: Now clears when you click it
+textBox.MultiLine = true
+
+local onButton = Instance.new("TextButton")
+onButton.Parent = frame
+onButton.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
+onButton.Size = UDim2.new(0, 95, 0, 30)
+onButton.Position = UDim2.new(0, 10, 0, 70)
+onButton.Text = "Spawn"
+onButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+onButton.Font = Enum.Font.GothamBold
+onButton.TextSize = 14
+
+local offButton = Instance.new("TextButton")
+offButton.Parent = frame
+offButton.BackgroundColor3 = Color3.fromRGB(120, 0, 0)
+offButton.Size = UDim2.new(0, 95, 0, 30)
+offButton.Position = UDim2.new(0, 115, 0, 70)
+offButton.Text = "Clear"
+offButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+offButton.Font = Enum.Font.GothamBold
+offButton.TextSize = 14
+
+local destroyButton = Instance.new("TextButton")
+destroyButton.Parent = frame
+destroyButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+destroyButton.Size = UDim2.new(0, 200, 0, 25)
+destroyButton.Position = UDim2.new(0, 10, 0, 110)
+destroyButton.Text = "Destroy GUI"
+destroyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+destroyButton.Font = Enum.Font.Gotham
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = frame
+statusLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+statusLabel.Size = UDim2.new(0, 220, 0, 20)
+statusLabel.Position = UDim2.new(0, 0, 1, 0)
+statusLabel.Text = "Ready"
+statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+statusLabel.TextSize = 12
+statusLabel.Font = Enum.Font.Gotham
+
+-- ============================================================================
+-- LOGIC VARIABLES
+-- ============================================================================
+
+local imageContainer = nil 
+local previewPart = nil
+local previewSelectionBox = nil
+local activeSelectionBoxes = {} 
+
+local isSpawning = false
+local isClearing = false
+local isPreviewing = false
+local isPositioning = false 
+local useShadows = false 
+local isPickingColor = false 
+local autoLoadOnSwitch = false -- NEW: Tracks if we should auto-spawn
+
+local currentRotation = 0 
+local cachedGrid = nil 
+local cachedStartPos = nil 
+local ghostPart = nil 
+local positionConnection = nil
+local pickerConnection = nil
+
+-- URL List Logic
+local urlList = {}
+local currentUrlIndex = 1
+
+-- ============================================================================
+-- GLOBAL ANIMATION LOOP (Rainbow)
+-- ============================================================================
+
+RunService.RenderStepped:Connect(function()
+    local hue = (tick() % 3) / 3 
+    local rainbowColor = Color3.fromHSV(hue, 1, 1)
+    
+    if rgbStroke then rgbStroke.Color = rainbowColor end
+    if previewSelectionBox then previewSelectionBox.Color3 = rainbowColor end
+    
+    for _, box in ipairs(activeSelectionBoxes) do
+        if box.Parent then
+            box.Color3 = rainbowColor
+        end
+    end
+end)
+
+-- ============================================================================
+-- HELPER FUNCTIONS
+-- ============================================================================
+
+plusButton.MouseButton1Click:Connect(function()
+    secondFrame.Visible = not secondFrame.Visible
+end)
+
+shadowButton.MouseButton1Click:Connect(function()
+    useShadows = not useShadows
+    if useShadows then
+        shadowButton.Text = "Shadows: ON"
+        shadowButton.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+        shadowButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    else
+        shadowButton.Text = "Shadows: OFF"
+        shadowButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        shadowButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+    end
+end)
+
+sizeInput.FocusLost:Connect(function()
+    if not tonumber(sizeInput.Text) then sizeInput.Text = "2" end
+end)
+
+moveInput.FocusLost:Connect(function()
+    if not tonumber(moveInput.Text) then moveInput.Text = "1" end
+end)
+
+tolInput.FocusLost:Connect(function()
+    if not tonumber(tolInput.Text) then tolInput.Text = "15" end
+end)
+
+snapInput.FocusLost:Connect(function()
+    if not tonumber(snapInput.Text) then snapInput.Text = "5" end
+end)
+
+local function cleanJsonString(rawText)
+    local firstBrace = rawText:find("{")
+    local lastBrace = rawText:match("^.*()%}")
+    if firstBrace and lastBrace then return rawText:sub(firstBrace, lastBrace) end
+    return rawText
+end
+
+local function getSettings()
+    return tonumber(sizeInput.Text) or 2, tonumber(moveInput.Text) or 1
+end
+
+local function getTolerance()
+    return tonumber(tolInput.Text) or 15
+end
+
+local function getSnap()
+    return tonumber(snapInput.Text) or 5
+end
+
+local function snapValue(val, snap)
+    if snap <= 1 then return val end
+    return math.clamp(math.round(val / snap) * snap, 0, 255)
+end
+
+local function areColor3sSimilar(c1, c2, tolerance)
+    if tolerance == 0 then return c1 == c2 end
+    local r1, g1, b1 = c1.R * 255, c1.G * 255, c1.B * 255
+    local r2, g2, b2 = c2.R * 255, c2.G * 255, c2.B * 255
+    local rDiff, gDiff, bDiff = r1 - r2, g1 - g2, b1 - b2
+    local distSq = (rDiff*rDiff) + (gDiff*gDiff) + (bDiff*bDiff)
+    return distSq <= (tolerance * tolerance)
+end
+
+local function areRawColorsSimilar(c1, c2, tolerance)
+    if tolerance == 0 then
+        return c1[1] == c2[1] and c1[2] == c2[2] and c1[3] == c2[3] and c1[4] == c2[4]
+    end
+    if math.abs(c1[4] - c2[4]) > 5 then return false end
+    local rDiff, gDiff, bDiff = c1[1] - c2[1], c1[2] - c2[2], c1[3] - c2[3]
+    local distSq = (rDiff*rDiff) + (gDiff*gDiff) + (bDiff*bDiff)
+    return distSq <= (tolerance * tolerance)
+end
+
+local function clearImage()
+    if isClearing then return end
+    isSpawning = false
+    autoLoadOnSwitch = false -- Stop auto-loading if user clears manually
+    
+    if previewPart then previewPart:Destroy() previewPart = nil end
+    isPreviewing = false
+    rotateButton.TextColor3 = Color3.fromRGB(150, 150, 150)
+
+    if not imageContainer then 
+        statusLabel.Text = "Nothing to clear"
+        return 
+    end
+
+    isClearing = true
+    statusLabel.Text = "Clearing..."
+    
+    for _, box in ipairs(activeSelectionBoxes) do box:Destroy() end
+    activeSelectionBoxes = {}
+    
+    local parts = imageContainer:GetChildren()
+    local total = #parts
+    
+    if total > 500 then
+        for i, part in ipairs(parts) do
+            part:Destroy()
+            if i % 500 == 0 then
+                statusLabel.Text = "Clearing: " .. math.floor((i/total)*100) .. "%"
+                RunService.Heartbeat:Wait()
+            end
+        end
+    else
+        imageContainer:ClearAllChildren()
+    end
+
+    imageContainer:Destroy()
+    imageContainer = nil
+    isClearing = false
+    statusLabel.Text = "Cleared!"
+    statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    
+    pickColorBtn.Text = "Pick Color"
+    pickColorBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    pickColorBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    rgbLabel.Text = "RGB: None"
+    rgbLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+end
+
+local function parseToGrid(rawInput)
+    local finalJson = rawInput
+    local foundUrl = rawInput:match("https?://[%w-_%.%?%.:/%+=&]+")
+    
+    if foundUrl then
+        statusLabel.Text = "Downloading..."
+        local success, response = pcall(function() return game:HttpGet(foundUrl) end)
+        if success then 
+            if response:find("404: Not Found") then return nil, "Error: 404" end
+            finalJson = response 
+        else return nil, "Download Failed" end
+    end
+
+    local cleanedJson = cleanJsonString(finalJson)
+    local success, data = pcall(function() return HttpService:JSONDecode(cleanedJson) end)
+    if not success or not data then return nil, "Invalid JSON" end
+
+    local grid = {}
+    local minX, maxX, minY, maxY = math.huge, -math.huge, math.huge, -math.huge
+
+    local function addPixel(x, y, r, g, b, a)
+        if not grid[y] then grid[y] = {} end
+        grid[y][x] = {r, g, b, a}
+        if x < minX then minX = x end
+        if x > maxX then maxX = x end
+        if y < minY then minY = y end
+        if y > maxY then maxY = y end
+    end
+
+    if data.parts then
+        for _, p in ipairs(data.parts) do
+            local x = p.px or (p.pos and p.pos.x) or 0
+            local y = p.py or (p.pos and p.pos.z) or 0
+            addPixel(x, y, p.r, p.g, p.b, p.a)
+        end
+    elseif data.pixels then
+        for y, row in ipairs(data.pixels) do
+            for x, rgba in ipairs(row) do
+                addPixel(x-1, y-1, rgba[1], rgba[2], rgba[3], rgba[4])
+            end
+        end
+    end
+
+    return {grid = grid, minX = minX, maxX = maxX, minY = minY, maxY = maxY}, "Success"
+end
+
+-- ============================================================================
+-- URL LIST & SWITCHING LOGIC
+-- ============================================================================
+
+local function refreshUrlList()
+    local found = {}
+    local text = textBox.Text
+    
+    for line in text:gmatch("[^\r\n]+") do
+        local cleanLine = line:match("^%s*(.-)%s*$")
+        if cleanLine and not cleanLine:match("^%-%-") then
+            local url = cleanLine:match("https?://[%w-_%.%?%.:/%+=&]+")
+            if url then
+                table.insert(found, url)
+            end
+        end
+    end
+    
+    if #found > 0 then
+        urlList = found
+    else
+        urlList = {text}
+    end
+    
+    if currentUrlIndex > #urlList then currentUrlIndex = 1 end
+    if currentUrlIndex < 1 then currentUrlIndex = 1 end
+    
+    countLabel.Text = currentUrlIndex .. " / " .. #urlList
+end
+
+textBox:GetPropertyChangedSignal("Text"):Connect(refreshUrlList)
+
+-- ============================================================================
+-- PREVIEW & ROTATION
+-- ============================================================================
+
+local function updatePreview()
+    if not isPreviewing or not cachedGrid then return end
+    
+    local blockSize, _ = getSettings()
+    local sizeX = (cachedGrid.maxX - cachedGrid.minX + 1) * blockSize
+    local sizeZ = (cachedGrid.maxY - cachedGrid.minY + 1) * blockSize
+    
+    local relCx = (cachedGrid.minX - cachedGrid.maxX) / 2 * blockSize
+    local relCz = (cachedGrid.minY - cachedGrid.maxY) / 2 * blockSize
+    
+    local finalCx, finalCz, finalSizeX, finalSizeZ
+
+    if currentRotation == 0 then
+        finalCx, finalCz = relCx, relCz
+        finalSizeX, finalSizeZ = sizeX, sizeZ
+    elseif currentRotation == 1 then 
+        finalCx, finalCz = -relCz, relCx
+        finalSizeX, finalSizeZ = sizeZ, sizeX
+    elseif currentRotation == 2 then 
+        finalCx, finalCz = -relCx, -relCz
+        finalSizeX, finalSizeZ = sizeX, sizeZ
+    elseif currentRotation == 3 then 
+        finalCx, finalCz = relCz, -relCx
+        finalSizeX, finalSizeZ = sizeZ, sizeX
+    end
+
+    if not previewPart then
+        previewPart = Instance.new("Part")
+        previewPart.Name = "PreviewBounds"
+        previewPart.Anchored = true
+        previewPart.CanCollide = false
+        previewPart.Transparency = 1
+        previewPart.Parent = workspace
+        
+        previewSelectionBox = Instance.new("SelectionBox")
+        previewSelectionBox.Adornee = previewPart
+        previewSelectionBox.LineThickness = 0.1
+        previewSelectionBox.Parent = previewPart
+        
+        if isPositioning and previewPart and cachedStartPos then
+             previewPart.Position = cachedStartPos + Vector3.new(finalCx, 0, finalCz)
+        end
+    end
+    
+    local startPos = cachedStartPos or Vector3.new(0,10,0)
+    previewPart.Size = Vector3.new(finalSizeX, blockSize, finalSizeZ)
+    previewPart.Position = startPos + Vector3.new(finalCx, 0, finalCz)
+end
+
+local function loadCurrentSelection()
+    refreshUrlList()
+    local target = urlList[currentUrlIndex] or textBox.Text
+    
+    local data, msg = parseToGrid(target)
+    if not data then
+        statusLabel.Text = msg
+        statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+        return false
+    end
+    cachedGrid = data
+    return true
+end
+
+showSizeButton.MouseButton1Click:Connect(function()
+    if isPreviewing then
+        if previewPart then previewPart:Destroy() previewPart = nil end
+        isPreviewing = false
+        rotateButton.TextColor3 = Color3.fromRGB(150, 150, 150)
+        statusLabel.Text = "Preview Off"
+    else
+        if loadCurrentSelection() then
+            isPreviewing = true
+            rotateButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+            statusLabel.Text = "Preview On"
+            statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+            updatePreview()
+        end
+    end
+end)
+
+rotateButton.MouseButton1Click:Connect(function()
+    if not isPreviewing then return end
+    currentRotation = (currentRotation + 1) % 4
+    statusLabel.Text = "Rotation: " .. (currentRotation * 90) .. "°"
+    updatePreview()
+end)
+
+-- ============================================================================
+-- SPAWNING LOGIC (Forward Declaration needed for Switcher)
+-- ============================================================================
+
+local function spawnImage()
+    if isSpawning or isClearing then return end
+    
+    -- Load current URL from list
+    if not loadCurrentSelection() then return end
+    
+    if imageContainer then 
+        isClearing = true
+        imageContainer:Destroy() 
+        isClearing = false
+    end
+    
+    isSpawning = true
+    autoLoadOnSwitch = true -- Enable auto-load since user manually spawned
+    
+    statusLabel.Text = "Meshing..."
+    statusLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+    task.wait()
+
+    local blockSize, _ = getSettings()
+    local tolerance = getTolerance()
+    local snap = getSnap()
+    
+    local startPos = cachedStartPos
+    if not startPos then
+        local char = player.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            startPos = char.HumanoidRootPart.Position - Vector3.new(0,3,0)
+        else
+            statusLabel.Text = "No Position Set!"
+            isSpawning = false
+            return
+        end
+    end
+    
+    imageContainer = Instance.new("Folder")
+    imageContainer.Name = "BABFT_Image"
+    imageContainer.Parent = game.Workspace
+
+    local grid = cachedGrid.grid
+    local minX, maxX, minY, maxY = cachedGrid.minX, cachedGrid.maxX, cachedGrid.minY, cachedGrid.maxY
+    local visited = {}
+    local partsCount = 0
+
+    for y = minY, maxY do
+        for x = minX, maxX do
+            if not isSpawning then break end
+            
+            if grid[y] and grid[y][x] and not (visited[y] and visited[y][x]) then
+                local rawColor = grid[y][x]
+                
+                local r = snapValue(rawColor[1], snap)
+                local g = snapValue(rawColor[2], snap)
+                local b = snapValue(rawColor[3], snap)
+                local a = rawColor[4]
+                
+                local color = {r, g, b, a}
+                local finalColor = Color3.fromRGB(r, g, b)
+                
+                local width, height = 1, 1
+                
+                -- Greedy X
+                while (x + width <= maxX) and grid[y][x+width] and not (visited[y] and visited[y][x+width]) do
+                    local nextRaw = grid[y][x+width]
+                    local nextColor = {
+                        snapValue(nextRaw[1], snap),
+                        snapValue(nextRaw[2], snap),
+                        snapValue(nextRaw[3], snap),
+                        nextRaw[4]
+                    }
+                    
+                    if areRawColorsSimilar(color, nextColor, tolerance) then
+                        width = width + 1
+                    else break end
+                end
+                
+                -- Greedy Y
+                local canExtend = true
+                while (y + height <= maxY) and canExtend do
+                    for k = 0, width - 1 do
+                        local nextY = y + height
+                        local nextX = x + k
+                        if not grid[nextY] or not grid[nextY][nextX] or (visited[nextY] and visited[nextY][nextX]) then
+                            canExtend = false
+                            break
+                        end
+                        local nextRaw = grid[nextY][nextX]
+                        local nextColor = {
+                            snapValue(nextRaw[1], snap),
+                            snapValue(nextRaw[2], snap),
+                            snapValue(nextRaw[3], snap),
+                            nextRaw[4]
+                        }
+                        if not areRawColorsSimilar(color, nextColor, tolerance) then
+                            canExtend = false
+                            break
+                        end
+                    end
+                    if canExtend then height = height + 1 end
+                end
+                
+                for dy = 0, height - 1 do
+                    if not visited[y+dy] then visited[y+dy] = {} end
+                    for dx = 0, width - 1 do visited[y+dy][x+dx] = true end
+                end
+                
+                local sizeX = width * blockSize
+                local sizeZ = height * blockSize
+                
+                local relCenterX = (x + (width - 1) / 2) - maxX
+                local relCenterZ = (y + (height - 1) / 2) - maxY
+                local centerX = relCenterX * blockSize
+                local centerZ = relCenterZ * blockSize
+                
+                local finalX, finalZ
+                if currentRotation == 0 then
+                    finalX, finalZ = centerX, centerZ
+                elseif currentRotation == 1 then 
+                    finalX, finalZ = -centerZ, centerX
+                    sizeX, sizeZ = sizeZ, sizeX 
+                elseif currentRotation == 2 then 
+                    finalX, finalZ = -centerX, -centerZ
+                elseif currentRotation == 3 then 
+                    finalX, finalZ = centerZ, -centerX
+                    sizeX, sizeZ = sizeZ, sizeX 
+                end
+                
+                local finalPos = startPos + Vector3.new(finalX, 0, finalZ)
+
+                local part = Instance.new("Part")
+                part.Anchored = true
+                part.CanCollide = false
+                
+                part.TopSurface = Enum.SurfaceType.Smooth
+                part.BottomSurface = Enum.SurfaceType.Smooth
+                part.Material = Enum.Material.Plastic 
+                part.CastShadow = useShadows
+                
+                part.Color = finalColor
+                if a then part.Transparency = 1 - (a / 255) end
+                part.Size = Vector3.new(sizeX, 0.5, sizeZ)
+                part.Position = finalPos
+                part.Parent = imageContainer
+                
+                partsCount = partsCount + 1
+                if partsCount % 200 == 0 then
+                    statusLabel.Text = "Meshing: " .. partsCount
+                    RunService.Heartbeat:Wait()
+                end
+            end
+        end
+    end
+    
+    statusLabel.Text = "Done! Parts: " .. partsCount
+    statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+    isSpawning = false
+end
+
+-- ============================================================================
+-- SWITCHER BUTTON EVENTS
+-- ============================================================================
+
+prevButton.MouseButton1Click:Connect(function()
+    refreshUrlList()
+    currentUrlIndex = currentUrlIndex - 1
+    if currentUrlIndex < 1 then currentUrlIndex = #urlList end
+    countLabel.Text = currentUrlIndex .. " / " .. #urlList
+    
+    if autoLoadOnSwitch then
+        spawnImage()
+    elseif isPreviewing then
+        if loadCurrentSelection() then
+            updatePreview()
+        end
+    end
+end)
+
+nextButton.MouseButton1Click:Connect(function()
+    refreshUrlList()
+    currentUrlIndex = currentUrlIndex + 1
+    if currentUrlIndex > #urlList then currentUrlIndex = 1 end
+    countLabel.Text = currentUrlIndex .. " / " .. #urlList
+    
+    if autoLoadOnSwitch then
+        spawnImage()
+    elseif isPreviewing then
+        if loadCurrentSelection() then
+            updatePreview()
+        end
+    end
+end)
+
+-- ============================================================================
+-- FILTER LOGIC (MANUAL PICKER WITH TOLERANCE & RAINBOW GLOW)
+-- ============================================================================
+
+local function applyFilter(targetColor)
+    if not imageContainer then return end
+    
+    local tolerance = getTolerance()
+    
+    for _, box in ipairs(activeSelectionBoxes) do box:Destroy() end
+    activeSelectionBoxes = {}
+    
+    if targetColor then
+        pickColorBtn.Text = "Active"
+        pickColorBtn.BackgroundColor3 = targetColor
+        local brightness = (targetColor.R + targetColor.G + targetColor.B) / 3
+        pickColorBtn.TextColor3 = brightness > 0.5 and Color3.new(0,0,0) or Color3.new(1,1,1)
+        
+        local r = math.round(targetColor.R * 255)
+        local g = math.round(targetColor.G * 255)
+        local b = math.round(targetColor.B * 255)
+        rgbLabel.Text = string.format("RGB: %d, %d, %d", r, g, b)
+        rgbLabel.TextColor3 = targetColor
+    else
+        pickColorBtn.Text = "Pick Color"
+        pickColorBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        pickColorBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        rgbLabel.Text = "RGB: None"
+        rgbLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+    end
+    
+    for _, part in ipairs(imageContainer:GetChildren()) do
+        if part:IsA("Part") then
+            if targetColor then
+                if areColor3sSimilar(part.Color, targetColor, tolerance) then
+                    part.Transparency = 0
+                    
+                    local box = Instance.new("SelectionBox")
+                    box.Adornee = part
+                    box.Parent = part
+                    box.LineThickness = 0.05 
+                    box.Transparency = 0
+                    table.insert(activeSelectionBoxes, box)
+                else
+                    part.Transparency = 1
+                end
+            else
+                part.Transparency = 0
+            end
+        end
+    end
+end
+
+pickColorBtn.MouseButton1Click:Connect(function()
+    if not imageContainer then 
+        statusLabel.Text = "Spawn image first!"
+        return 
+    end
+    
+    isPickingColor = not isPickingColor
+    
+    if isPickingColor then
+        pickColorBtn.Text = "Click Block..."
+        pickColorBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+        
+        pickerConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+            if gameProcessed then return end
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                
+                local camera = workspace.CurrentCamera
+                local mouseLocation = UserInputService:GetMouseLocation()
+                local unitRay = camera:ViewportPointToRay(mouseLocation.X, mouseLocation.Y)
+                
+                local params = RaycastParams.new()
+                params.FilterType = Enum.RaycastFilterType.Include
+                params.FilterDescendantsInstances = {imageContainer}
+                
+                local result = workspace:Raycast(unitRay.Origin, unitRay.Direction * 500, params)
+                
+                if result and result.Instance then
+                    applyFilter(result.Instance.Color)
+                    isPickingColor = false
+                    if pickerConnection then pickerConnection:Disconnect() pickerConnection = nil end
+                end
+            end
+        end)
+    else
+        pickColorBtn.Text = "Pick Color"
+        pickColorBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        if pickerConnection then pickerConnection:Disconnect() pickerConnection = nil end
+    end
+end)
+
+showAllBtn.MouseButton1Click:Connect(function()
+    applyFilter(nil)
+    isPickingColor = false
+    if pickerConnection then pickerConnection:Disconnect() pickerConnection = nil end
+end)
+
+-- ============================================================================
+-- POSITIONING LOGIC
+-- ============================================================================
+
+local function getMouseHitPosition()
+    local camera = workspace.CurrentCamera
+    local mouseLocation = UserInputService:GetMouseLocation()
+    local unitRay = camera:ViewportPointToRay(mouseLocation.X, mouseLocation.Y)
+    
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = {player.Character, ghostPart, previewPart, imageContainer}
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    
+    local rayResult = workspace:Raycast(unitRay.Origin, unitRay.Direction * 500, params)
+    
+    if rayResult then
+        local blockSize, moveSnap = getSettings()
+        local hitPart = rayResult.Instance
+        local hitPos = rayResult.Position
+        local normal = rayResult.Normal
+        
+        local localHit = hitPart.CFrame:PointToObjectSpace(hitPos)
+        local snappedX = math.round(localHit.X / moveSnap) * moveSnap
+        local snappedY = math.round(localHit.Y / moveSnap) * moveSnap
+        local snappedZ = math.round(localHit.Z / moveSnap) * moveSnap
+        local snappedWorldPos = hitPart.CFrame:PointToWorldSpace(Vector3.new(snappedX, snappedY, snappedZ))
+        
+        local finalPos = snappedWorldPos + (normal * (blockSize / 2))
+        return finalPos
+    end
+    return nil
+end
+
+local function updateGhost()
+    local pos = getMouseHitPosition()
+    if pos then
+        cachedStartPos = pos
+        if ghostPart then ghostPart.Position = pos end
+    end
+end
+
+posButton.MouseButton1Click:Connect(function()
+    isPositioning = not isPositioning
+    
+    if isPositioning then
+        posButton.Text = "Double Tap to Set"
+        posButton.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+        
+        local blockSize, _ = getSettings()
+        if not ghostPart then
+            ghostPart = Instance.new("Part")
+            ghostPart.Name = "GhostAnchor"
+            ghostPart.Size = Vector3.new(blockSize, blockSize, blockSize)
+            ghostPart.Color = Color3.fromRGB(0, 255, 0)
+            ghostPart.Transparency = 0.5
+            ghostPart.Material = Enum.Material.Neon
+            ghostPart.Anchored = true
+            ghostPart.CanCollide = false
+            ghostPart.Parent = workspace
+            if cachedStartPos then ghostPart.Position = cachedStartPos end
+        end
+        
+        local lastTapTime = 0
+        positionConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+            if gameProcessed then return end
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                local currTime = tick()
+                if (currTime - lastTapTime) < 0.3 then
+                    updateGhost()
+                end
+                lastTapTime = currTime
+            end
+        end)
+    else
+        posButton.Text = "Set Position: OFF (Locked)"
+        posButton.BackgroundColor3 = Color3.fromRGB(100, 100, 60)
+        if ghostPart then ghostPart:Destroy() ghostPart = nil end
+        if positionConnection then positionConnection:Disconnect() positionConnection = nil end
+    end
+end)
+
+onButton.MouseButton1Click:Connect(spawnImage)
+offButton.MouseButton1Click:Connect(clearImage)
+
+destroyButton.MouseButton1Click:Connect(function()
+    clearImage()
+    while isClearing do task.wait() end
+    screenGui:Destroy()
+end)
