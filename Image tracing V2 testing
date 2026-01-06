@@ -14,7 +14,7 @@ player:WaitForChild("PlayerGui")
 local screenGui = Instance.new("ScreenGui")
 screenGui.Parent = player.PlayerGui
 screenGui.ResetOnSpawn = false
-screenGui.Name = "BABFT_RainbowGlow_Loader_V3"
+screenGui.Name = "BABFT_RainbowGlow_Loader_V3_Cached"
 
 -- Main Frame
 local frame = Instance.new("Frame")
@@ -253,7 +253,7 @@ textBox.PlaceholderText = "Paste Links (Newlines)..."
 textBox.Text = ""
 textBox.TextColor3 = Color3.fromRGB(255, 255, 255)
 textBox.TextScaled = true
-textBox.ClearTextOnFocus = true -- CHANGED: Now clears when you click it
+textBox.ClearTextOnFocus = true
 textBox.MultiLine = true
 
 local onButton = Instance.new("TextButton")
@@ -310,7 +310,7 @@ local isPreviewing = false
 local isPositioning = false 
 local useShadows = false 
 local isPickingColor = false 
-local autoLoadOnSwitch = false -- NEW: Tracks if we should auto-spawn
+local autoLoadOnSwitch = false
 
 local currentRotation = 0 
 local cachedGrid = nil 
@@ -322,6 +322,9 @@ local pickerConnection = nil
 -- URL List Logic
 local urlList = {}
 local currentUrlIndex = 1
+
+-- [FIX] Data Cache Table
+local dataCache = {}
 
 -- ============================================================================
 -- GLOBAL ANIMATION LOOP (Rainbow)
@@ -424,7 +427,7 @@ end
 local function clearImage()
     if isClearing then return end
     isSpawning = false
-    autoLoadOnSwitch = false -- Stop auto-loading if user clears manually
+    autoLoadOnSwitch = false
     
     if previewPart then previewPart:Destroy() previewPart = nil end
     isPreviewing = false
@@ -470,6 +473,11 @@ local function clearImage()
 end
 
 local function parseToGrid(rawInput)
+    -- [FIX] Check Cache First
+    if dataCache[rawInput] then
+        return dataCache[rawInput], "Loaded from Cache"
+    end
+
     local finalJson = rawInput
     local foundUrl = rawInput:match("https?://[%w-_%.%?%.:/%+=&]+")
     
@@ -512,7 +520,12 @@ local function parseToGrid(rawInput)
         end
     end
 
-    return {grid = grid, minX = minX, maxX = maxX, minY = minY, maxY = maxY}, "Success"
+    local resultData = {grid = grid, minX = minX, maxX = maxX, minY = minY, maxY = maxY}
+    
+    -- [FIX] Save to Cache
+    dataCache[rawInput] = resultData
+
+    return resultData, "Success"
 end
 
 -- ============================================================================
@@ -610,6 +623,13 @@ local function loadCurrentSelection()
         statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
         return false
     end
+    
+    -- If cached, show that briefly
+    if msg == "Loaded from Cache" then
+        statusLabel.Text = "Ready (Cached)"
+        statusLabel.TextColor3 = Color3.fromRGB(0, 255, 255)
+    end
+    
     cachedGrid = data
     return true
 end
@@ -639,7 +659,7 @@ rotateButton.MouseButton1Click:Connect(function()
 end)
 
 -- ============================================================================
--- SPAWNING LOGIC (Forward Declaration needed for Switcher)
+-- SPAWNING LOGIC
 -- ============================================================================
 
 local function spawnImage()
@@ -655,7 +675,7 @@ local function spawnImage()
     end
     
     isSpawning = true
-    autoLoadOnSwitch = true -- Enable auto-load since user manually spawned
+    autoLoadOnSwitch = true 
     
     statusLabel.Text = "Meshing..."
     statusLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
