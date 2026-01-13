@@ -24,6 +24,7 @@ local RightButton = Instance.new("TextButton")
 local AntiLockButton = Instance.new("TextButton")
 local EngineButton = Instance.new("TextButton")
 local GlideButton = Instance.new("TextButton") 
+local SpeedometerLabel = Instance.new("TextLabel") 
 
 -- Left Side Movement GUI
 local LeftSideGui = Instance.new("ScreenGui")
@@ -54,6 +55,15 @@ local isGlideModeOn = false
 local isYawLocked = false
 local currentVelocityVector = Vector3.new(0, 0, 0) 
 local lastVehiclePart = nil 
+
+-- Physics / Speed Variables
+local currentSpeedVal = 0 
+local maxGlidingSpeed = 400 
+local glideDrag = 0.05 
+local glideGravityAccel = 1.5 
+local glideGravityDecel = 0.2 
+local glideBrakeForce = 2.0 
+local stallSpeed = 10 
 
 -- Helicopter-specific
 local isHelicopterOn = false
@@ -208,13 +218,31 @@ local function initializeGUI()
     ControllerFrame.Parent = ControllerGui
     ControllerFrame.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
     ControllerFrame.Position = UDim2.new(0.78, -75, 0.5, -75)
-    ControllerFrame.Size = UDim2.new(0, 150, 0, 150)
+    ControllerFrame.Size = UDim2.new(0, 150, 0, 150) 
     ControllerFrame.Active = false
     ControllerFrame.Draggable = false
 
     local ControllerCorner = Instance.new("UICorner")
     ControllerCorner.CornerRadius = UDim.new(0.5, 0)
     ControllerCorner.Parent = ControllerFrame
+
+    -- Speedometer Label
+    SpeedometerLabel.Parent = ControllerFrame
+    SpeedometerLabel.BackgroundTransparency = 1
+    SpeedometerLabel.Size = UDim2.new(1, 0, 0, 20)
+    SpeedometerLabel.Position = UDim2.new(0, 0, 0.88, 0) 
+    SpeedometerLabel.Font = Enum.Font.GothamBold
+    SpeedometerLabel.Text = "0 SPS"
+    SpeedometerLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+    SpeedometerLabel.TextScaled = true
+    SpeedometerLabel.ZIndex = 10 
+    
+    local SpeedStroke = Instance.new("UIStroke")
+    SpeedStroke.Parent = SpeedometerLabel
+    SpeedStroke.Thickness = 2
+    SpeedStroke.Color = Color3.fromRGB(0, 0, 0)
+    
+    originalButtonPositions[SpeedometerLabel] = SpeedometerLabel.Position
 
     ForwardButton.Parent = ControllerFrame
     ForwardButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
@@ -425,6 +453,7 @@ local function DisableFlight()
     
     isYawLocked = false
     currentVelocityVector = Vector3.new(0, 0, 0)
+    currentSpeedVal = 0
     isHelicopterOn = false
     HelicopterButton.Text = "Heli"
     heliTargetY = nil
@@ -641,28 +670,81 @@ local function handleInput(dt)
         local isRotating = table.find(movementDirection, "up") or table.find(movementDirection, "down") or
                            table.find(movementDirection, "left") or table.find(movementDirection, "right") or
                            table.find(movementDirection, "rotateLeft") or table.find(movementDirection, "rotateRight")
+        
+        local isYawing = table.find(movementDirection, "rotateLeft") or table.find(movementDirection, "rotateRight")
+        local isBraking = table.find(movementDirection, "backward")
 
-        local speed = tonumber(SpeedTextBox.Text) or 1
+        local speedMult = tonumber(SpeedTextBox.Text) or 1
         local targetVelocity = Vector3.new()
         local movementCFrame = gyro.CFrame
 
         if not isEngineOn and not isHelicopterOn then
             if isGlideModeOn then
-                -- REALISTIC GLIDE PHYSICS
-                VelocityHandler.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-                GyroHandler.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-                
-                -- Calculate pitch factor: Pitching up (Y > 0) slows you down. Pitching down (Y < 0) speeds you up.
-                local pitch = gyro.CFrame.LookVector.Y
-                local glideSpeedFactor = math.clamp(1 - pitch, 0.1, 2.5) -- 0.1 speed if nose up, 2.5x if nose down
-                
-                local glideForward = gyro.CFrame.LookVector * (forwardVelocity * glideSpeedFactor)
-                local glideSink = Vector3.new(0, -15, 0) -- Constant slow sink
-                targetVelocity = (glideForward + glideSink) * speed
+                -- STALL CHECK: If speed is too low, physics takes over (falls like a rock)
+                if currentSpeedVal < stallSpeed then
+                    VelocityHandler.MaxForce = Vector3.new(0, 0, 0)
+                    VelocityHandler.Velocity = Vector3.new(0, 0, 0)
+                    currentSpeedVal = 0 
+                    
+                    -- Allow tumbling if stalling
+                    if isRotating then
+                        GyroHandler.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+                    else
+                        GyroHandler.MaxTorque = Vector3.new(0, 0, 0)
+                        gyro.CFrame = flightPart.CFrame
+                    end
+                    
+                    -- Recover speed if diving while stalled
+                    local pitch = gyro.CFrame.LookVector.Y
+                    if pitch < 0 and flightPart.Velocity.Y < -2 then
+                         currentSpeedVal = currentSpeedVal + (math.abs(pitch) * glideGravityAccel)
+                    end
+                else
+                    -- REALISTIC GLIDE PHYSICS
+                    VelocityHandler.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+                    GyroHandler.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+                    
+                    -- Calculate Pitch (LookVector.Y)
+                    local pitch = gyro.CFrame.LookVector.Y
+                    
+                    -- Physics: Change speed based on pitch
+                    if pitch < 0 then
+                        -- Diving: Gain speed ONLY if actually falling
+                        if flightPart.Velocity.Y < -2 then
+                            currentSpeedVal = currentSpeedVal + (math.abs(pitch) * glideGravityAccel)
+                        end
+                    else
+                        -- Climbing: Lose speed based on steepness
+                        currentSpeedVal = currentSpeedVal - (pitch * glideGravityDecel)
+                    end
+                    
+                    -- Drag: Always lose a bit of speed
+                    currentSpeedVal = currentSpeedVal - glideDrag
+                    
+                    -- Brake: Lose more speed if holding Slow
+                    if isBraking then
+                        currentSpeedVal = currentSpeedVal - glideBrakeForce
+                    end
+                    
+                    -- Clamp Speed
+                    if currentSpeedVal < 0 then currentSpeedVal = 0 end
+                    if currentSpeedVal > maxGlidingSpeed then currentSpeedVal = maxGlidingSpeed end
+                    
+                    -- Apply Velocity
+                    if currentSpeedVal > 0 then
+                        local glideForward = gyro.CFrame.LookVector * currentSpeedVal
+                        local glideSink = Vector3.new(0, -15, 0) 
+                        targetVelocity = glideForward + glideSink
+                    else
+                        VelocityHandler.MaxForce = Vector3.new(0, 0, 0)
+                        targetVelocity = Vector3.new(0, 0, 0)
+                    end
+                end
             else
                 -- PLUMMET MODE: Gravity takes over
                 VelocityHandler.MaxForce = Vector3.new(0, 0, 0)
                 VelocityHandler.Velocity = Vector3.new(0, 0, 0)
+                currentSpeedVal = 0 
                 
                 if isRotating then
                     GyroHandler.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
@@ -677,78 +759,61 @@ local function handleInput(dt)
             GyroHandler.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
             
             if isHelicopterOn then
+                -- (Helicopter logic unchanged)
                 local moveVecHorizontal = Vector3.new()
                 local verticalCorrection = 0
-                
                 for _, direction in ipairs(movementDirection) do
-                    if direction == "forward" then
-                        moveVecHorizontal += movementCFrame.LookVector * forwardVelocity
-                    elseif direction == "backward" then
-                        moveVecHorizontal += -movementCFrame.LookVector * forwardVelocity
-                    elseif direction == "left" then
-                        moveVecHorizontal += movementCFrame.RightVector * -leftVelocity
-                    elseif direction == "right" then
-                        moveVecHorizontal += movementCFrame.RightVector * rightVelocity
-                    end
+                    if direction == "forward" then moveVecHorizontal += movementCFrame.LookVector * forwardVelocity end
+                    if direction == "backward" then moveVecHorizontal += -movementCFrame.LookVector * forwardVelocity end
+                    if direction == "left" then moveVecHorizontal += movementCFrame.RightVector * -leftVelocity end
+                    if direction == "right" then moveVecHorizontal += movementCFrame.RightVector * rightVelocity end
                 end
-                
                 if humanoid.SeatPart then
                     local thumbstickDirection = Vector2.new(0, 0)
                     pcall(function()
                         local controlModule = require(player.PlayerScripts:WaitForChild("PlayerModule"):WaitForChild("ControlModule"))
                         thumbstickDirection = controlModule:GetMoveVector()
                     end)
-                    
                     if thumbstickDirection.Magnitude > 0 then
-                        moveVecHorizontal += (
-                            movementCFrame.RightVector * thumbstickDirection.X * forwardVelocity * 2 +
-                            movementCFrame.LookVector * -thumbstickDirection.Z * forwardVelocity * 2
-                        )
+                        moveVecHorizontal += (movementCFrame.RightVector * thumbstickDirection.X * forwardVelocity * 2 + movementCFrame.LookVector * -thumbstickDirection.Z * forwardVelocity * 2)
                     end
                 end
-                
                 local isMovingUp = table.find(movementDirection, "up")
                 local isMovingDown = table.find(movementDirection, "down")
-                local isVerticalInputActive = isMovingUp or isMovingDown
-
-                if not heliTargetY then
-                    heliTargetY = flightPart.Position.Y
-                end
-
-                if isVerticalInputActive then
-                    if isMovingUp then
-                        verticalCorrection = 50 
-                    elseif isMovingDown then
-                        verticalCorrection = -50
-                    end
-                    heliTargetY = flightPart.Position.Y + verticalCorrection * dt
+                if not heliTargetY then heliTargetY = flightPart.Position.Y end
+                if isMovingUp then verticalCorrection = 50 elseif isMovingDown then verticalCorrection = -50 end
+                if not (isMovingUp or isMovingDown) then
+                    if math.abs(currentVelocityVector.Y) > 1 then heliTargetY = flightPart.Position.Y end
+                    verticalCorrection = (heliTargetY - flightPart.Position.Y) * HELI_P_GAIN 
                 else
-                    if math.abs(currentVelocityVector.Y) > 1 then
-                        heliTargetY = flightPart.Position.Y
-                    end
-                    local currentY = flightPart.Position.Y
-                    verticalCorrection = (heliTargetY - currentY) * HELI_P_GAIN 
+                    heliTargetY = flightPart.Position.Y + verticalCorrection * dt
                 end
-                
                 targetVelocity = Vector3.new(moveVecHorizontal.X, verticalCorrection, moveVecHorizontal.Z)
+                currentSpeedVal = targetVelocity.Magnitude 
                 
             elseif isEngineOn then 
                 -- AEROPLANE MOVEMENT
-                targetVelocity += movementCFrame.LookVector * forwardVelocity
+                local targetSpeed = forwardVelocity * speedMult
                 
-                for _, direction in ipairs(movementDirection) do
-                    if direction == "forward" then
-                        targetVelocity += movementCFrame.LookVector * forwardVelocity 
-                    elseif direction == "backward" then
-                        targetVelocity += -movementCFrame.LookVector * (forwardVelocity * 0.5) 
-                    end
+                if table.find(movementDirection, "forward") then
+                    targetSpeed = targetSpeed * 2
+                elseif table.find(movementDirection, "backward") then
+                    targetSpeed = targetSpeed * 0.5
                 end
+                
+                currentSpeedVal = currentSpeedVal + (targetSpeed - currentSpeedVal) * 0.1
+                targetVelocity = movementCFrame.LookVector * currentSpeedVal
             end
-            targetVelocity *= speed
         end
         
-        VelocityHandler.Velocity = targetVelocity
-        currentVelocityVector = targetVelocity 
+        -- Apply Final Velocity
+        if isEngineOn or (isGlideModeOn and currentSpeedVal >= stallSpeed) or isHelicopterOn then
+            VelocityHandler.Velocity = targetVelocity
+            currentVelocityVector = targetVelocity 
+        end
+        
+        -- Update Speedometer
+        SpeedometerLabel.Text = math.floor(currentSpeedVal) .. " SPS"
         
         -- === ROTATION LOGIC ===
         for _, direction in ipairs(movementDirection) do
@@ -759,24 +824,20 @@ local function handleInput(dt)
             end
         end
 
-        local isPitching = false
+        local isPitching = table.find(movementDirection, "up") or table.find(movementDirection, "down")
         if table.find(movementDirection, "up") and gyro then
             gyro.CFrame = gyro.CFrame * CFrame.Angles(math.rad(rotationSpeed), 0, 0)
-            isPitching = true
         end
         if table.find(movementDirection, "down") and gyro then
             gyro.CFrame = gyro.CFrame * CFrame.Angles(math.rad(-rotationSpeed), 0, 0)
-            isPitching = true
         end
 
-        local isRolling = false
+        local isRolling = table.find(movementDirection, "left") or table.find(movementDirection, "right")
         if table.find(movementDirection, "left") and gyro then
             gyro.CFrame = gyro.CFrame * CFrame.Angles(0, 0, math.rad(rotationSpeed))
-            isRolling = true
         end
         if table.find(movementDirection, "right") and gyro then
             gyro.CFrame = gyro.CFrame * CFrame.Angles(0, 0, math.rad(-rotationSpeed))
-            isRolling = true
         end
 
         if gyro then
@@ -805,7 +866,8 @@ local function handleInput(dt)
                 
             elseif not isAntiLockOn and (isEngineOn or isGlideModeOn) then
                 -- A-L Off: Follow Camera if Engine is On OR Glide is On
-                if not isPitching and not isRolling then
+                -- FIXED: Added check for isYawing and currentSpeedVal > 0
+                if not isPitching and not isRolling and not isYawing and currentSpeedVal > 0 then
                     local camera = workspace.CurrentCamera
                     local camCFrame = camera.CFrame
                     
@@ -973,10 +1035,11 @@ local function initialize()
             MinimizeButton.Text = "⇩"
             originalMainFramePosition = MainFrame.Position
             
+            -- FIXED: Keeps the top-left anchor instead of centering
             MainFrame:TweenSizeAndPosition(
                 UDim2.new(0, 200, 0, 50), 
                 UDim2.new(MainFrame.Position.X.Scale, MainFrame.Position.X.Offset, 
-                         MainFrame.Position.Y.Scale, MainFrame.Position.Y.Offset + (MainFrame.Size.Y.Offset - 50) / 2), 
+                         MainFrame.Position.Y.Scale, MainFrame.Position.Y.Offset), 
                 Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.3, true
             )
             
