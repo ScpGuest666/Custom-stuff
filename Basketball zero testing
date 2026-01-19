@@ -1,0 +1,356 @@
+-- Wait for player to load
+local PlayerService = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local player = PlayerService.LocalPlayer
+if not player then
+    player = PlayerService.PlayerAdded:Wait()
+end
+
+-- Wait for player GUI to be ready
+player:WaitForChild("PlayerGui")
+
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = player.PlayerGui
+screenGui.ResetOnSpawn = false
+screenGui.Name = "GuiVersion6_CircleMode"
+
+-- Create Main Frame
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+frame.Size = UDim2.new(0, 200, 0, 140) -- Taller to fit new layout
+frame.Position = UDim2.new(0.3, 0, 0.5, -70)
+frame.Active = true
+
+-- ==============================================================================
+-- UI HELPER FUNCTIONS (Anti-Shrink & Drag)
+-- ==============================================================================
+
+local function makeDraggable(guiObject)
+    local dragging, dragInput, dragStart, startPos
+    guiObject.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = guiObject.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    guiObject.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            guiObject.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+end
+
+makeDraggable(frame)
+
+local function createSafeButton(parent, position, size, text, defaultColor)
+    local container = Instance.new("Frame")
+    container.Parent = parent
+    container.Position = position
+    container.Size = size
+    container.BackgroundColor3 = defaultColor
+    container.BorderSizePixel = 0
+    
+    local label = Instance.new("TextLabel")
+    label.Parent = container
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = text
+    label.TextColor3 = Color3.fromRGB(255, 255, 255)
+    label.TextScaled = true
+    label.Font = Enum.Font.SourceSansBold
+    
+    local button = Instance.new("TextButton")
+    button.Parent = container
+    button.Size = UDim2.new(1, 0, 1, 0)
+    button.BackgroundTransparency = 1
+    button.Text = ""
+    button.ZIndex = 10
+    
+    button:GetPropertyChangedSignal("Size"):Connect(function()
+        if button.Size ~= UDim2.new(1, 0, 1, 0) then button.Size = UDim2.new(1, 0, 1, 0) end
+    end)
+    
+    return container, button, label
+end
+
+-- Create Buttons
+-- 1. Power Button (Toggle On/Off)
+local powerFrame, powerBtn, powerLabel = createSafeButton(frame, UDim2.new(0, 20, 0, 20), UDim2.new(0, 160, 0, 30), "Power: OFF", Color3.fromRGB(200, 0, 0))
+
+-- 2. Circle Button (Toggle Mode)
+local circleFrame, circleBtn, circleLabel = createSafeButton(frame, UDim2.new(0, 20, 0, 60), UDim2.new(0, 160, 0, 30), "Circle: OFF", Color3.fromRGB(80, 80, 80))
+
+-- 3. Destroy Button
+local destroyFrame, destroyBtn = createSafeButton(frame, UDim2.new(0, 20, 0, 100), UDim2.new(0, 160, 0, 30), "Destroy", Color3.fromRGB(40, 40, 40))
+
+-- Status Label
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = frame
+statusLabel.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+statusLabel.Size = UDim2.new(0, 200, 0, 30)
+statusLabel.Position = UDim2.new(0, 0, 0, -30)
+statusLabel.Text = "Status: Offline"
+statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+statusLabel.TextScaled = true
+
+-- ==============================================================================
+-- GAME LOGIC
+-- ==============================================================================
+
+local HOOPS = {
+    Home = Vector3.new(146.76, 17.33, -297.95),
+    Away = Vector3.new(-146.53, 15.97, -297.43)
+}
+
+local RANDOM_PLATFORMS = {
+    Vector3.new(-152.67, 78.38, -376.80),
+    Vector3.new(-152.42, 79.54, -217.39),
+    Vector3.new(152.90, 80.31, -217.55),
+    Vector3.new(152.82, 79.40, -377.51),
+    Vector3.new(0.60, 79.16, -293.63)
+}
+
+-- Settings
+local basketballName = "Basketball"
+local moveSpeed = 200
+local dunkApproachSpeed = 150
+local dunkDownSpeed = 100
+local hoverHeight = 20
+local bounceHeight = 12
+local bounceSpeed = 50
+local requiredBounces = 2
+
+-- State Variables
+local isSystemActive = false
+local isCircleMode = false -- False = Dunk Mode, True = Pattern Mode
+local currentState = "IDLE" 
+local currentTargetPos = nil
+local currentBounces = 0
+local bounceDirection = 1
+local lastBounceCheckTime = 0
+local lastPatternSwitchTime = 0
+
+local activeConnections = {}
+
+local function findBasketball()
+    local ball = workspace:FindFirstChild(basketballName)
+    if ball and ball:IsA("BasePart") then return ball end
+    for _, tool in ipairs(workspace:GetChildren()) do
+        if tool:IsA("Tool") and tool.Name == basketballName then
+            local handle = tool:FindFirstChild("Handle")
+            if handle and handle:IsA("BasePart") then return handle end
+        end
+    end
+    return nil
+end
+
+local function getEnemyHoop()
+    local myTeamName = player.Team and player.Team.Name or "Neutral"
+    if myTeamName == "Home" then return HOOPS.Away else return HOOPS.Home end
+end
+
+local function getNextRandomPlatform(currentPos)
+    local newPos
+    repeat
+        local index = math.random(1, #RANDOM_PLATFORMS)
+        newPos = RANDOM_PLATFORMS[index]
+    until newPos ~= currentPos
+    return newPos
+end
+
+local function controlBall()
+    if not isSystemActive then return end
+    
+    local ball = findBasketball()
+    if not ball then
+        statusLabel.Text = "Status: Ball Missing"
+        statusLabel.TextColor3 = Color3.fromRGB(255, 150, 0)
+        return
+    end
+
+    ball.Anchored = false
+    ball.CanCollide = true
+
+    -- ============================================================
+    -- MODE 1: CIRCLE MODE (Random Pattern)
+    -- ============================================================
+    if isCircleMode then
+        statusLabel.Text = "Status: Circling Platforms"
+        statusLabel.TextColor3 = Color3.fromRGB(0, 255, 255)
+        
+        -- If we were dunking, reset to pattern state
+        if currentState == "DUNKING" or currentState == "BOUNCING" or currentState == "APPROACH_HOOP" then
+            currentState = "PATTERN"
+            currentTargetPos = nil
+        end
+
+        if currentState == "PATTERN" or currentState == "IDLE" then
+            if not currentTargetPos then
+                currentTargetPos = getNextRandomPlatform(nil)
+                lastPatternSwitchTime = tick()
+            end
+
+            local dist = (ball.Position - currentTargetPos).Magnitude
+            if dist < 20 or (tick() - lastPatternSwitchTime > 3) then
+                currentTargetPos = getNextRandomPlatform(currentTargetPos)
+                lastPatternSwitchTime = tick()
+            end
+
+            local direction = (currentTargetPos - ball.Position).Unit
+            ball.Velocity = direction * moveSpeed
+            ball.RotVelocity = Vector3.new(10, 10, 10)
+        end
+
+    -- ============================================================
+    -- MODE 2: DUNK MODE (Go to Hoop)
+    -- ============================================================
+    else
+        statusLabel.Text = "Status: Dunking on Enemy"
+        statusLabel.TextColor3 = Color3.fromRGB(255, 0, 255)
+
+        -- If we were circling, switch to approach
+        if currentState == "PATTERN" or currentState == "IDLE" then
+            currentState = "APPROACH_HOOP"
+            currentTargetPos = getEnemyHoop()
+        end
+
+        if currentState == "APPROACH_HOOP" then
+            local hoverPos = currentTargetPos + Vector3.new(0, hoverHeight, 0)
+            local direction = (hoverPos - ball.Position).Unit
+            local dist = (hoverPos - ball.Position).Magnitude
+
+            ball.Velocity = direction * dunkApproachSpeed
+            ball.RotVelocity = Vector3.zero
+
+            -- Snap and Dunk
+            if dist < 8 then
+                ball.Velocity = Vector3.zero
+                ball.RotVelocity = Vector3.zero
+                ball.CFrame = CFrame.new(currentTargetPos.X, hoverPos.Y, currentTargetPos.Z)
+                currentState = "DUNKING"
+            end
+
+        elseif currentState == "DUNKING" then
+            ball.Velocity = Vector3.new(0, -dunkDownSpeed, 0)
+            ball.RotVelocity = Vector3.zero 
+            
+            if ball.Position.Y <= currentTargetPos.Y then
+                currentState = "BOUNCING"
+                currentBounces = 0
+                bounceDirection = 1
+                lastBounceCheckTime = tick()
+            end
+
+        elseif currentState == "BOUNCING" then
+            local targetY = currentTargetPos.Y + (bounceDirection == 1 and bounceHeight or 0)
+            ball.Velocity = Vector3.new(0, bounceSpeed * bounceDirection, 0)
+            local currentPos = ball.Position
+            ball.CFrame = CFrame.new(currentTargetPos.X, currentPos.Y, currentTargetPos.Z)
+            
+            local currentTime = tick()
+            if currentTime - lastBounceCheckTime > 0.15 then
+                local reachedTop = (bounceDirection == 1 and ball.Position.Y >= targetY)
+                local reachedBot = (bounceDirection == -1 and ball.Position.Y <= targetY)
+                
+                if reachedTop or reachedBot then
+                    lastBounceCheckTime = currentTime
+                    if bounceDirection == -1 then
+                        currentBounces = currentBounces + 1
+                    end
+                    
+                    if currentBounces >= requiredBounces then
+                        -- REPEAT THE DUNK (Continuous Scoring)
+                        currentState = "APPROACH_HOOP"
+                    else
+                        bounceDirection = bounceDirection * -1
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- ==============================================================================
+-- BUTTON HANDLERS
+-- ==============================================================================
+
+local function togglePower()
+    isSystemActive = not isSystemActive
+    
+    if isSystemActive then
+        -- Turned ON
+        powerLabel.Text = "Power: ON"
+        powerFrame.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+        statusLabel.Text = "Status: Online"
+        statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+        
+        currentState = "IDLE"
+        currentTargetPos = nil
+        
+        -- Start Loop
+        local loop = RunService.Heartbeat:Connect(controlBall)
+        table.insert(activeConnections, loop)
+    else
+        -- Turned OFF
+        powerLabel.Text = "Power: OFF"
+        powerFrame.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+        statusLabel.Text = "Status: Offline"
+        statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+        
+        -- Stop Physics
+        local ball = findBasketball()
+        if ball then
+            ball.Velocity = Vector3.zero
+            ball.RotVelocity = Vector3.zero
+        end
+        
+        -- Disconnect Loop
+        for i, connection in ipairs(activeConnections) do
+            if connection then connection:Disconnect() end
+        end
+        activeConnections = {}
+    end
+end
+
+local function toggleCircle()
+    isCircleMode = not isCircleMode
+    
+    if isCircleMode then
+        circleLabel.Text = "Circle: ON"
+        circleFrame.BackgroundColor3 = Color3.fromRGB(0, 150, 255) -- Blue for Pattern
+    else
+        circleLabel.Text = "Circle: OFF"
+        circleFrame.BackgroundColor3 = Color3.fromRGB(80, 80, 80) -- Gray for Dunk
+    end
+    
+    -- Reset state to force immediate behavior change
+    currentState = "IDLE"
+    currentTargetPos = nil
+end
+
+local function cleanup()
+    if isSystemActive then togglePower() end
+    screenGui:Destroy()
+end
+
+-- Connect Buttons
+powerBtn.MouseButton1Click:Connect(togglePower)
+circleBtn.MouseButton1Click:Connect(toggleCircle)
+destroyBtn.MouseButton1Click:Connect(cleanup)
+
+player.CharacterRemoving:Connect(function()
+    if isSystemActive then togglePower() end
+end)
