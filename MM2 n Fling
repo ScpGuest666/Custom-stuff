@@ -1,0 +1,613 @@
+-- Wait for player to load
+local PlayerService = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local player = PlayerService.LocalPlayer
+if not player then
+    player = PlayerService.PlayerAdded:Wait()
+end
+
+-- Wait for player GUI to be ready
+player:WaitForChild("PlayerGui")
+
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = player.PlayerGui
+screenGui.ResetOnSpawn = false
+screenGui.Name = "GuiVersion2"
+
+-- Create Frame
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+frame.Size = UDim2.new(0, 200, 0, 100)
+frame.Position = UDim2.new(0.3, 0, 0.5, -50)
+frame.Active = true
+frame.Draggable = true
+
+-- Create On Button
+local onButton = Instance.new("TextButton")
+onButton.Parent = frame
+onButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+onButton.Size = UDim2.new(0, 80, 0, 30)
+onButton.Position = UDim2.new(0, 10, 0, 20)
+onButton.Text = "On"
+onButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+onButton.TextScaled = true
+
+-- Create Off Button
+local offButton = Instance.new("TextButton")
+offButton.Parent = frame
+offButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+offButton.Size = UDim2.new(0, 80, 0, 30)
+offButton.Position = UDim2.new(0, 110, 0, 20)
+offButton.Text = "Off"
+offButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+offButton.TextScaled = true
+
+-- Create Destroy Button
+local destroyButton = Instance.new("TextButton")
+destroyButton.Parent = frame
+destroyButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+destroyButton.Size = UDim2.new(0, 160, 0, 30)
+destroyButton.Position = UDim2.new(0, 20, 0, 60)
+destroyButton.Text = "Destroy"
+destroyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+destroyButton.TextScaled = true
+
+-- Create Status Indicator
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = frame
+statusLabel.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+statusLabel.Size = UDim2.new(0, 200, 0, 30)
+statusLabel.Position = UDim2.new(0, 0, 0, -30)
+statusLabel.Text = "Status: Offline"
+statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+statusLabel.TextScaled = true
+
+-- Global Variables
+local activeConnections = {}
+local heartbeatConn
+local renderSteppedConn
+local steppedConn
+local savedVelocity = Vector3.zero
+local savedRotVelocity = Vector3.zero
+
+-- Function to set status to Online (Downward Fling ON)
+local function setStatusOnline()
+    if heartbeatConn or steppedConn then return end
+    
+    statusLabel.Text = "Status: Online"
+    statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+    
+    local char = player.Character
+    if char then
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            -- FIX: Disable states that cause the animation seizure and infinite jump
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Freefall, false)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Landed, false)
+        end
+    end
+    
+    heartbeatConn = RunService.Heartbeat:Connect(function()
+        local currentChar = player.Character
+        if currentChar and currentChar:FindFirstChild("HumanoidRootPart") then
+            local hrp = currentChar.HumanoidRootPart
+            savedVelocity = hrp.AssemblyLinearVelocity
+            savedRotVelocity = hrp.AssemblyAngularVelocity
+            
+            -- Fling downward
+            hrp.AssemblyLinearVelocity = Vector3.new(-9e9, -9e9, -9e9)
+        end
+    end)
+    
+    -- FIX: Restore velocity before the frame renders to hide it from the client's camera/input
+    renderSteppedConn = RunService.RenderStepped:Connect(function()
+        local currentChar = player.Character
+        if currentChar and currentChar:FindFirstChild("HumanoidRootPart") then
+            local hrp = currentChar.HumanoidRootPart
+            hrp.AssemblyLinearVelocity = savedVelocity
+            hrp.AssemblyAngularVelocity = savedRotVelocity
+        end
+    end)
+    
+    steppedConn = RunService.Stepped:Connect(function()
+        local currentChar = player.Character
+        if currentChar and currentChar:FindFirstChild("HumanoidRootPart") then
+            local hrp = currentChar.HumanoidRootPart
+            -- Restore normal velocity for physics simulation
+            hrp.AssemblyLinearVelocity = savedVelocity
+            hrp.AssemblyAngularVelocity = savedRotVelocity
+        end
+    end)
+    
+    table.insert(activeConnections, heartbeatConn)
+    table.insert(activeConnections, renderSteppedConn)
+    table.insert(activeConnections, steppedConn)
+end
+
+-- Function to set status to Offline (Fling OFF & Stabilize)
+local function setStatusOffline()
+    statusLabel.Text = "Status: Offline"
+    statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+    
+    if heartbeatConn then heartbeatConn:Disconnect() heartbeatConn = nil end
+    if renderSteppedConn then renderSteppedConn:Disconnect() renderSteppedConn = nil end
+    if steppedConn then steppedConn:Disconnect() steppedConn = nil end
+    
+    local char = player.Character
+    if char then
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            -- Re-enable normal humanoid states
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Freefall, true)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Landed, true)
+        end
+        
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            -- Zero out any residual momentum
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+            hrp.CFrame = hrp.CFrame 
+        end
+    end
+end
+
+-- Cleanup function
+local function cleanup()
+    setStatusOffline()
+    
+    for _, connection in pairs(activeConnections) do
+        if connection and connection.Disconnect then
+            connection:Disconnect()
+        end
+    end
+    activeConnections = {}
+    
+    if screenGui then
+        screenGui:Destroy()
+    end
+end
+
+-- Button Functions
+onButton.MouseButton1Click:Connect(function()
+    setStatusOnline()
+end)
+
+offButton.MouseButton1Click:Connect(function()
+    setStatusOffline()
+end)
+
+destroyButton.MouseButton1Click:Connect(function()
+    cleanup()
+end)
+
+
+
+-- section 2 ⚠️
+-- Wait for player to load
+local PlayerService = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local player = PlayerService.LocalPlayer
+if not player then
+    player = PlayerService.PlayerAdded:Wait()
+end
+
+-- Wait for player GUI to be ready
+player:WaitForChild("PlayerGui")
+
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+local success = pcall(function()
+    local CoreGui = game:GetService("CoreGui")
+    screenGui.Parent = CoreGui
+end)
+if not success then
+    screenGui.Parent = player.PlayerGui
+end
+screenGui.ResetOnSpawn = false
+screenGui.Name = "GuiVersion2"
+
+-- Create Frame (Size strictly unchanged: 200x100)
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+frame.Size = UDim2.new(0, 200, 0, 100) 
+frame.Position = UDim2.new(0.3, 0, 0.5, -50)
+frame.Active = true
+frame.Draggable = true
+
+-- Create On Button
+local onButton = Instance.new("TextButton")
+onButton.Parent = frame
+onButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+onButton.Size = UDim2.new(0, 55, 0, 30)
+onButton.Position = UDim2.new(0, 10, 0, 15)
+onButton.Text = "On"
+onButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+onButton.TextScaled = true
+
+-- Create Off Button
+local offButton = Instance.new("TextButton")
+offButton.Parent = frame
+offButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+offButton.Size = UDim2.new(0, 55, 0, 30)
+offButton.Position = UDim2.new(0, 72, 0, 15)
+offButton.Text = "Off"
+offButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+offButton.TextScaled = true
+
+-- Create Bring All Button
+local bringButton = Instance.new("TextButton")
+bringButton.Parent = frame
+bringButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+bringButton.Size = UDim2.new(0, 55, 0, 30)
+bringButton.Position = UDim2.new(0, 135, 0, 15)
+bringButton.Text = "Bring All"
+bringButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+bringButton.TextScaled = true
+
+-- Create Totem Button (New)
+local totemButton = Instance.new("TextButton")
+totemButton.Parent = frame
+totemButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+totemButton.Size = UDim2.new(0, 85, 0, 30)
+totemButton.Position = UDim2.new(0, 10, 0, 55)
+totemButton.Text = "Totem: Off"
+totemButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+totemButton.TextScaled = true
+
+-- Create Destroy Button (Resized to fit next to Totem)
+local destroyButton = Instance.new("TextButton")
+destroyButton.Parent = frame
+destroyButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+destroyButton.Size = UDim2.new(0, 85, 0, 30)
+destroyButton.Position = UDim2.new(0, 105, 0, 55)
+destroyButton.Text = "Destroy"
+destroyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+destroyButton.TextScaled = true
+
+-- Create Status Indicator
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = frame
+statusLabel.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+statusLabel.Size = UDim2.new(0, 200, 0, 30)
+statusLabel.Position = UDim2.new(0, 0, 0, -30)
+statusLabel.Text = "Status: Offline"
+statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+statusLabel.TextScaled = true
+
+-- Global Variables
+local activeConnections = {}
+local espObjects = {}
+local espEnabled = false
+local originalSheriff = nil
+local lastGunCheck = 0
+local lastRoleUpdate = 0
+local cachedGunDrop = nil
+local cachedRoles = {}
+
+local totemEnabled = false
+local totemConnections = {}
+
+-- Colors for roles
+local roleColors = {
+    Murderer = Color3.fromRGB(255, 0, 0),      -- Red
+    Sheriff = Color3.fromRGB(0, 0, 255),       -- Blue
+    Hero = Color3.fromRGB(255, 255, 0),        -- Yellow
+    Innocent = Color3.fromRGB(0, 255, 0),      -- Green
+    GunDrop = Color3.fromRGB(255, 0, 255)      -- Magenta
+}
+
+-- Function to get MM2 Timer from the UI
+local function getMM2Timer()
+    local timerText = "0:00"
+    pcall(function()
+        local mainGui = player.PlayerGui:FindFirstChild("MainGUI")
+        if mainGui then
+            local gameGui = mainGui:FindFirstChild("Game")
+            if gameGui then
+                local timer = gameGui:FindFirstChild("Timer")
+                if timer then
+                    if timer:IsA("TextLabel") then
+                        timerText = timer.Text
+                    elseif timer:FindFirstChild("Time") and timer.Time:IsA("TextLabel") then
+                        timerText = timer.Time.Text
+                    end
+                end
+            end
+        end
+    end)
+    if timerText == "" or timerText == "Label" then timerText = "0:00" end
+    return timerText
+end
+
+-- Function to instantly fetch roles from ReplicatedStorage
+local function updateRolesInstantly()
+    pcall(function()
+        local getPlayerData = game:GetService("ReplicatedStorage"):FindFirstChild("GetPlayerData", true)
+        if getPlayerData and getPlayerData:IsA("RemoteFunction") then
+            local data = getPlayerData:InvokeServer()
+            if type(data) == "table" then
+                local newRoles = {}
+                for playerName, playerInfo in pairs(data) do
+                    if type(playerInfo) == "table" and playerInfo.Role then
+                        newRoles[playerName] = playerInfo.Role
+                        if playerInfo.Role == "Sheriff" then
+                            local plr = PlayerService:FindFirstChild(playerName)
+                            if plr then originalSheriff = plr end
+                        end
+                    end
+                end
+                cachedRoles = newRoles
+            end
+        end
+    end)
+end
+
+-- Function to determine player role
+local function getPlayerRole(plr)
+    local role = "Innocent"
+    
+    if cachedRoles[plr.Name] then
+        local cachedRole = cachedRoles[plr.Name]
+        if cachedRole == "Murderer" or cachedRole == "Sheriff" then
+            role = cachedRole
+        end
+    end
+    
+    local hasKnife = false
+    local hasGun = false
+    
+    local function checkItems(parent)
+        if not parent then return end
+        for _, item in pairs(parent:GetChildren()) do
+            if item:IsA("Tool") then
+                if item.Name == "Knife" or item:FindFirstChild("KnifeServer") or item:FindFirstChild("KnifeClient") then
+                    hasKnife = true
+                elseif item.Name == "Gun" or item.Name == "Revolver" or item:FindFirstChild("GunServer") or item:FindFirstChild("GunClient") then
+                    hasGun = true
+                end
+            end
+        end
+    end
+    
+    checkItems(plr.Character)
+    checkItems(plr:FindFirstChild("Backpack"))
+    
+    if hasKnife then
+        role = "Murderer"
+    elseif hasGun then
+        if cachedRoles[plr.Name] ~= "Sheriff" and originalSheriff ~= plr then
+            role = "Hero"
+        else
+            role = "Sheriff"
+        end
+    end
+    
+    return role
+end
+
+-- Function to create ESP
+local function createESP(target, name, color)
+    if not target then return end
+    
+    if espObjects[target] then
+        espObjects[target].Highlight:Destroy()
+        espObjects[target].Billboard:Destroy()
+        espObjects[target] = nil
+    end
+    
+    local adornee = target
+    if target:IsA("Model") then
+        adornee = target.PrimaryPart or target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart")
+    end
+    
+    if not adornee then return end
+    
+    local highlight = Instance.new("Highlight")
+    highlight.Adornee = target
+    highlight.FillColor = color
+    highlight.OutlineColor = Color3.new(1, 1, 1)
+    highlight.FillTransparency = 0.5
+    highlight.OutlineTransparency = 0.2
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Parent = screenGui
+    
+    local billboard = Instance.new("BillboardGui")
+    billboard.Adornee = adornee
+    billboard.Size = UDim2.new(0, 100, 0, 40)
+    billboard.StudsOffset = Vector3.new(0, 3, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Parent = screenGui
+    
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Parent = billboard
+    textLabel.Size = UDim2.new(1, 0, 1, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.Text = name
+    textLabel.TextColor3 = color
+    textLabel.TextStrokeTransparency = 0
+    textLabel.TextScaled = true
+    textLabel.Font = Enum.Font.SourceSansBold
+    
+    espObjects[target] = {
+        Highlight = highlight,
+        Billboard = billboard,
+        Name = name
+    }
+end
+
+-- Function to clear all ESP
+local function clearESP()
+    for target, objects in pairs(espObjects) do
+        if objects.Highlight then objects.Highlight:Destroy() end
+        if objects.Billboard then objects.Billboard:Destroy() end
+    end
+    espObjects = {}
+end
+
+-- Main ESP Update Loop
+local function updateESP()
+    if not espEnabled then return end
+    
+    local currentTimer = getMM2Timer()
+    statusLabel.Text = "Status: Online | " .. currentTimer
+    
+    if tick() - lastRoleUpdate > 2 then
+        lastRoleUpdate = tick()
+        task.spawn(updateRolesInstantly)
+    end
+    
+    local currentMurdererExists = false
+    local currentSheriffExists = false
+    
+    for _, plr in pairs(PlayerService:GetPlayers()) do
+        if plr ~= player and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            local role = getPlayerRole(plr)
+            local color = roleColors[role]
+            local displayName = plr.Name .. " [" .. role .. "]"
+            
+            if role == "Murderer" then
+                currentMurdererExists = true
+            elseif role == "Sheriff" or role == "Hero" then
+                currentSheriffExists = true
+            end
+            
+            if not espObjects[plr.Character] or espObjects[plr.Character].Name ~= displayName then
+                createESP(plr.Character, displayName, color)
+            end
+        end
+    end
+    
+    if not currentMurdererExists and not currentSheriffExists then
+        originalSheriff = nil
+        cachedRoles = {}
+    end
+    
+    if tick() - lastGunCheck > 0.5 then
+        lastGunCheck = tick()
+        cachedGunDrop = Workspace:FindFirstChild("GunDrop", true)
+    end
+    
+    if cachedGunDrop then
+        if not espObjects[cachedGunDrop] then
+            createESP(cachedGunDrop, "Dropped Gun", roleColors.GunDrop)
+        end
+    end
+    
+    for target, objects in pairs(espObjects) do
+        if not target or not target.Parent then
+            if objects.Highlight then objects.Highlight:Destroy() end
+            if objects.Billboard then objects.Billboard:Destroy() end
+            espObjects[target] = nil
+        end
+    end
+end
+
+-- Totem Functions
+local function applyTotem(char)
+    local hum = char:WaitForChild("Humanoid", 3)
+    if hum then
+        -- Disables the death state so you don't die at 0 HP
+        hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+        
+        -- Forces health to 1 if it drops to 0
+        local conn = hum.HealthChanged:Connect(function(hp)
+            if hp <= 1 then
+                hum.Health = 1
+            end
+        end)
+        table.insert(totemConnections, conn)
+    end
+end
+
+local function disableTotem()
+    for _, conn in pairs(totemConnections) do
+        if conn then conn:Disconnect() end
+    end
+    totemConnections = {}
+    
+    if player.Character then
+        local hum = player.Character:FindFirstChild("Humanoid")
+        if hum then
+            hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+        end
+    end
+end
+
+-- Button Functions
+onButton.MouseButton1Click:Connect(function()
+    if espEnabled then return end
+    espEnabled = true
+    statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+    task.spawn(updateRolesInstantly)
+    local connection = RunService.RenderStepped:Connect(updateESP)
+    table.insert(activeConnections, connection)
+end)
+
+offButton.MouseButton1Click:Connect(function()
+    if not espEnabled then return end
+    espEnabled = false
+    statusLabel.Text = "Status: Offline"
+    statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+    for _, connection in pairs(activeConnections) do
+        if connection and connection.Disconnect then
+            connection:Disconnect()
+        end
+    end
+    activeConnections = {}
+    clearESP()
+end)
+
+bringButton.MouseButton1Click:Connect(function()
+    if getPlayerRole(player) == "Murderer" then
+        local myChar = player.Character
+        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        
+        if myRoot then
+            for _, plr in pairs(PlayerService:GetPlayers()) do
+                if plr ~= player then
+                    local char = plr.Character
+                    if char then
+                        local root = char:FindFirstChild("HumanoidRootPart")
+                        local hum = char:FindFirstChild("Humanoid")
+                        
+                        if root and hum and hum.Health > 0 then
+                            root.CFrame = myRoot.CFrame * CFrame.new(0, 0, -2)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+totemButton.MouseButton1Click:Connect(function()
+    totemEnabled = not totemEnabled
+    if totemEnabled then
+        totemButton.Text = "Totem: On"
+        totemButton.TextColor3 = Color3.fromRGB(0, 255, 0)
+        
+        if player.Character then
+            applyTotem(player.Character)
+        end
+        local conn = player.CharacterAdded:Connect(applyTotem)
+        table.insert(totemConnections, conn)
+    else
+        totemButton.Text = "Totem: Off"
+        totemButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+        disableTotem()
+    end
+end)
+
+destroyButton.MouseButton1Click:Connect(function()
+    if espEnabled then
+        offButton.MouseButton1Click:Fire()
+    end
+    disableTotem()
+    screenGui:Destroy()
+end)
