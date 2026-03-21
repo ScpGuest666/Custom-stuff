@@ -1,0 +1,540 @@
+-- Services
+local PlayerService = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local player = PlayerService.LocalPlayer or PlayerService.PlayerAdded:Wait()
+local camera = workspace.CurrentCamera
+
+-- Configuration
+local MOVEMENT_SPEED = 28 
+local ROTATION_SPEED = 1.5 -- Slightly faster turning so it doesn't feel sluggish
+local STEP_HEIGHT = 10 
+local STEP_DURATION = 0.35
+local STEP_THRESHOLD = 6
+local STRIDE_MULTIPLIER = 1.5
+local GRAVITY_FORCE = 60 
+local MAX_LEG_STRETCH = 1.4 -- Allows the leg to stretch 40% further than its resting build length
+
+-- State Variables
+local mechParts = {}
+local mainSeat = nil
+local markedPartsList = {} 
+local markedPartsData = {} 
+local legsData = {} 
+local markingMode = false
+local isActivated = false
+local afkMode = false
+local runConnection = nil
+local sitConnection = nil
+local targetPos = nil
+local targetMarker = nil
+local lastTapTime = 0
+local gaitTick = 0
+local RIDE_HEIGHT = 8
+
+-- Posture & Physics Cache
+local initialRideHeight = nil
+local initialCalfOffsets = {}
+local initialSwivelOffsets = {} 
+local initialLegReach = {} -- NEW: Memorizes the maximum physical reach of each leg
+local originalCollisionStates = {} 
+local lastValidGroundY = 0
+
+local chassisTarget = nil
+
+-- UI Setup
+local screenGui = Instance.new("ScreenGui", player.PlayerGui)
+screenGui.Name = "MechPuppeteer_Perfected"
+screenGui.ResetOnSpawn = false
+
+local frame = Instance.new("Frame", screenGui)
+frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+frame.Size = UDim2.new(0, 200, 0, 170)
+frame.Position = UDim2.new(0.3, 0, 0.5, -85)
+frame.Active = true
+frame.Draggable = true
+
+local function createBtn(text, pos)
+    local btn = Instance.new("TextButton", frame)
+    btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    btn.Size = UDim2.new(0, 180, 0, 25)
+    btn.Position = pos
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextScaled = true
+    btn.BorderSizePixel = 0
+    return btn
+end
+
+local setMainBtn = createBtn("1. Set Main Body (Sit)", UDim2.new(0, 10, 0, 10))
+local markBtn = createBtn("2. Mark Joints: OFF", UDim2.new(0, 10, 0, 40))
+local activateBtn = createBtn("3. Activate Mech", UDim2.new(0, 10, 0, 70))
+local afkBtn = createBtn("4. AFK Mode: OFF", UDim2.new(0, 10, 0, 100))
+local destroyBtn = createBtn("Destroy", UDim2.new(0, 10, 0, 130))
+
+activateBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+activateBtn.TextColor3 = Color3.fromRGB(100, 100, 100)
+
+local statusLabel = Instance.new("TextLabel", frame)
+statusLabel.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+statusLabel.Size = UDim2.new(0, 200, 0, 30)
+statusLabel.Position = UDim2.new(0, 0, 0, -30)
+statusLabel.Text = "Waiting for Main Body..."
+statusLabel.TextColor3 = Color3.fromRGB(0, 255, 255)
+statusLabel.TextScaled = true
+
+-- Helper: Deep Flood Fill
+local function getBuildParts(startPart)
+    local parts, toCheck, checked = {}, {startPart}, {[startPart] = true}
+    local overlapParams = OverlapParams.new()
+    while #toCheck > 0 do
+        local current = table.remove(toCheck, 1)
+        table.insert(parts, current)
+        for _, p in ipairs(current:GetConnectedParts()) do
+            if not checked[p] and not p:IsDescendantOf(player.Character) then 
+                checked[p] = true; table.insert(toCheck, p) 
+            end
+        end
+        local touching = workspace:GetPartBoundsInBox(current.CFrame, current.Size + Vector3.new(4, 4, 4), overlapParams)
+        for _, p in ipairs(touching) do
+            if p:IsA("BasePart") and not checked[p] and p.Name ~= "Baseplate" and p.Name ~= "Grass" and not p:IsDescendantOf(player.Character) then
+                checked[p] = true; table.insert(toCheck, p)
+            end
+        end
+    end
+    return parts
+end
+
+-- Helper: Update Visuals
+local function updateVisuals()
+    for i, part in ipairs(markedPartsList) do
+        local data = markedPartsData[part]
+        local isSwivel = (i >= 4 and i <= 9)
+        local color = isSwivel and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 255, 0)
+        
+        if not data.Gui then
+            local hl = Instance.new("SelectionBox", part)
+            hl.Adornee = part; hl.Color3 = color; hl.LineThickness = 0.05
+            local bg = Instance.new("BillboardGui", part)
+            bg.Size = UDim2.new(4, 0, 4, 0); bg.AlwaysOnTop = true
+            local txt = Instance.new("TextLabel", bg)
+            txt.Size = UDim2.new(1, 0, 1, 0); txt.BackgroundTransparency = 1
+            txt.TextScaled = true; txt.TextColor3 = color; txt.Font = Enum.Font.SourceSansBold
+            data.Highlight, data.Gui, data.Label = hl, bg, txt
+        end
+        data.Label.Text = tostring(i)
+        data.Label.TextColor3, data.Highlight.Color3 = color, color
+    end
+    
+    statusLabel.Text = "Marked: " .. #markedPartsList .. "/12"
+    if #markedPartsList == 12 then
+        activateBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+        activateBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    else
+        activateBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+        activateBtn.TextColor3 = Color3.fromRGB(100, 100, 100)
+    end
+end
+
+-- Cleanup function
+local function cleanupEverything()
+    if runConnection then runConnection:Disconnect() end
+    if sitConnection then sitConnection:Disconnect() end
+    local folder = workspace:FindFirstChild("MechTargets")
+    if folder then folder:Destroy() end
+    
+    if mainSeat then
+        for _, child in ipairs(mainSeat:GetChildren()) do
+            if child.Name == "MechPuppeteer_Constraint" then child:Destroy() end
+        end
+    end
+    for _, part in ipairs(markedPartsList) do
+        for _, child in ipairs(part:GetChildren()) do
+            if child.Name == "MechPuppeteer_Constraint" then child:Destroy() end
+        end
+    end
+    
+    for part, state in pairs(originalCollisionStates) do
+        if part and part.Parent then part.CanCollide = state end
+    end
+    table.clear(originalCollisionStates)
+    
+    for part, data in pairs(markedPartsData) do
+        if data.Gui then data.Gui:Destroy() end
+        if data.Highlight then data.Highlight:Destroy() end
+    end
+    screenGui:Destroy()
+end
+
+-- AUTO-OWNERSHIP
+if _G.MechPuppeteer_Data then
+    pcall(function() _G.MechPuppeteer_Data.Destroy() end) 
+    
+    if _G.MechPuppeteer_Data.MainSeat and #_G.MechPuppeteer_Data.MarkedParts == 12 then
+        mainSeat = _G.MechPuppeteer_Data.MainSeat
+        markedPartsList = _G.MechPuppeteer_Data.MarkedParts
+        mechParts = getBuildParts(mainSeat)
+        for _, part in ipairs(markedPartsList) do markedPartsData[part] = {} end
+        updateVisuals()
+        statusLabel.Text = "Found Previous Mech!"
+        setMainBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+    end
+end
+
+local function saveGlobalState()
+    _G.MechPuppeteer_Data = {
+        MainSeat = mainSeat,
+        MarkedParts = markedPartsList,
+        Destroy = cleanupEverything
+    }
+end
+
+-- Button 1: Set Main Body
+setMainBtn.MouseButton1Click:Connect(function()
+    local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+    if humanoid and humanoid.SeatPart then
+        mainSeat = humanoid.SeatPart
+        mechParts = getBuildParts(mainSeat)
+        statusLabel.Text = "Main Body Locked!"
+        setMainBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+        
+        initialRideHeight = nil
+        initialCalfOffsets = {}
+        initialSwivelOffsets = {}
+        initialLegReach = {}
+        saveGlobalState()
+    end
+end)
+
+-- Button 2: Toggle Marking Mode
+markBtn.MouseButton1Click:Connect(function()
+    if not mainSeat then return end
+    markingMode = not markingMode
+    if markingMode then
+        markBtn.Text = "2. Mark Joints: ON"
+        markBtn.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+        local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+        if sitConnection then sitConnection:Disconnect() end
+        
+        sitConnection = humanoid:GetPropertyChangedSignal("SeatPart"):Connect(function()
+            if not markingMode then return end
+            local seat = humanoid.SeatPart
+            if seat and seat ~= mainSeat then
+                local existingIndex = table.find(markedPartsList, seat)
+                if existingIndex then
+                    table.remove(markedPartsList, existingIndex)
+                    markedPartsData[seat].Highlight:Destroy()
+                    markedPartsData[seat].Gui:Destroy()
+                    markedPartsData[seat] = nil
+                else
+                    if #markedPartsList < 12 then
+                        table.insert(markedPartsList, seat)
+                        markedPartsData[seat] = {}
+                    end
+                end
+                updateVisuals()
+                saveGlobalState()
+            end
+        end)
+    else
+        markBtn.Text = "2. Mark Joints: OFF"
+        markBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+        if sitConnection then sitConnection:Disconnect() end
+    end
+end)
+
+-- Button 4: AFK Mode
+afkBtn.MouseButton1Click:Connect(function()
+    afkMode = not afkMode
+    if afkMode then
+        afkBtn.Text = "4. AFK Mode: ON"
+        afkBtn.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+    else
+        afkBtn.Text = "4. AFK Mode: OFF"
+        afkBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    end
+end)
+
+-- Button 3: Toggle Activation
+activateBtn.MouseButton1Click:Connect(function()
+    if not mainSeat or #markedPartsList < 12 then return end
+    isActivated = not isActivated
+    
+    if not isActivated then
+        activateBtn.Text = "3. Activate Mech"
+        activateBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+        statusLabel.Text = "Mech Deactivated."
+        if runConnection then runConnection:Disconnect() end
+        local folder = workspace:FindFirstChild("MechTargets")
+        if folder then folder:Destroy() end
+        
+        for part, state in pairs(originalCollisionStates) do
+            if part and part.Parent then part.CanCollide = state end
+        end
+        table.clear(originalCollisionStates)
+        return
+    end
+    
+    activateBtn.Text = "3. Deactivate Mech"
+    activateBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
+    statusLabel.Text = "Mech Active! Double Tap to Move."
+    
+    for _, part in ipairs(mechParts) do
+        if part:IsA("BasePart") then
+            originalCollisionStates[part] = part.CanCollide
+            part.CanCollide = false
+        end
+    end
+    
+    local targetFolder = workspace:FindFirstChild("MechTargets")
+    if targetFolder then targetFolder:Destroy() end
+    targetFolder = Instance.new("Folder", workspace)
+    targetFolder.Name = "MechTargets"
+    
+    legsData = {
+        { Calf = markedPartsList[1],  Swivel = markedPartsList[4], Group = 1 }, 
+        { Calf = markedPartsList[2],  Swivel = markedPartsList[5], Group = 2 }, 
+        { Calf = markedPartsList[3],  Swivel = markedPartsList[6], Group = 1 }, 
+        { Calf = markedPartsList[10], Swivel = markedPartsList[7], Group = 2 }, 
+        { Calf = markedPartsList[11], Swivel = markedPartsList[8], Group = 1 }, 
+        { Calf = markedPartsList[12], Swivel = markedPartsList[9], Group = 2 }  
+    }
+    
+    if not initialRideHeight then
+        local lowestY = mainSeat.Position.Y
+        for _, leg in ipairs(legsData) do
+            if leg.Calf.Position.Y < lowestY then lowestY = leg.Calf.Position.Y end
+        end
+        initialRideHeight = mainSeat.Position.Y - lowestY
+    end
+    RIDE_HEIGHT = initialRideHeight
+    lastValidGroundY = mainSeat.Position.Y - RIDE_HEIGHT
+    
+    chassisTarget = Instance.new("Part", targetFolder)
+    chassisTarget.Anchored = true; chassisTarget.CanCollide = false; chassisTarget.Transparency = 1
+    chassisTarget.CFrame = mainSeat.CFrame
+    
+    local att0 = Instance.new("Attachment", mainSeat)
+    att0.Name = "MechPuppeteer_Constraint"
+    local att1 = Instance.new("Attachment", chassisTarget)
+    
+    local ap = Instance.new("AlignPosition", mainSeat)
+    ap.Name = "MechPuppeteer_Constraint"
+    ap.Attachment0 = att0; ap.Attachment1 = att1; ap.MaxForce = 5000000; ap.Responsiveness = 40
+    
+    local ao = Instance.new("AlignOrientation", mainSeat)
+    ao.Name = "MechPuppeteer_Constraint"
+    ao.Attachment0 = att0; ao.Attachment1 = att1; ao.MaxTorque = 5000000; ao.Responsiveness = 40
+    
+    for i, leg in ipairs(legsData) do
+        if not initialCalfOffsets[i] then
+            initialCalfOffsets[i] = mainSeat.CFrame:PointToObjectSpace(leg.Calf.Position)
+            
+            local flatFoot = Vector3.new(leg.Calf.Position.X, 0, leg.Calf.Position.Z)
+            local flatSwivel = Vector3.new(leg.Swivel.Position.X, 0, leg.Swivel.Position.Z)
+            local toFoot = (flatFoot - flatSwivel).Magnitude > 0.1 and (flatFoot - flatSwivel).Unit or mainSeat.CFrame.LookVector
+            local lookCF = CFrame.lookAt(leg.Swivel.Position, leg.Swivel.Position + toFoot)
+            initialSwivelOffsets[i] = lookCF:Inverse() * leg.Swivel.CFrame
+            
+            -- NEW: Calculate the maximum physical reach of this specific leg
+            initialLegReach[i] = (leg.Swivel.Position - leg.Calf.Position).Magnitude * MAX_LEG_STRETCH
+        end
+        leg.CalfOffset = initialCalfOffsets[i]
+        leg.SwivelOffset = initialSwivelOffsets[i]
+        leg.MaxReach = initialLegReach[i]
+        
+        leg.SwivelTarget = Instance.new("Part", targetFolder)
+        leg.SwivelTarget.Anchored = true; leg.SwivelTarget.CanCollide = false; leg.SwivelTarget.Transparency = 1
+        
+        local sAtt0 = Instance.new("Attachment", leg.Swivel)
+        sAtt0.Name = "MechPuppeteer_Constraint"
+        local sAtt1 = Instance.new("Attachment", leg.SwivelTarget)
+        
+        local sAo = Instance.new("AlignOrientation", leg.Swivel)
+        sAo.Name = "MechPuppeteer_Constraint"
+        sAo.Attachment0 = sAtt0; sAo.Attachment1 = sAtt1; sAo.MaxTorque = 2000000; sAo.Responsiveness = 50
+        
+        leg.CalfTarget = Instance.new("Part", targetFolder)
+        leg.CalfTarget.Anchored = true; leg.CalfTarget.CanCollide = false; leg.CalfTarget.Transparency = 1
+        
+        local cAtt0 = Instance.new("Attachment", leg.Calf)
+        cAtt0.Name = "MechPuppeteer_Constraint"
+        local cAtt1 = Instance.new("Attachment", leg.CalfTarget)
+        
+        local cAp = Instance.new("AlignPosition", leg.Calf)
+        cAp.Name = "MechPuppeteer_Constraint"
+        cAp.Attachment0 = cAtt0; cAp.Attachment1 = cAtt1; cAp.MaxForce = 2000000; cAp.Responsiveness = 50
+        
+        leg.CurrentPos = leg.Calf.Position
+        leg.StartPos = leg.Calf.Position
+        leg.TargetPos = leg.Calf.Position
+        leg.IsStepping = false
+        leg.StepTime = 0
+    end
+    
+    targetMarker = Instance.new("Part", targetFolder)
+    targetMarker.Size = Vector3.new(3, 0.1, 3); targetMarker.Color = Color3.fromRGB(255, 0, 0)
+    targetMarker.Material = Enum.Material.Neon; targetMarker.Anchored = true
+    targetMarker.CanCollide = false; targetMarker.Transparency = 1
+    targetPos = mainSeat.Position
+    
+    local filterList = {player.Character, targetFolder}
+    for _, part in ipairs(mechParts) do table.insert(filterList, part) end
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = filterList
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    
+    runConnection = RunService.Heartbeat:Connect(function(dt)
+        if not chassisTarget then return end
+        
+        local upDot = mainSeat.CFrame.UpVector:Dot(Vector3.new(0, 1, 0))
+        if upDot < 0.4 then
+            statusLabel.Text = "Auto-Correcting Posture..."
+            local currentYaw = math.atan2(-chassisTarget.CFrame.LookVector.X, -chassisTarget.CFrame.LookVector.Z)
+            chassisTarget.CFrame = CFrame.new(chassisTarget.Position) * CFrame.Angles(0, currentYaw, 0)
+            return 
+        end
+        
+        local bodyOffsetDist = (chassisTarget.Position - mainSeat.Position).Magnitude
+        if bodyOffsetDist > 12 then
+            statusLabel.Text = "Mech Stuck! Waiting for body..."
+            return 
+        else
+            statusLabel.Text = "Mech Active! Double Tap to Move."
+        end
+        
+        local flatTarget = Vector3.new(targetPos.X, 0, targetPos.Z)
+        local flatBody = Vector3.new(chassisTarget.Position.X, 0, chassisTarget.Position.Z)
+        local toTarget = flatTarget - flatBody
+        local dist = toTarget.Magnitude
+        
+        local currentYaw = math.atan2(-chassisTarget.CFrame.LookVector.X, -chassisTarget.CFrame.LookVector.Z)
+        local targetYaw = currentYaw
+        if dist > 2 then targetYaw = math.atan2(-toTarget.X, -toTarget.Z) end
+        local angleDiff = (targetYaw - currentYaw + math.pi) % (math.pi * 2) - math.pi
+        local turnStep = math.clamp(angleDiff, -ROTATION_SPEED * dt, ROTATION_SPEED * dt)
+        local newYaw = currentYaw + turnStep
+        local newLook = Vector3.new(-math.sin(newYaw), 0, -math.cos(newYaw))
+        
+        -- STRICTER TURN BEFORE WALK: Must be within 5 degrees to walk full speed
+        local alignment = math.abs(angleDiff)
+        local speedMultiplier = 0
+        if alignment < math.rad(5) then
+            speedMultiplier = 1 
+        elseif alignment < math.rad(25) then
+            speedMultiplier = 1 - ((alignment - math.rad(5)) / math.rad(20)) 
+        else
+            speedMultiplier = 0 
+        end
+        
+        local currentSpeed = (dist > 3) and (MOVEMENT_SPEED * speedMultiplier) or 0
+        local moveVelocity = chassisTarget.CFrame.LookVector * currentSpeed
+        
+        local bodyRay = workspace:Raycast(chassisTarget.Position + Vector3.new(0, 100, 0), Vector3.new(0, -200, 0), rayParams)
+        if bodyRay then
+            lastValidGroundY = bodyRay.Position.Y
+        else
+            lastValidGroundY = lastValidGroundY - (GRAVITY_FORCE * dt)
+        end
+        
+        local totalFootY = 0
+        for _, leg in ipairs(legsData) do
+            totalFootY = totalFootY + leg.CurrentPos.Y
+        end
+        local averageFootY = totalFootY / #legsData
+        
+        local targetY = bodyRay and (averageFootY + RIDE_HEIGHT) or (lastValidGroundY + RIDE_HEIGHT)
+        
+        local newPos = chassisTarget.Position + (moveVelocity * dt)
+        chassisTarget.CFrame = CFrame.lookAt(newPos, newPos + newLook)
+        chassisTarget.CFrame = CFrame.new(chassisTarget.Position.X, math.lerp(chassisTarget.Position.Y, targetY, 0.1), chassisTarget.Position.Z) * chassisTarget.CFrame.Rotation
+        
+        gaitTick = gaitTick + dt
+        local activeGroup = (math.floor(gaitTick / STEP_DURATION) % 2) + 1
+        
+        for _, leg in ipairs(legsData) do
+            local idealFoot = (chassisTarget.CFrame * CFrame.new(leg.CalfOffset)).Position
+            idealFoot = idealFoot + (moveVelocity * STEP_DURATION * STRIDE_MULTIPLIER)
+            
+            if leg.Group == activeGroup and not leg.IsStepping then
+                local footDist = (Vector3.new(leg.CurrentPos.X, 0, leg.CurrentPos.Z) - Vector3.new(idealFoot.X, 0, idealFoot.Z)).Magnitude
+                if footDist > STEP_THRESHOLD or math.abs(turnStep) > 0.005 then
+                    leg.IsStepping = true
+                    leg.StepTime = 0
+                    leg.StartPos = leg.CurrentPos
+                    
+                    local fRay = workspace:Raycast(idealFoot + Vector3.new(0, 100, 0), Vector3.new(0, -200, 0), rayParams)
+                    local tentativeTarget = fRay and fRay.Position or Vector3.new(idealFoot.X, lastValidGroundY, idealFoot.Z)
+                    
+                    -- NEW: Ledge Finder & Reach Clamping
+                    local hipPos = leg.SwivelTarget.Position
+                    if (tentativeTarget - hipPos).Magnitude > leg.MaxReach then
+                        -- The drop is too deep! Try to find a ledge closer to the body (retract leg)
+                        local closerIdeal = idealFoot:Lerp(Vector3.new(chassisTarget.Position.X, idealFoot.Y, chassisTarget.Position.Z), 0.4)
+                        local ledgeRay = workspace:Raycast(closerIdeal + Vector3.new(0, 100, 0), Vector3.new(0, -200, 0), rayParams)
+                        
+                        if ledgeRay and (ledgeRay.Position - hipPos).Magnitude <= leg.MaxReach then
+                            tentativeTarget = ledgeRay.Position -- Found a ledge! Plant foot here.
+                        else
+                            -- No ledge found. Clamp the leg so it dangles at its maximum physical reach.
+                            tentativeTarget = hipPos + (tentativeTarget - hipPos).Unit * leg.MaxReach
+                        end
+                    end
+                    
+                    leg.TargetPos = tentativeTarget
+                end
+            end
+            
+            if leg.IsStepping then
+                leg.StepTime = leg.StepTime + dt
+                local t = math.clamp(leg.StepTime / STEP_DURATION, 0, 1)
+                local alpha = t * t * (3 - 2 * t)
+                
+                local heightDiff = leg.TargetPos.Y - leg.StartPos.Y
+                local extraHeight = math.max(0, heightDiff) 
+                local currentStepHeight = STEP_HEIGHT + extraHeight
+                
+                leg.CurrentPos = leg.StartPos:Lerp(leg.TargetPos, alpha) + Vector3.new(0, math.sin(t * math.pi) * currentStepHeight, 0)
+                if t >= 1 then leg.IsStepping = false end
+            end
+            
+            leg.CalfTarget.Position = leg.CurrentPos
+            
+            local flatFoot = Vector3.new(leg.CurrentPos.X, 0, leg.CurrentPos.Z)
+            local flatSwivel = Vector3.new(leg.Swivel.Position.X, 0, leg.Swivel.Position.Z)
+            local toFoot = (flatFoot - flatSwivel).Magnitude > 0.1 and (flatFoot - flatSwivel).Unit or chassisTarget.CFrame.LookVector
+            local lookCF = CFrame.lookAt(leg.Swivel.Position, leg.Swivel.Position + toFoot, chassisTarget.CFrame.UpVector)
+            leg.SwivelTarget.CFrame = lookCF * leg.SwivelOffset.Rotation
+        end
+    end)
+end)
+
+-- Input: Double Tap
+UserInputService.InputBegan:Connect(function(input)
+    if afkMode then return end 
+    
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        local now = tick()
+        if now - lastTapTime < 0.4 and isActivated and chassisTarget then
+            local mousePos = UserInputService:GetMouseLocation()
+            local unitRay = camera:ViewportPointToRay(mousePos.X, mousePos.Y)
+            
+            local filterList = {player.Character, workspace:FindFirstChild("MechTargets")}
+            for _, part in ipairs(mechParts) do table.insert(filterList, part) end
+            local rayParams = RaycastParams.new()
+            rayParams.FilterDescendantsInstances = filterList
+            rayParams.FilterType = Enum.RaycastFilterType.Exclude
+            
+            local result = workspace:Raycast(unitRay.Origin, unitRay.Direction * 1000, rayParams)
+            if result then
+                targetPos = result.Position
+                targetMarker.Position = result.Position
+                targetMarker.Transparency = 0.5
+            end
+        end
+        lastTapTime = now
+    end
+end)
+
+-- Destroy
+destroyBtn.MouseButton1Click:Connect(cleanupEverything)
