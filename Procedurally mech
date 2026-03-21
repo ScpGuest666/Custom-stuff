@@ -7,13 +7,13 @@ local camera = workspace.CurrentCamera
 
 -- Configuration
 local MOVEMENT_SPEED = 28 
-local ROTATION_SPEED = 1.5 -- Slightly faster turning so it doesn't feel sluggish
+local ROTATION_SPEED = 1.5 
 local STEP_HEIGHT = 10 
 local STEP_DURATION = 0.35
 local STEP_THRESHOLD = 6
 local STRIDE_MULTIPLIER = 1.5
 local GRAVITY_FORCE = 60 
-local MAX_LEG_STRETCH = 1.4 -- Allows the leg to stretch 40% further than its resting build length
+local MAX_LEG_STRETCH = 1.4 
 
 -- State Variables
 local mechParts = {}
@@ -36,7 +36,7 @@ local RIDE_HEIGHT = 8
 local initialRideHeight = nil
 local initialCalfOffsets = {}
 local initialSwivelOffsets = {} 
-local initialLegReach = {} -- NEW: Memorizes the maximum physical reach of each leg
+local initialLegReach = {} 
 local originalCollisionStates = {} 
 local lastValidGroundY = 0
 
@@ -166,29 +166,6 @@ local function cleanupEverything()
     screenGui:Destroy()
 end
 
--- AUTO-OWNERSHIP
-if _G.MechPuppeteer_Data then
-    pcall(function() _G.MechPuppeteer_Data.Destroy() end) 
-    
-    if _G.MechPuppeteer_Data.MainSeat and #_G.MechPuppeteer_Data.MarkedParts == 12 then
-        mainSeat = _G.MechPuppeteer_Data.MainSeat
-        markedPartsList = _G.MechPuppeteer_Data.MarkedParts
-        mechParts = getBuildParts(mainSeat)
-        for _, part in ipairs(markedPartsList) do markedPartsData[part] = {} end
-        updateVisuals()
-        statusLabel.Text = "Found Previous Mech!"
-        setMainBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
-    end
-end
-
-local function saveGlobalState()
-    _G.MechPuppeteer_Data = {
-        MainSeat = mainSeat,
-        MarkedParts = markedPartsList,
-        Destroy = cleanupEverything
-    }
-end
-
 -- Button 1: Set Main Body
 setMainBtn.MouseButton1Click:Connect(function()
     local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
@@ -202,7 +179,6 @@ setMainBtn.MouseButton1Click:Connect(function()
         initialCalfOffsets = {}
         initialSwivelOffsets = {}
         initialLegReach = {}
-        saveGlobalState()
     end
 end)
 
@@ -233,7 +209,6 @@ markBtn.MouseButton1Click:Connect(function()
                     end
                 end
                 updateVisuals()
-                saveGlobalState()
             end
         end)
     else
@@ -336,7 +311,6 @@ activateBtn.MouseButton1Click:Connect(function()
             local lookCF = CFrame.lookAt(leg.Swivel.Position, leg.Swivel.Position + toFoot)
             initialSwivelOffsets[i] = lookCF:Inverse() * leg.Swivel.CFrame
             
-            -- NEW: Calculate the maximum physical reach of this specific leg
             initialLegReach[i] = (leg.Swivel.Position - leg.Calf.Position).Magnitude * MAX_LEG_STRETCH
         end
         leg.CalfOffset = initialCalfOffsets[i]
@@ -416,7 +390,6 @@ activateBtn.MouseButton1Click:Connect(function()
         local newYaw = currentYaw + turnStep
         local newLook = Vector3.new(-math.sin(newYaw), 0, -math.cos(newYaw))
         
-        -- STRICTER TURN BEFORE WALK: Must be within 5 degrees to walk full speed
         local alignment = math.abs(angleDiff)
         local speedMultiplier = 0
         if alignment < math.rad(5) then
@@ -466,17 +439,14 @@ activateBtn.MouseButton1Click:Connect(function()
                     local fRay = workspace:Raycast(idealFoot + Vector3.new(0, 100, 0), Vector3.new(0, -200, 0), rayParams)
                     local tentativeTarget = fRay and fRay.Position or Vector3.new(idealFoot.X, lastValidGroundY, idealFoot.Z)
                     
-                    -- NEW: Ledge Finder & Reach Clamping
                     local hipPos = leg.SwivelTarget.Position
                     if (tentativeTarget - hipPos).Magnitude > leg.MaxReach then
-                        -- The drop is too deep! Try to find a ledge closer to the body (retract leg)
                         local closerIdeal = idealFoot:Lerp(Vector3.new(chassisTarget.Position.X, idealFoot.Y, chassisTarget.Position.Z), 0.4)
                         local ledgeRay = workspace:Raycast(closerIdeal + Vector3.new(0, 100, 0), Vector3.new(0, -200, 0), rayParams)
                         
                         if ledgeRay and (ledgeRay.Position - hipPos).Magnitude <= leg.MaxReach then
-                            tentativeTarget = ledgeRay.Position -- Found a ledge! Plant foot here.
+                            tentativeTarget = ledgeRay.Position 
                         else
-                            -- No ledge found. Clamp the leg so it dangles at its maximum physical reach.
                             tentativeTarget = hipPos + (tentativeTarget - hipPos).Unit * leg.MaxReach
                         end
                     end
