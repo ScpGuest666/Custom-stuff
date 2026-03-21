@@ -1,0 +1,167 @@
+-- Services
+local PlayerService = game:GetService("Players")
+local player = PlayerService.LocalPlayer
+if not player then
+    player = PlayerService.PlayerAdded:Wait()
+end
+
+-- YOUR SAVED RELATIVE DATA
+local RelativeCoords = {
+    [1] = Vector3.new(-51.520, -42.298, 29.799),
+    [2] = Vector3.new(0.098, -42.297, 59.600),
+    [3] = Vector3.new(51.711, -42.296, 29.805),
+    [4] = Vector3.new(-17.221, 3.700, 10.003),
+    [5] = Vector3.new(0.100, 3.700, 20.000),
+    [6] = Vector3.new(17.419, 3.700, 9.999),
+    [7] = Vector3.new(-17.221, 3.700, -10.005),
+    [8] = Vector3.new(0.100, 3.700, -20.001),
+    [9] = Vector3.new(17.422, 3.700, -9.994),
+    [10] = Vector3.new(-51.515, -42.298, -29.804),
+    [11] = Vector3.new(0.098, -42.297, -59.600),
+    [12] = Vector3.new(51.715, -42.298, -29.795),
+}
+
+-- Variables
+local platformPart = nil
+local referenceCFrame = nil 
+local isPlatformOn = false
+local currentTPIndex = 1
+
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = player.PlayerGui
+screenGui.ResetOnSpawn = false
+screenGui.Name = "PlatformControllerV6"
+
+-- Create Frame
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+frame.Size = UDim2.new(0, 200, 0, 100)
+frame.Position = UDim2.new(0.3, 0, 0.5, -50)
+frame.Active = true
+frame.Draggable = true
+
+-- Create Toggle Button (On/Off)
+local toggleButton = Instance.new("TextButton")
+toggleButton.Parent = frame
+toggleButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+toggleButton.Size = UDim2.new(0, 80, 0, 30)
+toggleButton.Position = UDim2.new(0, 10, 0, 20)
+toggleButton.Text = "Toggle"
+toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleButton.TextScaled = true
+
+-- Create TP Button (Cycles 1-12)
+local tpButton = Instance.new("TextButton")
+tpButton.Parent = frame
+tpButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+tpButton.Size = UDim2.new(0, 80, 0, 30)
+tpButton.Position = UDim2.new(0, 110, 0, 20)
+tpButton.Text = "TP (1)"
+tpButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+tpButton.TextScaled = true
+
+-- Create Destroy Button
+local destroyButton = Instance.new("TextButton")
+destroyButton.Parent = frame
+destroyButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+destroyButton.Size = UDim2.new(0, 160, 0, 30)
+destroyButton.Position = UDim2.new(0, 20, 0, 60)
+destroyButton.Text = "Destroy"
+destroyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+destroyButton.TextScaled = true
+
+-- Create Status Indicator
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = frame
+statusLabel.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+statusLabel.Size = UDim2.new(0, 200, 0, 30)
+statusLabel.Position = UDim2.new(0, 0, 0, -30)
+statusLabel.Text = "Status: Offline"
+statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+statusLabel.TextScaled = true
+
+-- Function to handle Platform Spawning
+local function togglePlatform()
+    local character = player.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    
+    if not isPlatformOn then
+        if root then
+            isPlatformOn = true
+            -- Rotation set to 270 degrees (Left side front orientation)
+            referenceCFrame = root.CFrame * CFrame.new(0, -3.5, 0) * CFrame.Angles(0, math.pi * 1.5, 0)
+            
+            platformPart = Instance.new("Part")
+            platformPart.Name = "RedPlatform"
+            platformPart.Size = Vector3.new(15, 1, 15)
+            platformPart.CFrame = referenceCFrame
+            platformPart.Anchored = true
+            platformPart.CanCollide = false
+            platformPart.Color = Color3.fromRGB(255, 0, 0)
+            platformPart.Material = Enum.Material.Neon
+            platformPart.Transparency = 0.5
+            platformPart.Parent = workspace
+            
+            statusLabel.Text = "Status: Online"
+            statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+        end
+    else
+        isPlatformOn = false
+        if platformPart then
+            platformPart:Destroy()
+            platformPart = nil
+        end
+        referenceCFrame = nil
+        statusLabel.Text = "Status: Offline"
+        statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+    end
+end
+
+-- TP Button Logic
+tpButton.MouseButton1Click:Connect(function()
+    local character = player.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character and character:FindFirstChild("Humanoid")
+    
+    -- CHECK: If character is sitting, do not attempt to TP
+    if humanoid and humanoid.Sit then
+        statusLabel.Text = "Stand up to TP!"
+        task.delay(1, function()
+            if isPlatformOn then statusLabel.Text = "Status: Online" end
+        end)
+        return 
+    end
+    
+    if root and referenceCFrame then
+        local offset = RelativeCoords[currentTPIndex]
+        local targetWorldPos = referenceCFrame:PointToWorldSpace(offset)
+        
+        -- TELEPORT: Lowered by 4 studs (Changed from +3 to -1)
+        root.CFrame = CFrame.new(targetWorldPos + Vector3.new(0, -1, 0))
+        
+        -- Update UI and Index
+        currentTPIndex = currentTPIndex + 1
+        if currentTPIndex > 12 then
+            currentTPIndex = 1
+        end
+        tpButton.Text = "TP (" .. currentTPIndex .. ")"
+    else
+        statusLabel.Text = "Turn Toggle ON First!"
+        task.delay(1, function()
+            if not isPlatformOn then statusLabel.Text = "Status: Offline" end
+        end)
+    end
+end)
+
+-- Toggle Button Click
+toggleButton.MouseButton1Click:Connect(function()
+    togglePlatform()
+end)
+
+-- Destroy Logic
+destroyButton.MouseButton1Click:Connect(function()
+    if platformPart then platformPart:Destroy() end
+    screenGui:Destroy()
+end)
