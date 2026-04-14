@@ -1,0 +1,312 @@
+-- Services
+local PlayerService = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local player = PlayerService.LocalPlayer or PlayerService.PlayerAdded:Wait()
+local camera = workspace.CurrentCamera
+
+-- Configuration
+local MAX_MOVEMENT_SPEED = 10 
+local MAX_TURN_RATE = math.rad(40) 
+local RIDE_HEIGHT = 9.5 
+local BASE_STEP_HEIGHT = 3.5
+local STEP_DURATION = 0.3 -- Faster, snappier steps
+local STEP_THRESHOLD = 3 -- Steps more frequently to prevent stretching
+local GRAVITY_FORCE = 30 
+
+-- Leg Proportions
+local COXA_LEN = 3
+local FEMUR_LEN = 7
+local KNEE_LEN = 7
+local TIBIA_LEN = 8 
+
+-- State Variables
+local hexapodModel = nil
+local runConnection = nil
+local legs = {}
+local body = nil
+local targetPos = nil
+local targetMarker = nil
+local lastTapTime = 0
+
+-- PERSISTENT STATE
+local currentRotationYaw = 0 
+local lastValidGroundY = 0
+local currentGaitGroup = 1 
+
+-- UI Setup
+local screenGui = Instance.new("ScreenGui", player.PlayerGui)
+screenGui.Name = "HexapodStableV26"
+screenGui.ResetOnSpawn = false
+
+local frame = Instance.new("Frame", screenGui)
+frame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+frame.Size = UDim2.new(0, 200, 0, 100)
+frame.Position = UDim2.new(0.3, 0, 0.5, -50)
+frame.Active = true
+frame.Draggable = true
+
+local function createBtn(text, pos, size)
+    local btn = Instance.new("TextButton", frame)
+    btn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    btn.Size = size
+    btn.Position = pos
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextScaled = true
+    btn.BorderSizePixel = 0
+    return btn
+end
+
+local spawnBtn = createBtn("Spawn Stable AI", UDim2.new(0, 10, 0, 20), UDim2.new(0, 180, 0, 30))
+local destroyBtn = createBtn("Destroy", UDim2.new(0, 10, 0, 60), UDim2.new(0, 180, 0, 30))
+
+local statusLabel = Instance.new("TextLabel", frame)
+statusLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+statusLabel.Size = UDim2.new(0, 200, 0, 30)
+statusLabel.Position = UDim2.new(0, 0, 0, -30)
+statusLabel.Text = "Strict Tripod Gait Active"
+statusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+statusLabel.TextScaled = true
+
+-- Helper: Create a Part
+local function createPart(size, color, material, parent)
+    local p = Instance.new("Part")
+    p.Size = size
+    p.Color = color
+    p.Material = material
+    p.Anchored = true
+    p.CanCollide = false
+    p.Parent = parent
+    return p
+end
+
+-- 4-Joint IK Solver
+local function solveSpiderIK(hipCF, footPos)
+    local localFoot = hipCF:PointToObjectSpace(footPos)
+    -- Increased yaw clamp to 50 degrees to give legs more freedom to reach forward/backward
+    local yaw = math.clamp(math.atan2(-localFoot.X, -localFoot.Z), math.rad(-50), math.rad(50))
+    local coxaBaseCF = hipCF * CFrame.Angles(0, yaw, 0)
+    local coxaEnd = (coxaBaseCF * CFrame.new(0, 0, -COXA_LEN)).Position
+    
+    local anklePos = footPos + Vector3.new(0, TIBIA_LEN, 0)
+    local toAnkle = anklePos - coxaEnd
+    
+    local maxReach = (FEMUR_LEN + KNEE_LEN) * 0.98
+    if toAnkle.Magnitude > maxReach then 
+        toAnkle = toAnkle.Unit * maxReach 
+        anklePos = coxaEnd + toAnkle 
+    end
+    
+    local dist = toAnkle.Magnitude
+    local cosAngle = (FEMUR_LEN^2 + dist^2 - KNEE_LEN^2) / (2 * FEMUR_LEN * dist)
+    local alpha = math.acos(math.clamp(cosAngle, -1, 1))
+    
+    local right = coxaBaseCF.RightVector
+    local up = right:Cross(toAnkle.Unit).Unit
+    if up.Y < 0 then up = -up end 
+    
+    local planeCF = CFrame.lookAt(coxaEnd, coxaEnd + toAnkle, up)
+    local femurCF = planeCF * CFrame.Angles(alpha, 0, 0) * CFrame.new(0, 0, -FEMUR_LEN/2)
+    local kneeBasePos = (planeCF * CFrame.Angles(alpha, 0, 0) * CFrame.new(0, 0, -FEMUR_LEN)).Position
+    local kneeCF = CFrame.lookAt(kneeBasePos, anklePos, planeCF.UpVector) * CFrame.new(0, 0, -KNEE_LEN/2)
+    local tibiaCF = CFrame.new(anklePos - Vector3.new(0, TIBIA_LEN/2, 0)) * CFrame.Angles(math.rad(90), 0, 0)
+    
+    return coxaBaseCF * CFrame.new(0, 0, -COXA_LEN/2), femurCF, kneeCF, tibiaCF
+end
+
+-- Build the Hexapod
+local function buildHexapod()
+    if hexapodModel then hexapodModel:Destroy() end
+    hexapodModel = Instance.new("Model", workspace)
+    body = createPart(Vector3.new(7, 2, 10), Color3.fromRGB(20, 20, 20), Enum.Material.Metal, hexapodModel)
+    targetMarker = createPart(Vector3.new(3, 0.1, 3), Color3.fromRGB(255, 255, 255), Enum.Material.Neon, hexapodModel)
+    targetMarker.Transparency = 1
+    
+    -- Brought Ideal offsets closer to the body so the IK solver doesn't max out and drag
+    local legConfigs = {
+        {Offset = CFrame.new(-3.5, 0, -4) * CFrame.Angles(0, math.rad(45), 0),  Ideal = Vector3.new(-8, -RIDE_HEIGHT, -8), Group = 1},
+        {Offset = CFrame.new(-3.5, 0, 0) * CFrame.Angles(0, math.rad(90), 0),    Ideal = Vector3.new(-10, -RIDE_HEIGHT, 0),   Group = 2},
+        {Offset = CFrame.new(-3.5, 0, 4) * CFrame.Angles(0, math.rad(135), 0), Ideal = Vector3.new(-8, -RIDE_HEIGHT, 8),  Group = 1},
+        {Offset = CFrame.new(3.5, 0, -4) * CFrame.Angles(0, math.rad(-45), 0),  Ideal = Vector3.new(8, -RIDE_HEIGHT, -8), Group = 2},
+        {Offset = CFrame.new(3.5, 0, 0) * CFrame.Angles(0, math.rad(-90), 0),    Ideal = Vector3.new(10, -RIDE_HEIGHT, 0),   Group = 1},
+        {Offset = CFrame.new(3.5, 0, 4) * CFrame.Angles(0, math.rad(-135), 0), Ideal = Vector3.new(8, -RIDE_HEIGHT, 8),  Group = 2},
+    }
+    
+    legs = {}
+    local hrp = player.Character.HumanoidRootPart
+    targetPos = hrp.Position
+    
+    -- Initialize State & Match Player's Facing Direction
+    local lookVec = hrp.CFrame.LookVector
+    currentRotationYaw = math.atan2(-lookVec.X, -lookVec.Z)
+    lastValidGroundY = hrp.Position.Y - 5
+    currentGaitGroup = 1
+    
+    body.CFrame = CFrame.new(hrp.Position + Vector3.new(0, 10, 0)) * CFrame.Angles(0, currentRotationYaw, 0)
+    
+    for i, cfg in ipairs(legConfigs) do
+        -- FIX: Calculate initial foot position relative to the body's ROTATION, preventing twisted legs at spawn
+        local idealWorldPos = (body.CFrame * CFrame.new(cfg.Ideal)).Position
+        
+        table.insert(legs, {
+            Coxa = createPart(Vector3.new(1.8, 1.8, COXA_LEN), Color3.fromRGB(30, 30, 30), Enum.Material.Metal, hexapodModel),
+            Femur = createPart(Vector3.new(1.4, 1.4, FEMUR_LEN), Color3.fromRGB(50, 50, 50), Enum.Material.Metal, hexapodModel),
+            Knee = createPart(Vector3.new(1.2, 1.2, KNEE_LEN), Color3.fromRGB(40, 40, 40), Enum.Material.Metal, hexapodModel),
+            Tibia = createPart(Vector3.new(1, 1, TIBIA_LEN), Color3.fromRGB(15, 15, 15), Enum.Material.Metal, hexapodModel),
+            HipOffset = cfg.Offset, IdealOffset = cfg.Ideal, Group = cfg.Group,
+            CurrentFootPos = idealWorldPos, TargetFootPos = idealWorldPos, StartFootPos = idealWorldPos,
+            IsStepping = false, StepTime = 0
+        })
+    end
+end
+
+-- Input: Double Tap
+UserInputService.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        local now = tick()
+        if now - lastTapTime < 0.4 then
+            local mousePos = UserInputService:GetMouseLocation()
+            local unitRay = camera:ViewportPointToRay(mousePos.X, mousePos.Y)
+            local result = workspace:Raycast(unitRay.Origin, unitRay.Direction * 1000)
+            if result then
+                targetPos = result.Position
+                targetMarker.Position = result.Position
+                targetMarker.Transparency = 0.5
+            end
+        end
+        lastTapTime = now
+    end
+end)
+
+-- Main Loop
+local function startAnimation()
+    if runConnection then runConnection:Disconnect() end
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = {hexapodModel, player.Character}
+    
+    runConnection = RunService.Heartbeat:Connect(function(dt)
+        if not body then return end
+        
+        local flatTarget = Vector3.new(targetPos.X, 0, targetPos.Z)
+        local flatBody = Vector3.new(body.Position.X, 0, body.Position.Z)
+        local toTarget = flatTarget - flatBody
+        local dist = toTarget.Magnitude
+        
+        -- 1. PERSISTENT YAW LOGIC
+        local targetYaw = currentRotationYaw
+        if dist > 2 then
+            targetYaw = math.atan2(-toTarget.X, -toTarget.Z)
+        end
+        
+        local angleDiff = (targetYaw - currentRotationYaw + math.pi) % (math.pi * 2) - math.pi
+        local turnStep = math.clamp(angleDiff, -MAX_TURN_RATE * dt, MAX_TURN_RATE * dt)
+        currentRotationYaw = currentRotationYaw + turnStep
+        
+        local newLook = Vector3.new(-math.sin(currentRotationYaw), 0, -math.cos(currentRotationYaw))
+        
+        -- 2. MOVEMENT SPEED
+        local isFacingTarget = math.abs(angleDiff) < math.rad(25)
+        local currentSpeed = (dist > 3 and isFacingTarget) and MAX_MOVEMENT_SPEED or 0
+        local moveVelocity = body.CFrame.LookVector * currentSpeed
+        
+        -- 3. STABLE SUSPENSION + GRAVITY FALLBACK
+        local groundHeights = {}
+        local probePoints = { body.Position }
+        for _, leg in ipairs(legs) do table.insert(probePoints, (body.CFrame * leg.HipOffset).Position) end
+        
+        for _, point in ipairs(probePoints) do
+            local ray = workspace:Raycast(point + Vector3.new(0, 5, 0), Vector3.new(0, -30, 0), rayParams)
+            if ray then table.insert(groundHeights, ray.Position.Y) end
+        end
+        
+        table.sort(groundHeights)
+        local detectedGroundY = #groundHeights > 0 and groundHeights[math.ceil(#groundHeights/2)] or nil
+        
+        if detectedGroundY then
+            lastValidGroundY = detectedGroundY
+        else
+            lastValidGroundY = lastValidGroundY - (GRAVITY_FORCE * dt)
+        end
+        
+        local targetY = lastValidGroundY + RIDE_HEIGHT
+        
+        -- Apply Body Update
+        body.CFrame = CFrame.lookAt(body.Position + (moveVelocity * dt), body.Position + newLook)
+        body.CFrame = CFrame.new(body.Position.X, math.lerp(body.Position.Y, targetY, 0.1), body.Position.Z) * body.CFrame.Rotation
+        
+        -- 4. STRICT ALTERNATING TRIPOD GAIT
+        local group1Stepping = false
+        local group2Stepping = false
+        local group1NeedsStep = false
+        local group2NeedsStep = false
+
+        -- Check if ANY leg in a group needs to step
+        for _, leg in ipairs(legs) do
+            if leg.IsStepping then
+                if leg.Group == 1 then group1Stepping = true end
+                if leg.Group == 2 then group2Stepping = true end
+            end
+            
+            local idealFoot = (body.CFrame * CFrame.new(leg.IdealOffset)).Position
+            local footDist = (Vector3.new(leg.CurrentFootPos.X, 0, leg.CurrentFootPos.Z) - Vector3.new(idealFoot.X, 0, idealFoot.Z)).Magnitude
+            
+            if footDist > STEP_THRESHOLD then
+                if leg.Group == 1 then group1NeedsStep = true end
+                if leg.Group == 2 then group2NeedsStep = true end
+            end
+        end
+
+        -- State Machine: Switch groups ONLY if the current group is done stepping
+        if currentGaitGroup == 1 and not group1Stepping and group2NeedsStep then
+            currentGaitGroup = 2
+        elseif currentGaitGroup == 2 and not group2Stepping and group1NeedsStep then
+            currentGaitGroup = 1
+        end
+
+        -- Apply Steps & IK
+        for _, leg in ipairs(legs) do
+            local hipWorld = body.CFrame * leg.HipOffset
+            local idealFoot = (body.CFrame * CFrame.new(leg.IdealOffset)).Position
+            
+            -- Predict forward movement so the leg steps into the walk
+            local stepTargetPos = idealFoot + (moveVelocity * STEP_DURATION * 0.8)
+            
+            if leg.Group == currentGaitGroup and not leg.IsStepping then
+                -- FIX: If ANY leg in the group needs a step, force ALL 3 legs in the group to step simultaneously
+                local needsStep = (leg.Group == 1 and group1NeedsStep) or (leg.Group == 2 and group2NeedsStep)
+                
+                if needsStep then
+                    leg.IsStepping = true
+                    leg.StepTime = 0
+                    leg.StartFootPos = leg.CurrentFootPos
+                    
+                    local ray = workspace:Raycast(stepTargetPos + Vector3.new(0, 10, 0), Vector3.new(0, -30, 0), rayParams)
+                    leg.TargetFootPos = ray and ray.Position or Vector3.new(stepTargetPos.X, lastValidGroundY, stepTargetPos.Z)
+                end
+            end
+            
+            if leg.IsStepping then
+                leg.StepTime = leg.StepTime + dt
+                local t = math.clamp(leg.StepTime / STEP_DURATION, 0, 1)
+                local alpha = t * t * (3 - 2 * t)
+                leg.CurrentFootPos = leg.StartFootPos:Lerp(leg.TargetFootPos, alpha) + Vector3.new(0, math.sin(t * math.pi) * BASE_STEP_HEIGHT, 0)
+                if t >= 1 then leg.IsStepping = false end
+            end
+            
+            local c, f, k, t_ik = solveSpiderIK(hipWorld, leg.CurrentFootPos)
+            leg.Coxa.CFrame, leg.Femur.CFrame, leg.Knee.CFrame, leg.Tibia.CFrame = c, f, k, t_ik
+        end
+    end)
+end
+
+spawnBtn.MouseButton1Click:Connect(function()
+    buildHexapod()
+    startAnimation()
+end)
+
+destroyBtn.MouseButton1Click:Connect(function()
+    if runConnection then runConnection:Disconnect() end
+    if hexapodModel then hexapodModel:Destroy() end
+    screenGui:Destroy()
+end)
