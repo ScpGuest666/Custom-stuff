@@ -1,0 +1,679 @@
+-- Services
+local PlayerService = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local player = PlayerService.LocalPlayer or PlayerService.PlayerAdded:Wait()
+local camera = workspace.CurrentCamera
+
+-- Configuration
+local MOVEMENT_SPEED = 28 
+local ROTATION_SPEED = 1.5 
+local STEP_HEIGHT = 10 
+local STEP_DURATION = 0.35
+local STEP_THRESHOLD = 6
+local STRIDE_MULTIPLIER = 1.5
+local GRAVITY_FORCE = 60 
+local MAX_LEG_STRETCH = 2.5 
+
+-- State Variables
+local mechParts = {}
+local mainSeat = nil
+local markedPartsList = {} 
+local markedPartsData = {} 
+local legsData = {} 
+local markingMode = false
+local isActivated = false
+local afkMode = false
+local controlMode = false
+local runConnection = nil
+local sitConnection = nil
+local targetPos = nil
+local targetMarker = nil
+local lastTapTime = 0
+local gaitTick = 0
+local RIDE_HEIGHT = 8
+
+-- Posture & Physics Cache
+local initialRideHeight = nil
+local initialCalfOffsets = {}
+local initialSwivelOffsets = {} 
+local initialLegReach = {} 
+local originalCollisionStates = {} 
+local lastValidGroundY = 0
+
+-- Manual Input State
+local activeInputs = {
+    Forward = false,
+    Backward = false,
+    Left = false,       -- Yaw Left
+    Right = false,      -- Yaw Right
+    StrafeLeft = false, -- Move Left
+    StrafeRight = false -- Move Right
+}
+
+-- ==========================================
+-- UI SETUP
+-- ==========================================
+local screenGui = Instance.new("ScreenGui", player.PlayerGui)
+screenGui.Name = "MechPuppeteer_Physics"
+screenGui.ResetOnSpawn = false
+
+-- Unified Main Frame (Everything inside this is draggable)
+local mainFrame = Instance.new("Frame", screenGui)
+mainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+mainFrame.Size = UDim2.new(0, 200, 0, 175) 
+mainFrame.Position = UDim2.new(0.3, 0, 0.5, -87)
+mainFrame.Active = true
+mainFrame.Draggable = true -- The entire background is now draggable!
+mainFrame.BorderSizePixel = 0
+
+-- Status Label (Top Bar)
+local statusLabel = Instance.new("TextLabel", mainFrame)
+statusLabel.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+statusLabel.Size = UDim2.new(1, 0, 0, 30)
+statusLabel.Position = UDim2.new(0, 0, 0, 0)
+statusLabel.Text = "Waiting for Main Body..."
+statusLabel.TextColor3 = Color3.fromRGB(0, 255, 255)
+statusLabel.TextScaled = true
+statusLabel.Font = Enum.Font.GothamBold
+statusLabel.BorderSizePixel = 0
+
+-- Scrolling Frame for Buttons 1-5
+local scrollFrame = Instance.new("ScrollingFrame", mainFrame)
+scrollFrame.Size = UDim2.new(1, 0, 0, 100) 
+scrollFrame.Position = UDim2.new(0, 0, 0, 35)
+scrollFrame.BackgroundTransparency = 1
+scrollFrame.BorderSizePixel = 0
+scrollFrame.ScrollBarThickness = 6
+scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 165) 
+
+local function createBtn(text, pos, parent)
+    local btn = Instance.new("TextButton", parent)
+    btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    btn.Size = UDim2.new(0, 180, 0, 25)
+    btn.Position = pos
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextScaled = true
+    btn.BorderSizePixel = 0
+    return btn
+end
+
+-- Scrollable Buttons
+local setMainBtn = createBtn("1. Set Main Body (Sit)", UDim2.new(0, 10, 0, 10), scrollFrame)
+local markBtn = createBtn("2. Mark Joints: OFF", UDim2.new(0, 10, 0, 40), scrollFrame)
+local activateBtn = createBtn("3. Activate Mech", UDim2.new(0, 10, 0, 70), scrollFrame)
+local afkBtn = createBtn("4. AFK Mode: OFF", UDim2.new(0, 10, 0, 100), scrollFrame)
+local controlBtn = createBtn("5. Control: OFF", UDim2.new(0, 10, 0, 130), scrollFrame)
+
+-- Fixed Destroy Button (At the bottom of the main frame)
+local destroyBtn = createBtn("Destroy", UDim2.new(0, 10, 0, 140), mainFrame)
+
+activateBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+activateBtn.TextColor3 = Color3.fromRGB(100, 100, 100)
+
+-- ==========================================
+-- CONTROL GUI SETUP
+-- ==========================================
+local function createCtrlBtn(text, pos, size, parent)
+    local btn = Instance.new("TextButton", parent)
+    btn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    btn.Size = size
+    btn.Position = pos
+    btn.Font = Enum.Font.GothamBold
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextScaled = true
+    return btn
+end
+
+-- Right Side Controller (Forward/Backward & Strafe Left/Right)
+local ControllerFrame = Instance.new("Frame", screenGui)
+ControllerFrame.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+ControllerFrame.Position = UDim2.new(0.78, -75, 0.5, -75)
+ControllerFrame.Size = UDim2.new(0, 150, 0, 150)
+ControllerFrame.Visible = false
+
+local ControllerCorner = Instance.new("UICorner", ControllerFrame)
+ControllerCorner.CornerRadius = UDim.new(0.5, 0)
+
+local ForwardButton = createCtrlBtn("▲", UDim2.new(0.5, -25, 0, 10), UDim2.new(0, 50, 0, 50), ControllerFrame)
+local BackwardButton = createCtrlBtn("▼", UDim2.new(0.5, -25, 0, 85), UDim2.new(0, 50, 0, 50), ControllerFrame)
+local StrafeLeftBtn = createCtrlBtn("<", UDim2.new(0, 0, 0.5, -25), UDim2.new(0, 50, 0, 50), ControllerFrame)
+local StrafeRightBtn = createCtrlBtn(">", UDim2.new(1, -50, 0.5, -25), UDim2.new(0, 50, 0, 50), ControllerFrame)
+
+-- Left Side Controller (Speed Crank & Yaw Left/Right)
+local LeftSideFrame = Instance.new("Frame", screenGui)
+LeftSideFrame.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+LeftSideFrame.Position = UDim2.new(0.1, 20, 0.5, -75)
+LeftSideFrame.Size = UDim2.new(0, 150, 0, 150)
+LeftSideFrame.Visible = false
+
+local LeftSideCorner = Instance.new("UICorner", LeftSideFrame)
+LeftSideCorner.CornerRadius = UDim.new(0.5, 0)
+
+local SpeedUpBtn = createCtrlBtn("+", UDim2.new(0.5, -25, 0, 10), UDim2.new(0, 50, 0, 50), LeftSideFrame)
+local SpeedDownBtn = createCtrlBtn("-", UDim2.new(0.5, -25, 0, 90), UDim2.new(0, 50, 0, 50), LeftSideFrame)
+local YawLeftBtn = createCtrlBtn("<⟨", UDim2.new(0.14, -25, 0, 50), UDim2.new(0, 50, 0, 50), LeftSideFrame)
+local YawRightBtn = createCtrlBtn("⟩>", UDim2.new(0.86, -25, 0, 50), UDim2.new(0, 50, 0, 50), LeftSideFrame)
+local SpeedDisplayBtn = createCtrlBtn("Spd: " .. MOVEMENT_SPEED, UDim2.new(0.84, -25, 0, 20), UDim2.new(0, 50, 0, 30), LeftSideFrame)
+
+-- Input Binding Helper
+local function bindInput(btn, action)
+    btn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            activeInputs[action] = true
+        end
+    end)
+    btn.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            activeInputs[action] = false
+        end
+    end)
+end
+
+-- Bindings matching the image layout
+bindInput(ForwardButton, "Forward")
+bindInput(BackwardButton, "Backward")
+bindInput(StrafeLeftBtn, "StrafeLeft")
+bindInput(StrafeRightBtn, "StrafeRight")
+bindInput(YawLeftBtn, "Left")
+bindInput(YawRightBtn, "Right")
+
+SpeedUpBtn.MouseButton1Click:Connect(function()
+    MOVEMENT_SPEED = MOVEMENT_SPEED + 5
+    SpeedDisplayBtn.Text = "Spd: " .. MOVEMENT_SPEED
+end)
+
+SpeedDownBtn.MouseButton1Click:Connect(function()
+    MOVEMENT_SPEED = math.max(0, MOVEMENT_SPEED - 5)
+    SpeedDisplayBtn.Text = "Spd: " .. MOVEMENT_SPEED
+end)
+
+-- ==========================================
+-- HELPER FUNCTIONS
+-- ==========================================
+local function getBuildParts(startPart)
+    local parts, toCheck, checked = {}, {startPart}, {[startPart] = true}
+    local overlapParams = OverlapParams.new()
+    while #toCheck > 0 do
+        local current = table.remove(toCheck, 1)
+        table.insert(parts, current)
+        for _, p in ipairs(current:GetConnectedParts()) do
+            if not checked[p] and not p:IsDescendantOf(player.Character) then 
+                checked[p] = true; table.insert(toCheck, p) 
+            end
+        end
+        local touching = workspace:GetPartBoundsInBox(current.CFrame, current.Size + Vector3.new(4, 4, 4), overlapParams)
+        for _, p in ipairs(touching) do
+            if p:IsA("BasePart") and not checked[p] and p.Name ~= "Baseplate" and p.Name ~= "Grass" and not p:IsDescendantOf(player.Character) then
+                checked[p] = true; table.insert(toCheck, p)
+            end
+        end
+    end
+    return parts
+end
+
+local function updateVisuals()
+    for i, part in ipairs(markedPartsList) do
+        local data = markedPartsData[part]
+        local isSwivel = (i >= 4 and i <= 9)
+        local color = isSwivel and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 255, 0)
+        
+        if not data.Gui then
+            local hl = Instance.new("SelectionBox", part)
+            hl.Adornee = part; hl.Color3 = color; hl.LineThickness = 0.05
+            local bg = Instance.new("BillboardGui", part)
+            bg.Size = UDim2.new(4, 0, 4, 0); bg.AlwaysOnTop = true
+            local txt = Instance.new("TextLabel", bg)
+            txt.Size = UDim2.new(1, 0, 1, 0); txt.BackgroundTransparency = 1
+            txt.TextScaled = true; txt.TextColor3 = color; txt.Font = Enum.Font.SourceSansBold
+            data.Highlight, data.Gui, data.Label = hl, bg, txt
+        end
+        data.Label.Text = tostring(i)
+        data.Label.TextColor3, data.Highlight.Color3 = color, color
+    end
+    
+    statusLabel.Text = "Marked: " .. #markedPartsList .. "/12"
+    if #markedPartsList == 12 then
+        activateBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+        activateBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    else
+        activateBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+        activateBtn.TextColor3 = Color3.fromRGB(100, 100, 100)
+    end
+end
+
+local function cleanupEverything()
+    if runConnection then runConnection:Disconnect() end
+    if sitConnection then sitConnection:Disconnect() end
+    local folder = workspace:FindFirstChild("MechTargets")
+    if folder then folder:Destroy() end
+    
+    if mainSeat then
+        for _, child in ipairs(mainSeat:GetChildren()) do
+            if child.Name == "MechPuppeteer_Constraint" then child:Destroy() end
+        end
+    end
+    for _, part in ipairs(markedPartsList) do
+        for _, child in ipairs(part:GetChildren()) do
+            if child.Name == "MechPuppeteer_Constraint" then child:Destroy() end
+        end
+    end
+    
+    for part, state in pairs(originalCollisionStates) do
+        if part and part.Parent then part.CanCollide = state end
+    end
+    table.clear(originalCollisionStates)
+    
+    for part, data in pairs(markedPartsData) do
+        if data.Gui then data.Gui:Destroy() end
+        if data.Highlight then data.Highlight:Destroy() end
+    end
+    screenGui:Destroy()
+end
+
+-- ==========================================
+-- BUTTON LOGIC
+-- ==========================================
+setMainBtn.MouseButton1Click:Connect(function()
+    local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+    if humanoid and humanoid.SeatPart then
+        mainSeat = humanoid.SeatPart
+        mechParts = getBuildParts(mainSeat)
+        statusLabel.Text = "Main Body Locked!"
+        setMainBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+        
+        initialRideHeight = nil
+        initialCalfOffsets = {}
+        initialSwivelOffsets = {}
+        initialLegReach = {}
+    end
+end)
+
+markBtn.MouseButton1Click:Connect(function()
+    if not mainSeat then return end
+    markingMode = not markingMode
+    if markingMode then
+        markBtn.Text = "2. Mark Joints: ON"
+        markBtn.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+        local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+        if sitConnection then sitConnection:Disconnect() end
+        
+        sitConnection = humanoid:GetPropertyChangedSignal("SeatPart"):Connect(function()
+            if not markingMode then return end
+            local seat = humanoid.SeatPart
+            if seat and seat ~= mainSeat then
+                local existingIndex = table.find(markedPartsList, seat)
+                if existingIndex then
+                    table.remove(markedPartsList, existingIndex)
+                    markedPartsData[seat].Highlight:Destroy()
+                    markedPartsData[seat].Gui:Destroy()
+                    markedPartsData[seat] = nil
+                else
+                    if #markedPartsList < 12 then
+                        table.insert(markedPartsList, seat)
+                        markedPartsData[seat] = {}
+                    end
+                end
+                updateVisuals()
+            end
+        end)
+    else
+        markBtn.Text = "2. Mark Joints: OFF"
+        markBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+        if sitConnection then sitConnection:Disconnect() end
+    end
+end)
+
+afkBtn.MouseButton1Click:Connect(function()
+    afkMode = not afkMode
+    if afkMode then
+        afkBtn.Text = "4. AFK Mode: ON"
+        afkBtn.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+    else
+        afkBtn.Text = "4. AFK Mode: OFF"
+        afkBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    end
+end)
+
+controlBtn.MouseButton1Click:Connect(function()
+    controlMode = not controlMode
+    if controlMode then
+        controlBtn.Text = "5. Control: ON"
+        controlBtn.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+        ControllerFrame.Visible = true
+        LeftSideFrame.Visible = true
+    else
+        controlBtn.Text = "5. Control: OFF"
+        controlBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+        ControllerFrame.Visible = false
+        LeftSideFrame.Visible = false
+    end
+end)
+
+activateBtn.MouseButton1Click:Connect(function()
+    if not mainSeat or #markedPartsList < 12 then return end
+    isActivated = not isActivated
+    
+    if not isActivated then
+        activateBtn.Text = "3. Activate Mech"
+        activateBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+        statusLabel.Text = "Mech Deactivated."
+        if runConnection then runConnection:Disconnect() end
+        local folder = workspace:FindFirstChild("MechTargets")
+        if folder then folder:Destroy() end
+        
+        for _, child in ipairs(mainSeat:GetChildren()) do
+            if child.Name == "MechPuppeteer_Constraint" then child:Destroy() end
+        end
+        for _, part in ipairs(markedPartsList) do
+            for _, child in ipairs(part:GetChildren()) do
+                if child.Name == "MechPuppeteer_Constraint" then child:Destroy() end
+            end
+        end
+        
+        for part, state in pairs(originalCollisionStates) do
+            if part and part.Parent then part.CanCollide = state end
+        end
+        table.clear(originalCollisionStates)
+        return
+    end
+    
+    activateBtn.Text = "3. Deactivate Mech"
+    activateBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
+    statusLabel.Text = "Mech Active!"
+    
+    for _, part in ipairs(mechParts) do
+        if part:IsA("BasePart") then
+            originalCollisionStates[part] = part.CanCollide
+            if part ~= mainSeat then
+                part.CanCollide = false
+            end
+        end
+    end
+    
+    local targetFolder = workspace:FindFirstChild("MechTargets")
+    if targetFolder then targetFolder:Destroy() end
+    targetFolder = Instance.new("Folder", workspace)
+    targetFolder.Name = "MechTargets"
+    
+    legsData = {
+        { Calf = markedPartsList[1],  Swivel = markedPartsList[4], Group = 1 }, 
+        { Calf = markedPartsList[2],  Swivel = markedPartsList[5], Group = 2 }, 
+        { Calf = markedPartsList[3],  Swivel = markedPartsList[6], Group = 1 }, 
+        { Calf = markedPartsList[10], Swivel = markedPartsList[7], Group = 2 }, 
+        { Calf = markedPartsList[11], Swivel = markedPartsList[8], Group = 1 }, 
+        { Calf = markedPartsList[12], Swivel = markedPartsList[9], Group = 2 }  
+    }
+    
+    if not initialRideHeight then
+        local lowestY = mainSeat.Position.Y
+        for _, leg in ipairs(legsData) do
+            if leg.Calf.Position.Y < lowestY then lowestY = leg.Calf.Position.Y end
+        end
+        initialRideHeight = mainSeat.Position.Y - lowestY
+    end
+    RIDE_HEIGHT = initialRideHeight
+    lastValidGroundY = mainSeat.Position.Y - RIDE_HEIGHT
+    
+    -- PHYSICS SETUP: MAIN CHASSIS
+    local bv = Instance.new("BodyVelocity", mainSeat)
+    bv.Name = "MechPuppeteer_Constraint"
+    bv.MaxForce = Vector3.new(9e9, 9e9, 9e9) 
+    bv.Velocity = Vector3.new(0, 0, 0)
+    
+    local bg = Instance.new("BodyGyro", mainSeat)
+    bg.Name = "MechPuppeteer_Constraint"
+    bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9) 
+    bg.P = 3000
+    bg.D = 100
+    
+    -- PHYSICS SETUP: LEGS
+    for i, leg in ipairs(legsData) do
+        if not initialCalfOffsets[i] then
+            initialCalfOffsets[i] = mainSeat.CFrame:PointToObjectSpace(leg.Calf.Position)
+            
+            local flatFoot = Vector3.new(leg.Calf.Position.X, 0, leg.Calf.Position.Z)
+            local flatSwivel = Vector3.new(leg.Swivel.Position.X, 0, leg.Swivel.Position.Z)
+            local toFoot = (flatFoot - flatSwivel).Magnitude > 0.1 and (flatFoot - flatSwivel).Unit or mainSeat.CFrame.LookVector
+            local lookCF = CFrame.lookAt(leg.Swivel.Position, leg.Swivel.Position + toFoot)
+            initialSwivelOffsets[i] = lookCF:Inverse() * leg.Swivel.CFrame
+            
+            initialLegReach[i] = (leg.Swivel.Position - leg.Calf.Position).Magnitude * MAX_LEG_STRETCH
+        end
+        leg.CalfOffset = initialCalfOffsets[i]
+        leg.SwivelOffset = initialSwivelOffsets[i]
+        leg.MaxReach = initialLegReach[i]
+        
+        local sAtt0 = Instance.new("Attachment", leg.Swivel)
+        sAtt0.Name = "MechPuppeteer_Constraint"
+        
+        local sAo = Instance.new("AlignOrientation", leg.Swivel)
+        sAo.Name = "MechPuppeteer_Constraint"
+        sAo.Mode = Enum.OrientationAlignmentMode.OneAttachment
+        sAo.Attachment0 = sAtt0
+        sAo.MaxTorque = 5000000 
+        sAo.Responsiveness = 80 
+        leg.SwivelAlignOri = sAo
+        
+        local cAtt0 = Instance.new("Attachment", leg.Calf)
+        cAtt0.Name = "MechPuppeteer_Constraint"
+        
+        local cAp = Instance.new("AlignPosition", leg.Calf)
+        cAp.Name = "MechPuppeteer_Constraint"
+        cAp.Mode = Enum.PositionAlignmentMode.OneAttachment
+        cAp.Attachment0 = cAtt0
+        cAp.MaxForce = 5000000 
+        cAp.Responsiveness = 80 
+        leg.CalfAlignPos = cAp
+        
+        leg.CurrentPos = leg.Calf.Position
+        leg.StartPos = leg.Calf.Position
+        leg.TargetPos = leg.Calf.Position
+        leg.IsStepping = false
+        leg.StepTime = 0
+    end
+    
+    targetMarker = Instance.new("Part", targetFolder)
+    targetMarker.Size = Vector3.new(3, 0.1, 3); targetMarker.Color = Color3.fromRGB(255, 0, 0)
+    targetMarker.Material = Enum.Material.Neon; targetMarker.Anchored = true
+    targetMarker.CanCollide = false; targetMarker.Transparency = 1
+    targetPos = mainSeat.Position
+    
+    local filterList = {player.Character, targetFolder}
+    for _, part in ipairs(mechParts) do table.insert(filterList, part) end
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = filterList
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    
+    -- MAIN PHYSICS LOOP
+    runConnection = RunService.Heartbeat:Connect(function(dt)
+        if not mainSeat or not mainSeat.Parent then return end
+        
+        local currentYaw = math.atan2(-mainSeat.CFrame.LookVector.X, -mainSeat.CFrame.LookVector.Z)
+        local newYaw = currentYaw
+        local moveVelocity = Vector3.new(0, 0, 0)
+        local turnStep = 0
+        local currentSpeed = 0
+        
+        if controlMode and not afkMode then
+            -- ==========================================
+            -- MANUAL CONTROL LOGIC
+            -- ==========================================
+            if activeInputs.Left then
+                turnStep = ROTATION_SPEED * dt
+                newYaw = currentYaw + turnStep
+            elseif activeInputs.Right then
+                turnStep = -ROTATION_SPEED * dt
+                newYaw = currentYaw + turnStep
+            end
+            
+            local moveDir = Vector3.new(0, 0, 0)
+            local forwardVector = Vector3.new(-math.sin(newYaw), 0, -math.cos(newYaw))
+            local rightVector = Vector3.new(math.cos(newYaw), 0, -math.sin(newYaw))
+            
+            if activeInputs.Forward then moveDir = moveDir + forwardVector end
+            if activeInputs.Backward then moveDir = moveDir - forwardVector end
+            if activeInputs.StrafeRight then moveDir = moveDir + rightVector end
+            if activeInputs.StrafeLeft then moveDir = moveDir - rightVector end
+            
+            if moveDir.Magnitude > 0 then
+                moveDir = moveDir.Unit
+                currentSpeed = MOVEMENT_SPEED
+                moveVelocity = moveDir * currentSpeed
+            end
+            
+            targetPos = mainSeat.Position + moveVelocity
+            targetMarker.Position = targetPos
+            
+        elseif not afkMode then
+            -- ==========================================
+            -- DOUBLE TAP (AUTO) LOGIC
+            -- ==========================================
+            local flatTarget = Vector3.new(targetPos.X, 0, targetPos.Z)
+            local flatBody = Vector3.new(mainSeat.Position.X, 0, mainSeat.Position.Z)
+            local toTarget = flatTarget - flatBody
+            local dist = toTarget.Magnitude
+            
+            local targetYaw = currentYaw
+            if dist > 2 then 
+                targetYaw = math.atan2(-toTarget.X, -toTarget.Z) 
+            end
+            
+            local angleDiff = (targetYaw - currentYaw + math.pi) % (math.pi * 2) - math.pi
+            turnStep = math.clamp(angleDiff, -ROTATION_SPEED * dt, ROTATION_SPEED * dt)
+            newYaw = currentYaw + turnStep
+            
+            local alignment = math.abs(angleDiff)
+            local speedMultiplier = 0
+            if alignment < math.rad(10) then
+                speedMultiplier = 1 
+            elseif alignment < math.rad(45) then
+                speedMultiplier = 1 - ((alignment - math.rad(10)) / math.rad(35)) 
+            else
+                speedMultiplier = 0 
+            end
+            
+            currentSpeed = (dist > 3) and (MOVEMENT_SPEED * speedMultiplier) or 0
+            local moveDir = Vector3.new(-math.sin(newYaw), 0, -math.cos(newYaw))
+            moveVelocity = moveDir * currentSpeed
+        end
+        
+        local bodyRay = workspace:Raycast(mainSeat.Position + Vector3.new(0, 100, 0), Vector3.new(0, -200, 0), rayParams)
+        if bodyRay then
+            lastValidGroundY = bodyRay.Position.Y
+        else
+            lastValidGroundY = lastValidGroundY - (GRAVITY_FORCE * dt)
+        end
+        
+        local totalFootY = 0
+        for _, leg in ipairs(legsData) do
+            totalFootY = totalFootY + leg.CurrentPos.Y
+        end
+        local averageFootY = totalFootY / #legsData
+        
+        local targetY = bodyRay and (averageFootY + RIDE_HEIGHT) or (lastValidGroundY + RIDE_HEIGHT)
+        local yVel = (targetY - mainSeat.Position.Y) * 10 
+        yVel = math.clamp(yVel, -50, 50) 
+        
+        bv.Velocity = Vector3.new(moveVelocity.X, yVel, moveVelocity.Z)
+        bg.CFrame = CFrame.new(mainSeat.Position) * CFrame.Angles(0, newYaw, 0)
+        
+        -- ==========================================
+        -- DYNAMIC PROCEDURAL LEG ANIMATION
+        -- ==========================================
+        local speedRatio = 1
+        if currentSpeed > 5 then
+            speedRatio = math.clamp(currentSpeed / 28, 1, 3.5) 
+        end
+        
+        local dynamicThreshold = STEP_THRESHOLD * math.clamp(currentSpeed / 28, 1, 3)
+        
+        gaitTick = gaitTick + (dt * speedRatio)
+        local activeGroup = (math.floor(gaitTick / STEP_DURATION) % 2) + 1
+        local flatChassisCF = CFrame.new(mainSeat.Position) * CFrame.Angles(0, newYaw, 0)
+        
+        for _, leg in ipairs(legsData) do
+            local idealFoot = (flatChassisCF * CFrame.new(leg.CalfOffset)).Position
+            idealFoot = idealFoot + (moveVelocity * STEP_DURATION * STRIDE_MULTIPLIER)
+            
+            if leg.Group == activeGroup and not leg.IsStepping then
+                local footDist = (Vector3.new(leg.CurrentPos.X, 0, leg.CurrentPos.Z) - Vector3.new(idealFoot.X, 0, idealFoot.Z)).Magnitude
+                if footDist > dynamicThreshold or math.abs(turnStep) > 0.005 then
+                    leg.IsStepping = true
+                    leg.StepTime = 0
+                    leg.StartPos = leg.CurrentPos
+                    
+                    local fRay = workspace:Raycast(idealFoot + Vector3.new(0, 100, 0), Vector3.new(0, -200, 0), rayParams)
+                    local tentativeTarget = fRay and fRay.Position or Vector3.new(idealFoot.X, lastValidGroundY, idealFoot.Z)
+                    
+                    local hipPos = leg.Swivel.Position
+                    if (tentativeTarget - hipPos).Magnitude > leg.MaxReach then
+                        local closerIdeal = idealFoot:Lerp(Vector3.new(mainSeat.Position.X, idealFoot.Y, mainSeat.Position.Z), 0.4)
+                        local ledgeRay = workspace:Raycast(closerIdeal + Vector3.new(0, 100, 0), Vector3.new(0, -200, 0), rayParams)
+                        
+                        if ledgeRay and (ledgeRay.Position - hipPos).Magnitude <= leg.MaxReach then
+                            tentativeTarget = ledgeRay.Position 
+                        else
+                            tentativeTarget = hipPos + (tentativeTarget - hipPos).Unit * leg.MaxReach
+                        end
+                    end
+                    
+                    leg.TargetPos = tentativeTarget
+                end
+            end
+            
+            if leg.IsStepping then
+                leg.StepTime = leg.StepTime + (dt * speedRatio)
+                local t = math.clamp(leg.StepTime / STEP_DURATION, 0, 1)
+                local alpha = t * t * (3 - 2 * t)
+                
+                local heightDiff = leg.TargetPos.Y - leg.StartPos.Y
+                local extraHeight = math.max(0, heightDiff) 
+                local currentStepHeight = STEP_HEIGHT + extraHeight
+                
+                leg.CurrentPos = leg.StartPos:Lerp(leg.TargetPos, alpha) + Vector3.new(0, math.sin(t * math.pi) * currentStepHeight, 0)
+                if t >= 1 then leg.IsStepping = false end
+            end
+            
+            leg.CalfAlignPos.Position = leg.CurrentPos
+            
+            local flatFoot = Vector3.new(leg.CurrentPos.X, 0, leg.CurrentPos.Z)
+            local flatSwivel = Vector3.new(leg.Swivel.Position.X, 0, leg.Swivel.Position.Z)
+            local toFoot = (flatFoot - flatSwivel).Magnitude > 0.1 and (flatFoot - flatSwivel).Unit or (moveVelocity.Magnitude > 0.1 and moveVelocity.Unit or mainSeat.CFrame.LookVector)
+            local lookCF = CFrame.lookAt(leg.Swivel.Position, leg.Swivel.Position + toFoot, mainSeat.CFrame.UpVector)
+            
+            leg.SwivelAlignOri.CFrame = lookCF * leg.SwivelOffset.Rotation
+        end
+    end)
+end)
+
+-- Input: Double Tap
+UserInputService.InputBegan:Connect(function(input)
+    if afkMode or controlMode then return end 
+    
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        local now = tick()
+        if now - lastTapTime < 0.4 and isActivated and mainSeat then
+            local mousePos = UserInputService:GetMouseLocation()
+            local unitRay = camera:ViewportPointToRay(mousePos.X, mousePos.Y)
+            
+            local filterList = {player.Character, workspace:FindFirstChild("MechTargets")}
+            for _, part in ipairs(mechParts) do table.insert(filterList, part) end
+            local rayParams = RaycastParams.new()
+            rayParams.FilterDescendantsInstances = filterList
+            rayParams.FilterType = Enum.RaycastFilterType.Exclude
+            
+            local result = workspace:Raycast(unitRay.Origin, unitRay.Direction * 1000, rayParams)
+            if result then
+                targetPos = result.Position
+                targetMarker.Position = result.Position
+                targetMarker.Transparency = 0.5
+            end
+        end
+        lastTapTime = now
+    end
+end)
+
+destroyBtn.MouseButton1Click:Connect(cleanupEverything)
