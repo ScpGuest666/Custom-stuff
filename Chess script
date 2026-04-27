@@ -1,0 +1,982 @@
+-- Wait for player to load
+local PlayerService = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+local Camera = workspace.CurrentCamera
+
+local player = PlayerService.LocalPlayer
+if not player then
+	player = PlayerService.PlayerAdded:Wait()
+end
+player:WaitForChild("PlayerGui")
+
+-- HTTP Request function
+local req = (typeof(request) == "function" and request) or (typeof(http_request) == "function" and http_request) or (typeof(http) == "table" and type(http.request) == "function" and http.request) or (typeof(syn) == "table" and type(syn.request) == "function" and syn.request)
+
+-- Screen GUI
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = player.PlayerGui
+screenGui.ResetOnSpawn = false
+screenGui.Name = "GuiVersion2"
+
+-- Main Frame (draggable)
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+frame.Size = UDim2.new(0, 240, 0, 300)
+frame.Position = UDim2.new(0.3, 0, 0.4, -50)
+frame.Active = true
+frame.Draggable = true
+
+-- Second Frame (Attached to Main Frame)
+local secondFrameWidth = 150
+local secondFrame = Instance.new("Frame")
+secondFrame.Parent = frame 
+secondFrame.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+secondFrame.Size = UDim2.new(0, secondFrameWidth, 1, 0) 
+secondFrame.Position = UDim2.new(0, -secondFrameWidth, 0, 0) 
+secondFrame.Visible = false 
+secondFrame.Name = "SecondFrame"
+
+local secondFrameLabel = Instance.new("TextLabel")
+secondFrameLabel.Parent = secondFrame
+secondFrameLabel.Size = UDim2.new(1, 0, 0, 30)
+secondFrameLabel.Text = "Settings/Info"
+secondFrameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+secondFrameLabel.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+secondFrameLabel.TextScaled = true
+
+-- UI Elements for Second Frame
+local trainButton = Instance.new("TextButton")
+trainButton.Parent = secondFrame
+trainButton.Size = UDim2.new(1, -10, 0, 25)
+trainButton.Position = UDim2.new(0, 5, 0, 40)
+trainButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+trainButton.Text = "Train"
+trainButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+trainButton.TextScaled = true
+
+local switchButton = Instance.new("TextButton")
+switchButton.Parent = secondFrame
+switchButton.Size = UDim2.new(1, -10, 0, 25)
+switchButton.Position = UDim2.new(0, 5, 0, 75)
+switchButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+switchButton.Text = "Switch Sides"
+switchButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+switchButton.TextScaled = true
+
+local flipButton = Instance.new("TextButton")
+flipButton.Parent = secondFrame
+flipButton.Size = UDim2.new(1, -10, 0, 25)
+flipButton.Position = UDim2.new(0, 5, 0, 110)
+flipButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+flipButton.Text = "Flip Board"
+flipButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+flipButton.TextScaled = true
+
+local moveButton = Instance.new("TextButton")
+moveButton.Parent = secondFrame
+moveButton.Size = UDim2.new(1, -10, 0, 25)
+moveButton.Position = UDim2.new(0, 5, 0, 145)
+moveButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+moveButton.Text = "Move"
+moveButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+moveButton.TextScaled = true
+
+local matchButton = Instance.new("TextButton")
+matchButton.Parent = secondFrame
+matchButton.Size = UDim2.new(1, -10, 0, 25)
+matchButton.Position = UDim2.new(0, 5, 0, 180)
+matchButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+matchButton.Text = "Match 3D"
+moveButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+matchButton.TextScaled = true
+
+-- Button Layout Adjustment
+local buttonWidth, buttonHeight, buttonY, buttonSpacing = 70, 25, 10, 5
+local onButton = Instance.new("TextButton")
+onButton.Parent, onButton.BackgroundColor3, onButton.Size, onButton.Position, onButton.Text, onButton.TextColor3, onButton.TextScaled = frame, Color3.fromRGB(80, 80, 80), UDim2.new(0, buttonWidth, 0, buttonHeight), UDim2.new(0, buttonSpacing, 0, buttonY), "On", Color3.fromRGB(255, 255, 255), true
+local offButton = Instance.new("TextButton")
+offButton.Parent, offButton.BackgroundColor3, offButton.Size, offButton.Position, offButton.Text, offButton.TextColor3, offButton.TextScaled = frame, Color3.fromRGB(80, 80, 80), UDim2.new(0, buttonWidth, 0, buttonHeight), UDim2.new(0, buttonSpacing * 2 + buttonWidth, 0, buttonY), "Off", Color3.fromRGB(255, 255, 255), true
+local backButton = Instance.new("TextButton")
+backButton.Parent, backButton.BackgroundColor3, backButton.Size, backButton.Position, backButton.Text, backButton.TextColor3, backButton.TextScaled, backButton.Active = frame, Color3.fromRGB(80, 80, 80), UDim2.new(0, buttonWidth, 0, buttonHeight), UDim2.new(0, buttonSpacing * 3 + buttonWidth * 2, 0, buttonY), "Back", Color3.fromRGB(255, 255, 255), true, false
+local destroyButton = Instance.new("TextButton")
+destroyButton.Parent, destroyButton.BackgroundColor3, destroyButton.Size, destroyButton.Position, destroyButton.Text, destroyButton.TextColor3, destroyButton.TextScaled = frame, Color3.fromRGB(80, 80, 80), UDim2.new(0, 180, 0, 25), UDim2.new(0, 30, 0, 45), "Destroy", Color3.fromRGB(255, 255, 255), true
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent, statusLabel.BackgroundColor3, statusLabel.Size, statusLabel.Position, statusLabel.Text, statusLabel.TextColor3, statusLabel.TextScaled = frame, Color3.fromRGB(60, 60, 60), UDim2.new(0, 240, 0, 25), UDim2.new(0, 0, 0, -25), "Status: Offline", Color3.fromRGB(255, 0, 0), true
+local toggleButton = Instance.new("TextButton")
+toggleButton.Parent, toggleButton.BackgroundColor3, toggleButton.Size, toggleButton.Position, toggleButton.Text, toggleButton.TextColor3, toggleButton.TextScaled = frame, Color3.fromRGB(80, 80, 80), UDim2.new(0, 20, 0, 25), UDim2.new(0, -20, 0, -25), "<", Color3.fromRGB(255, 255, 255), true
+
+toggleButton.MouseButton1Click:Connect(function() secondFrame.Visible = not secondFrame.Visible; toggleButton.Text = secondFrame.Visible and ">" or "<" end)
+
+-- Variables
+local activeConnections, chessBoard = {}, nil
+local gamePaused, gameActive, isTraining = false, false, false
+local moveHistory, squares, originalColors, promotionFrame = {}, {}, {}, nil
+local currentTurn, hasMoved, playerColor, isBoardFlipped = "White", {}, "White", false
+local stateVersion = 0 
+local isThinking = false
+
+-- Match 3D Variables
+local isMatching = false
+local waitingForPlayerToMirror = false
+local turnStartBoard = nil
+local createdVisuals = {}
+local MAX_DISTANCE = 80 
+local pieceKeywords = {"pawn", "knight", "bishop", "rook", "queen", "king"}
+local boardAnchor = nil
+local lastSeenBoard3D = nil   -- for debounce
+local boardStableCount = 0
+
+-- --- Helper Functions ---
+local function copyHasMoved(hm) local c = {}; for k, v in pairs(hm) do c[k] = v end; return c end
+local function cloneBoard(b) return {{b[1][1],b[1][2],b[1][3],b[1][4],b[1][5],b[1][6],b[1][7],b[1][8]},{b[2][1],b[2][2],b[2][3],b[2][4],b[2][5],b[2][6],b[2][7],b[2][8]},{b[3][1],b[3][2],b[3][3],b[3][4],b[3][5],b[3][6],b[3][7],b[3][8]},{b[4][1],b[4][2],b[4][3],b[4][4],b[4][5],b[4][6],b[4][7],b[4][8]},{b[5][1],b[5][2],b[5][3],b[5][4],b[5][5],b[5][6],b[5][7],b[5][8]},{b[6][1],b[6][2],b[6][3],b[6][4],b[6][5],b[6][6],b[6][7],b[6][8]},{b[7][1],b[7][2],b[7][3],b[7][4],b[7][5],b[7][6],b[7][7],b[7][8]},{b[8][1],b[8][2],b[8][3],b[8][4],b[8][5],b[8][6],b[8][7],b[8][8]}} end
+local function getPieceColor(p) if p=="" then return nil end; return (p:upper()==p) and "Black" or "White" end
+local function getPieceTextColor(c) return (c=="Black") and Color3.fromRGB(20,20,20) or Color3.fromRGB(255,255,255) end
+local function copyBoard(s) local b={}; for r=1,8 do b[r]={}; for c=1,8 do b[r][c]=s[r][c].Text end end; return b end
+local function isPathClear(b,sr,sc,er,ec) local dr,dc=math.sign(er-sr),math.sign(ec-sc); local r,c=sr+dr,sc+dc; while r~=er or c~=ec do if b[r] and b[r][c] and b[r][c]~="" then return false end; r,c=r+dr,c+dc end; return true end
+local isValidMove; local function isSquareAttacked(b,r,c,ac) for row=1,8 do for col=1,8 do local p=b[row][col]; if getPieceColor(p)==ac then local ot=b[r][c]; b[r][c]=(ac=="White") and "P" or "p"; local ca=isValidMove(b,row,col,r,c,true); b[r][c]=ot; if ca then return true end end end end; return false end
+local function findKing(b,c) local kp=(c=="White") and "k" or "K"; for r=1,8 do for col=1,8 do if b[r][col]==kp then return r,col end end end end
+
+isValidMove = function(b,sr,sc,er,ec,isCE) local p=b[sr][sc]; if p=="" then return false end; local pt,pc=p:lower(),getPieceColor(p); local tp,tc=b[er][ec],getPieceColor(b[er][ec]); if tc==pc or (sr==er and sc==ec) then return false end; local dr,dc=math.abs(er-sr),math.abs(ec-sc); if pt=='k' and dr==0 and dc==2 and not isCE then if hasMoved[p] then return false end; local rc=(ec>sc) and 8 or 1; local rp=(pc=="White") and "r" or "R"; if b[sr][rc]~=rp or hasMoved[rp..rc] then return false end; if not isPathClear(b,sr,sc,sr,rc) then return false end; local oc=(pc=="White") and "Black" or "White"; if isSquareAttacked(b,sr,sc,oc) then return false end; local ptc=sc+((ec>sc) and 1 or -1); if isSquareAttacked(b,sr,ptc,oc) then return false end; return true end; if pt=='p' then local d=(pc=="White") and -1 or 1; local sR=(pc=="White") and 7 or 2; if dc==0 and (er-sr)==d then return tp=="" end; if dc==0 and (er-sr)==2*d and sr==sR then return tp=="" and isPathClear(b,sr,sc,er,ec) end; if dr==1 and dc==1 and (er-sr)==d then return tp~="" end; return false elseif pt=='r' then if (dr==0 and dc>0) or (dc==0 and dr>0) then return isPathClear(b,sr,sc,er,ec) end; return false elseif pt=='n' then if (dr==2 and dc==1) or (dr==1 and dc==2) then return true end; return false elseif pt=='b' then if dr==dc and dr>0 then return isPathClear(b,sr,sc,er,ec) end; return false elseif pt=='q' then if (dr==0 and dc>0) or (dc==0 and dr>0) or (dr==dc and dr>0) then return isPathClear(b,sr,sc,er,ec) end; return false elseif pt=='k' then if dr<=1 and dc<=1 and (dr>0 or dc>0) then return true end; return false end; return false end
+
+local PV={p=100,n=320,b=330,r=500,q=900,k=20000,P=-100,N=-320,B=-330,R=-500,Q=-900,K=-20000}
+local yieldCounter = 0
+local function checkYield() yieldCounter = yieldCounter + 1; if yieldCounter > 500 then task.wait(); yieldCounter = 0 end end
+
+local function generateLegalMoves(b,c) 
+	local m={}
+	for r=1,8 do 
+		for col=1,8 do 
+			local p=b[r][col]
+			if getPieceColor(p)==c then 
+				for er=1,8 do 
+					for ec=1,8 do 
+						if isValidMove(b,r,col,er,ec) then 
+							local tb=cloneBoard(b)
+							tb[er][ec]=p
+							tb[r][col]=""
+							local kr,kc=findKing(tb,c)
+							if not isSquareAttacked(tb,kr,kc,(c=="White") and "Black" or "White") then 
+								table.insert(m,{fromR=r,fromC=col,toR=er,toC=ec,piece=p,captured=b[er][ec]}) 
+							end 
+						end 
+					end 
+				end 
+			end 
+		end 
+	end
+	table.sort(m, function(m1, m2)
+		local s1 = m1.captured ~= "" and math.abs(PV[m1.captured] or 0) or 0
+		local s2 = m2.captured ~= "" and math.abs(PV[m2.captured] or 0) or 0
+		return s1 > s2
+	end)
+	return m 
+end
+
+-- --- 3D MATCHING LOGIC (IMPROVED) ---
+local function getChessPieceType(name)
+    local lowerName = string.lower(name)
+    for _, keyword in ipairs(pieceKeywords) do
+        if string.find(lowerName, keyword) then return keyword end
+    end
+    return nil
+end
+
+local function getTeamColor3D(model)
+    local part = model:FindFirstChildWhichIsA("BasePart", true)
+    if part then
+        local color = part.Color
+        if (color.r + color.g + color.b) / 3 > 0.5 then
+            return Color3.fromRGB(0, 255, 255), "White" 
+        else
+            return Color3.fromRGB(255, 0, 0), "Black" 
+        end
+    end
+    return Color3.fromRGB(255, 255, 255), "Unknown"
+end
+
+local function identifyTarget(model, teamColor, teamName, pieceType)
+    if model:FindFirstChild("ID_Highlight") then return end
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "ID_Highlight"
+    highlight.Adornee = model
+    highlight.FillColor = teamColor
+    highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+    highlight.FillTransparency = 0.5
+    highlight.Parent = model
+    table.insert(createdVisuals, highlight)
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "ID_Label"
+    billboard.Adornee = model
+    billboard.Size = UDim2.new(4, 0, 1.5, 0) 
+    billboard.StudsOffset = Vector3.new(0, 2.5, 0)
+    billboard.AlwaysOnTop = true
+
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Parent = billboard
+    textLabel.Size = UDim2.new(1, 0, 1, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.Text = teamName .. " " .. pieceType:sub(1,1):upper()..pieceType:sub(2)
+    textLabel.TextColor3 = teamColor
+    textLabel.TextStrokeTransparency = 0
+    textLabel.TextScaled = true
+
+    billboard.Parent = model
+    table.insert(createdVisuals, billboard)
+    
+    if #createdVisuals > 200 then
+        local newVisuals = {}
+        for _, v in ipairs(createdVisuals) do
+            if v and v.Parent then table.insert(newVisuals, v) end
+        end
+        createdVisuals = newVisuals
+    end
+end
+
+local function clear3DVisuals()
+    for _, v in pairs(createdVisuals) do
+        if v then pcall(v.Destroy, v) end
+    end
+    createdVisuals = {}
+end
+
+local function get3DBoardState()
+    if not isMatching then return nil end   -- safety
+    local pieces = {}
+    
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj ~= player.Character then
+            local extents = obj:GetExtentsSize()
+            if extents.X < 15 and extents.Y < 20 and extents.Z < 15 then
+                local pType = getChessPieceType(obj.Name)
+                if pType then
+                    local pos = obj:GetPivot().Position
+                    local distance = (pos - Camera.CFrame.Position).Magnitude
+                    if distance < MAX_DISTANCE then
+                        local tColor, tName = getTeamColor3D(obj)
+                        table.insert(pieces, {obj = obj, pos = pos, type = pType, color = tName, tColor = tColor})
+                    end
+                end
+            end
+        end
+    end
+    
+    if #pieces < 4 then return nil end  -- need at least a few pieces
+    
+    if not boardAnchor then
+        local sumX, sumZ, count = 0, 0, 0
+        for _, p in ipairs(pieces) do
+            sumX = sumX + p.pos.X
+            sumZ = sumZ + p.pos.Z
+            count = count + 1
+        end
+        local centerX, centerZ = sumX / count, sumZ / count
+        
+        local validPieces = {}
+        local validXs, validZs = {}, {}
+        local MAX_DEVIATION = 40 
+        for _, p in ipairs(pieces) do
+            if (p.pos - Vector3.new(centerX, p.pos.Y, centerZ)).Magnitude < MAX_DEVIATION then
+                table.insert(validPieces, p)
+                table.insert(validXs, p.pos.X)
+                table.insert(validZs, p.pos.Z)
+            end
+        end
+        
+        if #validPieces < 4 then return nil end
+        table.sort(validXs)
+        table.sort(validZs)
+        
+        local minX, maxX = validXs[1], validXs[#validXs]
+        local minZ, maxZ = validZs[1], validZs[#validZs]
+        
+        local squareSizeX = (maxX - minX) / 7
+        local squareSizeZ = (maxZ - minZ) / 7
+        
+        if squareSizeX < 0.1 or squareSizeZ < 0.1 then return nil end
+        
+        local tempBoard = {}
+        for r=1,8 do tempBoard[r] = {} for c=1,8 do tempBoard[r][c] = "" end end
+        for _, p in ipairs(validPieces) do
+            local c = math.floor(((p.pos.X - minX) / squareSizeX) + 0.5) + 1
+            local r = math.floor(((p.pos.Z - minZ) / squareSizeZ) + 0.5) + 1
+            c = math.clamp(c, 1, 8)
+            r = math.clamp(r, 1, 8)
+            
+            local char = ""
+            if p.type == "pawn" then char = "p"
+            elseif p.type == "knight" then char = "n"
+            elseif p.type == "bishop" then char = "b"
+            elseif p.type == "rook" then char = "r"
+            elseif p.type == "queen" then char = "q"
+            elseif p.type == "king" then char = "k"
+            end
+            if p.color == "Black" then char = char:upper() end
+            
+            if tempBoard[r][c] == "" then tempBoard[r][c] = char end
+        end
+        
+        local flipRow = false
+        local flipCol = false
+        
+        local whiteKingR, whiteKingC, whiteQueenC
+        for r=1,8 do for c=1,8 do if tempBoard[r][c] == 'k' then whiteKingR = r; whiteKingC = c end; if tempBoard[r][c] == 'q' then whiteQueenC = c end end end
+        
+        if whiteKingR and whiteKingR < 5 then
+            flipRow = true
+            local newBoard = {}
+            for r=1,8 do newBoard[r] = tempBoard[9-r] end
+            tempBoard = newBoard
+        end
+        
+        whiteKingC = nil; whiteQueenC = nil
+        for r=1,8 do for c=1,8 do if tempBoard[r][c] == 'k' then whiteKingC = c end; if tempBoard[r][c] == 'q' then whiteQueenC = c end end end
+        
+        if whiteKingC and whiteQueenC and whiteQueenC > whiteKingC then
+            flipCol = true
+        end
+        
+        boardAnchor = {
+            minX = minX, maxX = maxX,
+            minZ = minZ, maxZ = maxZ,
+            squareSizeX = squareSizeX,
+            squareSizeZ = squareSizeZ,
+            flipRow = flipRow,
+            flipCol = flipCol
+        }
+    end
+    
+    local board3D = {}
+    for r=1,8 do board3D[r] = {} for c=1,8 do board3D[r][c] = "" end end
+    
+    local pieceMappings = {}
+    
+    for _, p in ipairs(pieces) do
+        local c = math.floor(((p.pos.X - boardAnchor.minX) / boardAnchor.squareSizeX) + 0.5) + 1
+        local r = math.floor(((p.pos.Z - boardAnchor.minZ) / boardAnchor.squareSizeZ) + 0.5) + 1
+        
+        local char = ""
+        if p.type == "pawn" then char = "p"
+        elseif p.type == "knight" then char = "n"
+        elseif p.type == "bishop" then char = "b"
+        elseif p.type == "rook" then char = "r"
+        elseif p.type == "queen" then char = "q"
+        elseif p.type == "king" then char = "k"
+        end
+        if p.color == "Black" then char = char:upper() end
+        
+        if c >= 1 and c <= 8 and r >= 1 and r <= 8 then
+            if boardAnchor.flipRow then r = 9 - r end
+            if boardAnchor.flipCol then c = 9 - c end
+            
+            if board3D[r][c] == "" then 
+                board3D[r][c] = char 
+                table.insert(pieceMappings, {obj = p.obj, r = r, c = c, char = char, tColor = p.tColor, tName = p.color, pType = p.type, extra = false})
+            else
+                table.insert(pieceMappings, {obj = p.obj, r = r, c = c, char = char, tColor = p.tColor, tName = p.color, pType = p.type, extra = true})
+            end
+        else
+            table.insert(pieceMappings, {obj = p.obj, r = -1, c = -1, char = char, tColor = p.tColor, tName = p.color, pType = p.type, extra = true})
+        end
+    end
+    
+    -- Count pieces in the script grid
+    local scriptCounts = {}
+    for r=1,8 do
+        for c=1,8 do
+            local p = squares[r][c].Text
+            if p ~= "" then
+                scriptCounts[p] = (scriptCounts[p] or 0) + 1
+            end
+        end
+    end
+    
+    -- Sort mappings to prioritize pieces on correct squares
+    table.sort(pieceMappings, function(a, b)
+        local aCorrect = (a.r >= 1 and a.r <= 8 and squares[a.r][a.c].Text == a.char and not a.extra)
+        local bCorrect = (b.r >= 1 and b.r <= 8 and squares[b.r][b.c].Text == b.char and not b.extra)
+        if aCorrect and not bCorrect then return true end
+        if bCorrect and not aCorrect then return false end
+        return false
+    end)
+    
+    for _, pm in ipairs(pieceMappings) do
+        local isCaptured = true
+        if scriptCounts[pm.char] and scriptCounts[pm.char] > 0 then
+            scriptCounts[pm.char] = scriptCounts[pm.char] - 1
+            isCaptured = false
+        end
+        
+        if isCaptured then
+            local hl = pm.obj:FindFirstChild("ID_Highlight")
+            if hl then hl:Destroy() end
+            local bb = pm.obj:FindFirstChild("ID_Label")
+            if bb then bb:Destroy() end
+        else
+            identifyTarget(pm.obj, pm.tColor, pm.tName, pm.pType)
+        end
+    end
+    
+    return board3D
+end
+
+local function applyMoveToBoard(board, move)
+    local nb = cloneBoard(board)
+    nb[move.toR][move.toC] = move.piece
+    nb[move.fromR][move.fromC] = ""
+    if move.piece:lower() == 'k' and math.abs(move.toC - move.fromC) == 2 then
+        local rookCol = (move.toC > move.fromC) and 8 or 1
+        local newRookCol = (move.toC > move.fromC) and 6 or 4
+        nb[move.fromR][newRookCol] = nb[move.fromR][rookCol]
+        nb[move.fromR][rookCol] = ""
+    end
+    if move.piece:lower() == 'p' and move.fromC ~= move.toC and board[move.toR][move.toC] == "" then
+        nb[move.fromR][move.toC] = ""
+    end
+    if move.piece:lower() == 'p' and (move.toR == 1 or move.toR == 8) then
+        nb[move.toR][move.toC] = (getPieceColor(move.piece) == "White") and "q" or "Q"
+    end
+    return nb
+end
+
+local function boardsMatch(b1, b2)
+    for r=1,8 do
+        for c=1,8 do
+            local p1, p2 = b1[r][c], b2[r][c]
+            if p1 ~= p2 then
+                if p1:lower() == 'q' and p2:lower() == 'p' and (r==1 or r==8) and getPieceColor(p1) == getPieceColor(p2) then
+                    -- Accept promotion mismatch
+                else
+                    return false
+                end
+            end
+        end
+    end
+    return true
+end
+
+-- --- STOCKFISH API INTEGRATION ---
+local function getFEN()
+    local fen = ""
+    for r = 1, 8 do
+        local emptyCount = 0
+        for c = 1, 8 do
+            local p = squares[r][c].Text
+            if p == "" then
+                emptyCount = emptyCount + 1
+            else
+                if emptyCount > 0 then
+                    fen = fen .. tostring(emptyCount)
+                    emptyCount = 0
+                end
+                local fenPiece = (p:upper() == p) and p:lower() or p:upper()
+                fen = fen .. fenPiece
+            end
+        end
+        if emptyCount > 0 then fen = fen .. tostring(emptyCount) end
+        if r < 8 then fen = fen .. "/" end
+    end
+    
+    local activeColor = (currentTurn == "White") and "w" or "b"
+    local castling = ""
+    if not hasMoved["k"] then
+        if not hasMoved["r8"] then castling = castling .. "K" end
+        if not hasMoved["r1"] then castling = castling .. "Q" end
+    end
+    if not hasMoved["K"] then
+        if not hasMoved["R8"] then castling = castling .. "k" end
+        if not hasMoved["R1"] then castling = castling .. "q" end
+    end
+    if castling == "" then castling = "-" end
+    
+    fen = fen .. " " .. activeColor .. " " .. castling .. " - 0 1"
+    return fen
+end
+
+local function uciToMove(uci)
+    if not uci or #uci < 4 then return nil end
+    local c1 = uci:sub(1,1):byte() - 96
+    local r1 = 9 - tonumber(uci:sub(2,2))
+    local c2 = uci:sub(3,3):byte() - 96
+    local r2 = 9 - tonumber(uci:sub(4,4))
+    local promo = uci:sub(5,5)
+    return r1, c1, r2, c2, promo
+end
+
+local function getBestMoveFromAPI(fen)
+    local url = "https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=10"
+    local body = nil
+    local completed = false
+    
+    task.spawn(function()
+        if req then
+            local success, response = pcall(function() return req({Url = url, Method = "GET"}) end)
+            if success and response then body = response.Body end
+        elseif type(game.HttpGet) == "function" then
+            local success, response = pcall(function() return game:HttpGet(url) end)
+            if success then body = response end
+        end
+        completed = true
+    end)
+    
+    local t = 0
+    while not completed and t < 5 do
+        t = t + task.wait(0.1)
+    end
+    
+    if not completed then return nil end
+    
+    if body then
+        local success, data = pcall(function() return HttpService:JSONDecode(body) end)
+        if success and data and data.success and data.bestmove then
+            return data.bestmove:match("bestmove%s+(%S+)")
+        end
+    end
+    return nil
+end
+
+-- --- LOCAL AI FALLBACK ---
+local PST={p={{0,0,0,0,0,0,0,0},{50,50,50,50,50,50,50,50},{10,10,20,30,30,20,10,10},{5,5,10,25,25,10,5,5},{0,0,0,20,20,0,0,0},{5,-5,-10,0,0,-10,-5,5},{5,10,10,-20,-20,10,10,5},{0,0,0,0,0,0,0,0}},n={{-50,-40,-30,-30,-30,-30,-40,-50},{-40,-20,0,0,0,0,-20,-40},{-30,0,10,15,15,10,0,-30},{-30,5,15,20,20,15,5,-30},{-30,0,15,20,20,15,0,-30},{-30,5,10,15,15,10,5,-30},{-40,-20,0,5,5,0,-20,-40},{-50,-40,-30,-30,-30,-30,-40,-50}},b={{-20,-10,-10,-10,-10,-10,-10,-20},{-10,0,0,0,0,0,0,-10},{-10,0,5,10,10,5,0,-10},{-10,5,5,10,10,5,5,-10},{-10,0,10,10,10,10,0,-10},{-10,10,10,10,10,10,10,-10},{-10,5,0,0,0,0,5,-10},{-20,-10,-10,-10,-10,-10,-10,-20}},r={{0,0,0,0,0,0,0,0},{5,10,10,10,10,10,10,5},{-5,0,0,0,0,0,0,-5},{-5,0,0,0,0,0,0,-5},{-5,0,0,0,0,0,0,-5},{-5,0,0,0,0,0,0,-5},{-5,0,0,0,0,0,0,-5},{0,0,0,5,5,0,0,0}},q={{-20,-10,-10,-5,-5,-10,-10,-20},{-10,0,0,0,0,0,0,-10},{-10,0,5,5,5,5,0,-10},{-5,0,5,5,5,5,0,-5},{0,0,5,5,5,5,0,-5},{-10,5,5,5,5,5,0,-10},{-10,0,5,0,0,0,0,-10},{-20,-10,-10,-5,-5,-10,-10,-20}},k={{-30,-40,-40,-50,-50,-40,-40,-30},{-30,-40,-40,-50,-50,-40,-40,-30},{-30,-40,-40,-50,-50,-40,-40,-30},{-30,-40,-40,-50,-50,-40,-40,-30},{-20,-30,-30,-40,-40,-30,-30,-20},{-10,-20,-20,-20,-20,-20,-20,-10},{20,20,0,0,0,0,20,20},{20,30,10,0,0,10,30,20}}}
+local function evaluateBoard(b) local s=0; for r=1,8 do for c=1,8 do local p=b[r][c]; if p~="" then local ms=PV[p] or 0; local pt,pc=p:lower(),getPieceColor(p); local ps=0; if PST[pt] then ps=(pc=="White") and PST[pt][r][c] or PST[pt][9-r][c] end; s+=(pc=="Black") and (ms-ps) or (ms+ps) end end end; return s end
+local MAX_DEPTH,minimax_=2,nil; minimax_=function(b,d,a,be,isM) checkYield(); if d==0 then return evaluateBoard(b) end; local m=generateLegalMoves(b,isM and "Black" or "White"); if isM then local me=-math.huge; for _,mo in ipairs(m) do local nb=cloneBoard(b); nb[mo.toR][mo.toC]=mo.piece; nb[mo.fromR][mo.fromC]=""; local e=minimax_(nb,d-1,a,be,false); me=math.max(me,e); a=math.max(a,e); if be<=a then break end end; return me else local me=math.huge; for _,mo in ipairs(m) do local nb=cloneBoard(b); nb[mo.toR][mo.toC]=mo.piece; nb[mo.fromR][mo.fromC]=""; local e=minimax_(nb,d-1,a,be,true); me=math.min(me,e); be=math.min(be,e); if be<=a then break end end; return me end end
+local function absPV(ch) return math.abs(PV[ch] or 0) end
+local function moveLeavesPieceHanging(newBoard, move, moverColor) local oppColor = (moverColor == "White") and "Black" or "White"; local destR, destC = move.toR, move.toC; local moves = generateLegalMoves(newBoard, oppColor); for _, m in ipairs(moves) do if m.toR == destR and m.toC == destC and m.captured ~= "" then local capturedVal = (move.captured ~= "") and absPV(move.captured) or 0; local movedVal = absPV(move.piece); local netForMover = capturedVal - movedVal; if netForMover < 0 then return true, -netForMover end end end; return false, 0 end
+local function findBestMoveFor(color) local board = copyBoard(squares); local bestMove, bestEval; local legalMoves = generateLegalMoves(board, color); if #legalMoves == 0 then return end; if color == "Black" then bestEval = math.huge; for _, move in ipairs(legalMoves) do checkYield(); local newBoard = cloneBoard(board); newBoard[move.toR][move.toC] = move.piece; newBoard[move.fromR][move.fromC] = ""; local eval = minimax_(newBoard, MAX_DEPTH - 1, -math.huge, math.huge, false); local hanging, penaltyMag = moveLeavesPieceHanging(newBoard, move, "Black"); if hanging then eval = eval + penaltyMag * 10 end; if eval < bestEval then bestEval, bestMove = eval, move end end else bestEval = -math.huge; for _, move in ipairs(legalMoves) do checkYield(); local newBoard = cloneBoard(board); newBoard[move.toR][move.toC] = move.piece; newBoard[move.fromR][move.fromC] = ""; local eval = minimax_(newBoard, MAX_DEPTH - 1, -math.huge, math.huge, true); local hanging, penaltyMag = moveLeavesPieceHanging(newBoard, move, "White"); if hanging then eval = eval - penaltyMag * 10 end; if eval > bestEval then bestEval, bestMove = eval, move end end end; return bestMove end
+
+-- --- UI and Control Functions ---
+local function clearHighlights() 
+    if not squares then return end
+    for r=1,8 do 
+        for c=1,8 do 
+            if originalColors[r] and originalColors[r][c] and squares[r][c] then 
+                squares[r][c].BackgroundColor3 = originalColors[r][c] 
+            end 
+        end 
+    end 
+end
+
+local function highlightValidMoves(sr,sc) 
+    local b=copyBoard(squares); 
+    local lm=generateLegalMoves(b,playerColor); 
+    for _,m in ipairs(lm) do 
+        if m.fromR==sr and m.fromC==sc then 
+            squares[m.toR][m.toC].BackgroundColor3=(m.captured~="") and Color3.fromRGB(200,50,50) or Color3.fromRGB(50,200,50) 
+        end 
+    end 
+end
+
+-- --- Game State and Execution ---
+local function checkGameState() 
+    local b=copyBoard(squares); 
+    local lm=generateLegalMoves(b,currentTurn); 
+    if #lm==0 then 
+        local kr,kc=findKing(b,currentTurn); 
+        local oc=(currentTurn=="White") and "Black" or "White"; 
+        if isSquareAttacked(b,kr,kc,oc) then 
+            statusLabel.Text="Checkmate! "..oc.." wins!" 
+        else 
+            statusLabel.Text="Stalemate! It's a draw." 
+        end; 
+        gamePaused=true; 
+        return true 
+    end; 
+    return false 
+end
+
+local function executeMove(move, color, promo)
+    local fromR,fromC,toR,toC,movedPiece = move.fromR,move.fromC,move.toR,move.toC,move.piece
+    local startSq,endSq=squares[fromR][fromC],squares[toR][toC]
+    
+    clearHighlights() 
+    
+    table.insert(moveHistory,{fromR=fromR,fromC=fromC,toR=toR,toC=toC,movedPiece=movedPiece,capturedPiece=endSq.Text,previousHasMoved=copyHasMoved(hasMoved)})
+    
+    if movedPiece:lower() == 'p' and fromC ~= toC and endSq.Text == "" then
+        squares[fromR][toC].Text = ""
+    end
+    
+    endSq.Text,endSq.TextColor3,startSq.Text=movedPiece,getPieceTextColor(color),""
+    
+    if movedPiece:lower()=='k' and math.abs(toC-fromC)==2 then
+        local rookCol,newRookCol=(toC>fromC) and 8 or 1,(toC>fromC) and 6 or 4
+        local rookPiece=squares[fromR][rookCol].Text
+        squares[fromR][newRookCol].Text,squares[fromR][rookCol].Text=rookPiece,""
+        squares[fromR][newRookCol].TextColor3=getPieceTextColor(color)
+    end
+    
+    if movedPiece:lower() == 'p' then
+        if (color == "White" and toR == 1) or (color == "Black" and toR == 8) then
+            local newPiece = promo
+            if not newPiece or newPiece == "" then newPiece = "q" end
+            newPiece = (color == "White") and newPiece:lower() or newPiece:upper()
+            endSq.Text = newPiece
+            local lastMove = moveHistory[#moveHistory]
+            if lastMove then lastMove.promotedTo = newPiece end
+        end
+    end
+    
+    hasMoved[movedPiece]=true
+    if movedPiece:lower()=='r' then hasMoved[movedPiece..fromC]=true end
+    
+    startSq.BackgroundColor3=Color3.fromRGB(255,255,0)
+    endSq.BackgroundColor3=Color3.fromRGB(0,150,255)
+    
+    currentTurn=(color=="White") and "Black" or "White"
+    stateVersion = stateVersion + 1 
+    statusLabel.Text="Status: ("..currentTurn.."'s Turn)"
+    checkGameState()
+end
+
+local function executeAIMove(color)
+    if currentTurn ~= color or gamePaused or isThinking then return end
+    isThinking = true
+    local myState = stateVersion
+    statusLabel.Text = "Status: AI (" .. color .. ") is thinking..."
+    
+    task.delay(5, function()
+        if stateVersion == myState and isThinking then
+            isThinking = false
+            warn("AI thinking timed out forcefully.")
+            statusLabel.Text = "Status: AI Timeout. Press Move."
+        end
+    end)
+    
+    task.wait(0.05) 
+    
+    local success, err = pcall(function()
+        local fen = getFEN()
+        local uciMove = getBestMoveFromAPI(fen)
+        
+        if stateVersion ~= myState then return end 
+        
+        if uciMove then
+            local fromR, fromC, toR, toC, promo = uciToMove(uciMove)
+            if fromR and fromC and toR and toC and squares[fromR] and squares[fromR][fromC] then
+                local movedPiece = squares[fromR][fromC].Text
+                local move = {
+                    fromR = fromR, fromC = fromC,
+                    toR = toR, toC = toC,
+                    piece = movedPiece,
+                    captured = squares[toR][toC].Text
+                }
+                executeMove(move, color, promo)
+                if isMatching then waitingForPlayerToMirror = true end
+                isThinking = false
+                return
+            end
+        end
+        
+        warn("Stockfish API failed or timed out, using local AI fallback.")
+        local move = findBestMoveFor(color)
+        
+        if stateVersion ~= myState then return end 
+        
+        if move then
+            executeMove(move, color)
+            if isMatching then waitingForPlayerToMirror = true end
+        else
+            checkGameState()
+        end
+    end)
+    
+    if not success then
+        warn("AI Error: " .. tostring(err))
+        statusLabel.Text = "Status: AI Error! Press Move."
+    end
+    
+    isThinking = false
+end
+
+local function executeAIMoveForWhite() executeAIMove("White") end
+local function executeAIMoveForBlack() executeAIMove("Black") end
+
+local function trainingLoop()
+    while isTraining and not gamePaused do
+        if not isThinking then
+            if currentTurn == "White" then
+                task.spawn(executeAIMoveForWhite)
+            elseif currentTurn == "Black" then
+                task.spawn(executeAIMoveForBlack)
+            end
+        end
+        task.wait(0.5)
+    end
+end
+
+trainButton.MouseButton1Click:Connect(function()
+    isTraining = not isTraining
+    trainButton.Text = isTraining and "Stop Training" or "Train"
+    if isTraining and not gamePaused then
+        task.spawn(trainingLoop)
+    end
+end)
+
+switchButton.MouseButton1Click:Connect(function()
+    if not gameActive or isTraining then return end
+    playerColor = (playerColor == "White") and "Black" or "White"
+    statusLabel.Text = "You are now " .. playerColor
+    task.wait(1)
+    statusLabel.Text = "Status: Online ("..currentTurn.."'s Turn)"
+    
+    if currentTurn ~= playerColor and not gamePaused then
+        if currentTurn == "White" then
+            task.spawn(executeAIMoveForWhite)
+        else
+            task.spawn(executeAIMoveForBlack)
+        end
+    end
+end)
+
+moveButton.MouseButton1Click:Connect(function()
+    if not gameActive or gamePaused then return end
+    if isThinking then
+        isThinking = false
+        stateVersion = stateVersion + 1
+        warn("Forced AI reset.")
+    end
+    if currentTurn == "White" then
+        task.spawn(executeAIMoveForWhite)
+    else
+        task.spawn(executeAIMoveForBlack)
+    end
+end)
+
+-- --- IMPROVED MATCH 3D LOOP (with debounce) ---
+local function matchLoop()
+    while isMatching do
+        task.wait(0.3)  -- slightly faster scan
+        if gamePaused or isThinking then continue end
+        
+        local board3D = get3DBoardState()
+        if not board3D then 
+            lastSeenBoard3D = nil
+            boardStableCount = 0
+            continue 
+        end
+        
+        -- Debounce: require board to be stable for 2 scans
+        if lastSeenBoard3D then
+            local stable = true
+            for r=1,8 do
+                for c=1,8 do
+                    if board3D[r][c] ~= lastSeenBoard3D[r][c] then
+                        stable = false
+                        break
+                    end
+                end
+            end
+            if stable then
+                boardStableCount = boardStableCount + 1
+            else
+                boardStableCount = 0
+            end
+        else
+            boardStableCount = 0
+        end
+        lastSeenBoard3D = board3D
+        
+        if boardStableCount < 1 then continue end  -- wait for stability
+        
+        if waitingForPlayerToMirror then
+            if boardsMatch(copyBoard(squares), board3D) then
+                waitingForPlayerToMirror = false
+                turnStartBoard = copyBoard(squares)
+                statusLabel.Text = "Status: Online ("..currentTurn.."'s Turn)"
+            else
+                statusLabel.Text = "Status: Please mirror AI move in 3D!"
+            end
+        elseif currentTurn == playerColor then
+            local legalMoves = generateLegalMoves(turnStartBoard, playerColor)
+            local matchedMove = nil
+            for _, move in ipairs(legalMoves) do
+                local tempBoard = applyMoveToBoard(turnStartBoard, move)
+                if boardsMatch(tempBoard, board3D) then
+                    matchedMove = move
+                    break
+                end
+            end
+            
+            if matchedMove then
+                for r=1,8 do for c=1,8 do 
+                    squares[r][c].Text = turnStartBoard[r][c]
+                    squares[r][c].TextColor3 = getPieceTextColor(getPieceColor(turnStartBoard[r][c]))
+                end end
+                
+                executeMove(matchedMove, playerColor)
+                turnStartBoard = copyBoard(squares) 
+                
+                if currentTurn ~= playerColor and not gamePaused then
+                    if currentTurn == "Black" then task.spawn(executeAIMoveForBlack) else task.spawn(executeAIMoveForWhite) end
+                end
+            else
+                -- No single legal move matches – do not overwrite board; just wait longer
+                statusLabel.Text = "Status: Unclear move – please complete one move at a time"
+            end
+        end
+    end
+end
+
+matchButton.MouseButton1Click:Connect(function()
+    isMatching = not isMatching
+    matchButton.Text = isMatching and "Stop Match" or "Match 3D"
+    if isMatching then
+        boardAnchor = nil
+        turnStartBoard = copyBoard(squares)
+        waitingForPlayerToMirror = false
+        lastSeenBoard3D = nil
+        boardStableCount = 0
+        clear3DVisuals()
+        task.spawn(matchLoop)
+    else
+        boardAnchor = nil
+        clear3DVisuals()
+        lastSeenBoard3D = nil
+        boardStableCount = 0
+    end
+end)
+
+local function flipBoard()
+    if not gameActive or not chessBoard then return end
+    local size = 25
+    for r = 1, 8 do
+        for c = 1, 8 do
+            local square = squares[r][c]
+            local newPos
+            if isBoardFlipped then
+                newPos = UDim2.new(0, (8 - c) * size, 0, (8 - r) * size)
+            else
+                newPos = UDim2.new(0, (c - 1) * size, 0, (r - 1) * size)
+            end
+            TweenService:Create(square, TweenInfo.new(0.3), {Position = newPos}):Play()
+        end
+    end
+end
+
+flipButton.MouseButton1Click:Connect(function()
+    if not gameActive then return end
+    isBoardFlipped = not isBoardFlipped
+    flipBoard()
+end)
+
+local function undoLastMove() 
+    if #moveHistory==0 or not gameActive then return end; 
+    isTraining,trainButton.Text=false,"Train"; 
+    gamePaused=false; 
+    stateVersion = stateVersion + 1 
+    isThinking = false
+    
+    if promotionFrame then promotionFrame:Destroy(); promotionFrame=nil end; 
+    local lm=table.remove(moveHistory); 
+    local fr,fc,tr,tc=lm.fromR,lm.fromC,lm.toR,lm.toC; 
+    local mp,cp=lm.movedPiece,lm.capturedPiece; 
+    squares[fr][fc].Text=mp; 
+    squares[fr][fc].TextColor3=getPieceTextColor(getPieceColor(mp)); 
+    squares[tr][tc].Text=cp; 
+    if cp~="" then squares[tr][tc].TextColor3=getPieceTextColor(getPieceColor(cp)) end; 
+    if mp:lower()=='k' and math.abs(tc-fc)==2 then 
+        local rc,nrc=(tc>fc) and 8 or 1,(tc>fc) and 6 or 4; 
+        local rp=squares[fr][nrc].Text; 
+        squares[fr][rc].Text,squares[fr][nrc].Text=rp,""; 
+        squares[fr][rc].TextColor3=getPieceTextColor(getPieceColor(rp)) 
+    end; 
+    hasMoved=lm.previousHasMoved; 
+    currentTurn=getPieceColor(mp); 
+    
+    clearHighlights()
+    if #moveHistory > 0 then
+        local prevMove = moveHistory[#moveHistory]
+        squares[prevMove.fromR][prevMove.fromC].BackgroundColor3 = Color3.fromRGB(255, 255, 0)
+        squares[prevMove.toR][prevMove.toC].BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+    end
+    
+    if isMatching then
+        turnStartBoard = copyBoard(squares)
+        waitingForPlayerToMirror = false
+    end
+    
+    statusLabel.Text="Status: Online ("..currentTurn.."'s Turn)" 
+end
+
+local function setStatusOnline() 
+    statusLabel.Text="Status: Online (White's Turn)"; 
+    statusLabel.TextColor3=Color3.fromRGB(0,255,0); 
+    gameActive=true; 
+    backButton.Active=true 
+end
+
+local function setStatusOffline() 
+    statusLabel.Text="Status: Offline"; 
+    statusLabel.TextColor3=Color3.fromRGB(255,0,0); 
+    gameActive=false; 
+    isTraining=false; 
+    trainButton.Text="Train"; 
+    backButton.Active=false; 
+    -- Stop match mode and clean 3D visuals
+    if isMatching then
+        isMatching = false
+        matchButton.Text = "Match 3D"
+        boardAnchor = nil
+        clear3DVisuals()
+        lastSeenBoard3D = nil
+        boardStableCount = 0
+    end
+    -- Destroy chess board and promotion frame
+    if chessBoard then chessBoard:Destroy(); chessBoard=nil end
+    if promotionFrame then promotionFrame:Destroy(); promotionFrame=nil end
+    clearHighlights()  -- just in case
+end
+
+local function cleanup() 
+    for _,c in ipairs(activeConnections) do 
+        if c and c.Disconnect then c:Disconnect() end 
+    end 
+    activeConnections={}; 
+    if chessBoard then chessBoard:Destroy(); chessBoard=nil end; 
+    if promotionFrame then promotionFrame:Destroy(); promotionFrame=nil end; 
+    if screenGui then screenGui:Destroy(); screenGui=nil end;
+    -- Also stop match mode and clear visuals
+    if isMatching then
+        isMatching = false
+        clear3DVisuals()
+    end
+end
+
+local function createChessGame()
+	if gameActive then return end 
+	currentTurn,gamePaused,isTraining,trainButton.Text,playerColor,isBoardFlipped = "White",false,false,"Train","White",false
+	stateVersion = 0
+	isThinking = false
+    boardAnchor = nil
+    lastSeenBoard3D = nil
+    boardStableCount = 0
+	hasMoved = {k=false,K=false,r1=false,r8=false,R1=false,R8=false}
+	if chessBoard then chessBoard:Destroy() end
+	chessBoard=Instance.new("Frame"); chessBoard.Parent,chessBoard.BackgroundColor3,chessBoard.Size,chessBoard.Position,chessBoard.BorderSizePixel=frame,Color3.fromRGB(200,200,200),UDim2.new(0,200,0,200),UDim2.new(0,20,0,80),0
+	local s=25; for r=1,8 do squares[r],originalColors[r]={},{} for c=1,8 do local sq=Instance.new("TextButton"); sq.Parent,sq.Size,sq.Position=chessBoard,UDim2.new(0,s,0,s),UDim2.new(0,(c-1)*s,0,(r-1)*s); local cl=((r+c)%2==0) and Color3.fromRGB(240,217,181) or Color3.fromRGB(181,136,99); sq.BackgroundColor3,originalColors[r][c]=cl,cl; sq.TextScaled,sq.Font,sq.TextColor3,sq.Text=true,Enum.Font.SourceSansBold,Color3.fromRGB(0,0,0),""; squares[r][c]=sq end end
+	local l={{"R","N","B","Q","K","B","N","R"},{"P","P","P","P","P","P","P","P"},{"","","","","","","",""},{"","","","","","","",""},{"","","","","","","",""},{"","","","","","","",""},{"p","p","p","p","p","p","p","p"},{"r","n","b","q","k","b","n","r"}}; for r=1,8 do for c=1,8 do local p=l[r][c]; if p~="" then squares[r][c].Text=p; squares[r][c].TextColor3=(r<=2) and Color3.fromRGB(20,20,20) or Color3.fromRGB(255,255,255) end end end
+	
+	local function handlePromotion(pr,pc,pc_color) gamePaused=true; if promotionFrame then promotionFrame:Destroy() end; promotionFrame=Instance.new("Frame"); promotionFrame.Parent,promotionFrame.BackgroundColor3,promotionFrame.Size,promotionFrame.Position,promotionFrame.BorderSizePixel,promotionFrame.BorderColor3=frame,Color3.fromRGB(60,60,60),UDim2.new(0,200,0,40),UDim2.new(0,20,0,285),1,Color3.fromRGB(255,255,255); local ps,ptc={"Q","R","B","N"},getPieceTextColor(pc_color); for i,pl in ipairs(ps) do local btn=Instance.new("TextButton"); btn.Parent,btn.Size,btn.Position,btn.BackgroundColor3=promotionFrame,UDim2.new(0.25,0,1,0),UDim2.new((i-1)*0.25,0,0,0),Color3.fromRGB(80,80,80); local ft=(pc_color=="White") and pl:lower() or pl:upper(); btn.Text,btn.TextColor3,btn.TextScaled,btn.Font=ft,ptc,true,Enum.Font.SourceSansBold; table.insert(activeConnections,btn.MouseButton1Click:Connect(function() squares[pr][pc].Text,squares[pr][pc].TextColor3=ft,ptc; promotionFrame:Destroy(); promotionFrame,gamePaused=nil,false; currentTurn=(playerColor=="White") and "Black" or "White"; stateVersion = stateVersion + 1; if not checkGameState() then if currentTurn=="Black" then task.spawn(executeAIMoveForBlack) else task.spawn(executeAIMoveForWhite) end end end)) end end
+	local function checkPromotion(er,ec) local p=squares[er][ec].Text; if p:lower()=='p' and (er==1 or er==8) then handlePromotion(er,ec,getPieceColor(p)); return true end; return false end
+	
+	local selected,sr,sc=nil,nil,nil; for r=1,8 do for c=1,8 do local sq=squares[r][c]; table.insert(activeConnections,sq.MouseButton1Click:Connect(function() if gamePaused or isTraining or currentTurn~=playerColor or isThinking or isMatching then return end; if not selected then if sq.Text~="" and getPieceColor(sq.Text)==playerColor then selected,sr,sc=sq,r,c; clearHighlights(); if #moveHistory > 0 then local pm = moveHistory[#moveHistory]; squares[pm.fromR][pm.fromC].BackgroundColor3 = Color3.fromRGB(255, 255, 0); squares[pm.toR][pm.toC].BackgroundColor3 = Color3.fromRGB(0, 150, 255) end; sq.BackgroundColor3=Color3.fromRGB(255,255,0); highlightValidMoves(sr,sc) end else local tr,tc=r,c; if selected==sq then clearHighlights(); if #moveHistory > 0 then local pm = moveHistory[#moveHistory]; squares[pm.fromR][pm.fromC].BackgroundColor3 = Color3.fromRGB(255, 255, 0); squares[pm.toR][pm.toC].BackgroundColor3 = Color3.fromRGB(0, 150, 255) end; selected=nil; return end; local lm,isl=generateLegalMoves(copyBoard(squares),playerColor),false; for _,m in ipairs(lm) do if m.fromR==sr and m.fromC==sc and m.toR==tr and m.toC==tc then isl=true; break end end; if isl then local mp=selected.Text; table.insert(moveHistory,{fromR=sr,fromC=sc,toR=tr,toC=tc,movedPiece=mp,capturedPiece=squares[tr][tc].Text,previousHasMoved=copyHasMoved(hasMoved)}); 
+        
+        if mp:lower() == 'p' and sc ~= tc and squares[tr][tc].Text == "" then squares[sr][tc].Text = "" end
+        
+        sq.Text,sq.TextColor3,selected.Text=mp,selected.TextColor3,""; if mp:lower()=='k' and math.abs(tc-sc)==2 then local rc,nrc=(tc>sc) and 8 or 1,(tc>sc) and 6 or 4; local rp=squares[sr][rc].Text; squares[sr][nrc].Text,squares[sr][rc].Text=rp,""; squares[sr][nrc].TextColor3=getPieceTextColor(playerColor) end; hasMoved[mp]=true; if mp:lower()=='r' then hasMoved[mp..sc]=true end; 
+        
+        clearHighlights(); 
+        squares[sr][sc].BackgroundColor3 = Color3.fromRGB(255, 255, 0)
+        squares[tr][tc].BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+        selected=nil; 
+        
+        if not checkPromotion(tr,tc) then currentTurn=(playerColor=="White") and "Black" or "White"; stateVersion = stateVersion + 1; if not checkGameState() then if currentTurn=="Black" then task.spawn(executeAIMoveForBlack) else task.spawn(executeAIMoveForWhite) end end end else clearHighlights(); if #moveHistory > 0 then local pm = moveHistory[#moveHistory]; squares[pm.fromR][pm.fromC].BackgroundColor3 = Color3.fromRGB(255, 255, 0); squares[pm.toR][pm.toC].BackgroundColor3 = Color3.fromRGB(0, 150, 255) end; selected=nil end end end)) end end
+end
+
+-- Button Events
+onButton.MouseButton1Click:Connect(function() if not gameActive then createChessGame(); setStatusOnline() end end)
+offButton.MouseButton1Click:Connect(function() setStatusOffline() end)
+destroyButton.MouseButton1Click:Connect(cleanup)
+backButton.MouseButton1Click:Connect(undoLastMove)
