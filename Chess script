@@ -90,7 +90,7 @@ matchButton.Size = UDim2.new(1, -10, 0, 25)
 matchButton.Position = UDim2.new(0, 5, 0, 180)
 matchButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 matchButton.Text = "Match 3D"
-moveButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+matchButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 matchButton.TextScaled = true
 
 -- Button Layout Adjustment
@@ -126,7 +126,7 @@ local createdVisuals = {}
 local MAX_DISTANCE = 80 
 local pieceKeywords = {"pawn", "knight", "bishop", "rook", "queen", "king"}
 local boardAnchor = nil
-local lastSeenBoard3D = nil   -- for debounce
+local lastSeenBoard3D = nil
 local boardStableCount = 0
 
 -- --- Helper Functions ---
@@ -175,7 +175,7 @@ local function generateLegalMoves(b,c)
 	return m 
 end
 
--- --- 3D MATCHING LOGIC (IMPROVED) ---
+-- --- 3D MATCHING LOGIC (with auto colour detection) ---
 local function getChessPieceType(name)
     local lowerName = string.lower(name)
     for _, keyword in ipairs(pieceKeywords) do
@@ -243,8 +243,64 @@ local function clear3DVisuals()
     createdVisuals = {}
 end
 
+-- Auto-detect the player's colour based on camera distance
+local function detectPlayerColorFrom3D()
+    local pieces = {}
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj ~= player.Character then
+            local extents = obj:GetExtentsSize()
+            if extents.X < 15 and extents.Y < 20 and extents.Z < 15 then
+                local pType = getChessPieceType(obj.Name)
+                if pType then
+                    local pos = obj:GetPivot().Position
+                    local dist = (pos - Camera.CFrame.Position).Magnitude
+                    if dist < MAX_DISTANCE then
+                        local _, color = getTeamColor3D(obj)
+                        table.insert(pieces, {dist = dist, color = color})
+                    end
+                end
+            end
+        end
+    end
+    if #pieces < 2 then return "White" end -- fallback
+    local whiteDist, blackDist, whiteCount, blackCount = 0,0,0,0
+    for _, p in ipairs(pieces) do
+        if p.color == "White" then
+            whiteDist = whiteDist + p.dist
+            whiteCount = whiteCount + 1
+        else
+            blackDist = blackDist + p.dist
+            blackCount = blackCount + 1
+        end
+    end
+    if whiteCount == 0 then return "Black" end
+    if blackCount == 0 then return "White" end
+    local avgWhite = whiteDist / whiteCount
+    local avgBlack = blackDist / blackCount
+    return (avgWhite < avgBlack) and "White" or "Black"
+end
+
+-- Flip board to a specific orientation (true = flipped, false = normal)
+local function setBoardFlipped(flipped)
+    if not chessBoard then return end
+    local size = 25
+    for r = 1, 8 do
+        for c = 1, 8 do
+            local square = squares[r][c]
+            local newPos
+            if flipped then
+                newPos = UDim2.new(0, (8 - c) * size, 0, (8 - r) * size)
+            else
+                newPos = UDim2.new(0, (c - 1) * size, 0, (r - 1) * size)
+            end
+            square.Position = newPos
+        end
+    end
+    isBoardFlipped = flipped
+end
+
 local function get3DBoardState()
-    if not isMatching then return nil end   -- safety
+    if not isMatching then return nil end
     local pieces = {}
     
     for _, obj in pairs(workspace:GetDescendants()) do
@@ -264,7 +320,7 @@ local function get3DBoardState()
         end
     end
     
-    if #pieces < 4 then return nil end  -- need at least a few pieces
+    if #pieces < 4 then return nil end
     
     if not boardAnchor then
         local sumX, sumZ, count = 0, 0, 0
@@ -383,7 +439,6 @@ local function get3DBoardState()
         end
     end
     
-    -- Count pieces in the script grid
     local scriptCounts = {}
     for r=1,8 do
         for c=1,8 do
@@ -394,7 +449,6 @@ local function get3DBoardState()
         end
     end
     
-    -- Sort mappings to prioritize pieces on correct squares
     table.sort(pieceMappings, function(a, b)
         local aCorrect = (a.r >= 1 and a.r <= 8 and squares[a.r][a.c].Text == a.char and not a.extra)
         local bCorrect = (b.r >= 1 and b.r <= 8 and squares[b.r][b.c].Text == b.char and not b.extra)
@@ -744,10 +798,10 @@ moveButton.MouseButton1Click:Connect(function()
     end
 end)
 
--- --- IMPROVED MATCH 3D LOOP (with debounce) ---
+-- --- MATCH 3D LOOP WITH AUTO DETECTION ---
 local function matchLoop()
     while isMatching do
-        task.wait(0.3)  -- slightly faster scan
+        task.wait(0.3)
         if gamePaused or isThinking then continue end
         
         local board3D = get3DBoardState()
@@ -757,7 +811,7 @@ local function matchLoop()
             continue 
         end
         
-        -- Debounce: require board to be stable for 2 scans
+        -- Debounce
         if lastSeenBoard3D then
             local stable = true
             for r=1,8 do
@@ -778,15 +832,15 @@ local function matchLoop()
         end
         lastSeenBoard3D = board3D
         
-        if boardStableCount < 1 then continue end  -- wait for stability
+        if boardStableCount < 1 then continue end
         
         if waitingForPlayerToMirror then
             if boardsMatch(copyBoard(squares), board3D) then
                 waitingForPlayerToMirror = false
                 turnStartBoard = copyBoard(squares)
-                statusLabel.Text = "Status: Online ("..currentTurn.."'s Turn)"
+                statusLabel.Text = "Status: ("..currentTurn.."'s Turn)"
             else
-                statusLabel.Text = "Status: Please mirror AI move in 3D!"
+                statusLabel.Text = "Status: Please mirror AI move on the board!"
             end
         elseif currentTurn == playerColor then
             local legalMoves = generateLegalMoves(turnStartBoard, playerColor)
@@ -812,7 +866,6 @@ local function matchLoop()
                     if currentTurn == "Black" then task.spawn(executeAIMoveForBlack) else task.spawn(executeAIMoveForWhite) end
                 end
             else
-                -- No single legal move matches – do not overwrite board; just wait longer
                 statusLabel.Text = "Status: Unclear move – please complete one move at a time"
             end
         end
@@ -820,26 +873,50 @@ local function matchLoop()
 end
 
 matchButton.MouseButton1Click:Connect(function()
-    isMatching = not isMatching
-    matchButton.Text = isMatching and "Stop Match" or "Match 3D"
-    if isMatching then
+    if not isMatching then
+        -- Start Match 3D mode with auto-detection
+        if not gameActive then
+            createChessGame()
+            setStatusOnline()
+        end
+        -- Detect player's colour from 3D pieces
+        local detected = detectPlayerColorFrom3D()
+        -- In match mode, the AI will control the detected colour, and the human plays the opposite.
+        -- Set playerColor to the human's colour (opposite of AI)
+        local aiColor = detected
+        playerColor = (aiColor == "White") and "Black" or "White"
+        statusLabel.Text = "Match mode: AI = " .. aiColor .. ", You = " .. playerColor
+        -- Auto-flip board so that YOUR pieces (human's colour) are at bottom
+        setBoardFlipped(playerColor == "Black")
+        -- Reset match variables
         boardAnchor = nil
         turnStartBoard = copyBoard(squares)
         waitingForPlayerToMirror = false
         lastSeenBoard3D = nil
         boardStableCount = 0
         clear3DVisuals()
+        isMatching = true
+        matchButton.Text = "Stop Match"
         task.spawn(matchLoop)
+        -- If it's AI's turn first, trigger AI move
+        if currentTurn == aiColor and not gamePaused then
+            if aiColor == "White" then task.spawn(executeAIMoveForWhite) else task.spawn(executeAIMoveForBlack) end
+        end
     else
+        isMatching = false
+        matchButton.Text = "Match 3D"
         boardAnchor = nil
         clear3DVisuals()
         lastSeenBoard3D = nil
         boardStableCount = 0
+        -- Optionally revert board flip? Not necessary, user can flip manually.
+        statusLabel.Text = "Status: Online ("..currentTurn.."'s Turn)"
     end
 end)
 
 local function flipBoard()
     if not gameActive or not chessBoard then return end
+    isBoardFlipped = not isBoardFlipped
     local size = 25
     for r = 1, 8 do
         for c = 1, 8 do
@@ -855,11 +932,7 @@ local function flipBoard()
     end
 end
 
-flipButton.MouseButton1Click:Connect(function()
-    if not gameActive then return end
-    isBoardFlipped = not isBoardFlipped
-    flipBoard()
-end)
+flipButton.MouseButton1Click:Connect(flipBoard)
 
 local function undoLastMove() 
     if #moveHistory==0 or not gameActive then return end; 
@@ -914,7 +987,6 @@ local function setStatusOffline()
     isTraining=false; 
     trainButton.Text="Train"; 
     backButton.Active=false; 
-    -- Stop match mode and clean 3D visuals
     if isMatching then
         isMatching = false
         matchButton.Text = "Match 3D"
@@ -923,10 +995,9 @@ local function setStatusOffline()
         lastSeenBoard3D = nil
         boardStableCount = 0
     end
-    -- Destroy chess board and promotion frame
     if chessBoard then chessBoard:Destroy(); chessBoard=nil end
     if promotionFrame then promotionFrame:Destroy(); promotionFrame=nil end
-    clearHighlights()  -- just in case
+    clearHighlights()
 end
 
 local function cleanup() 
@@ -937,7 +1008,6 @@ local function cleanup()
     if chessBoard then chessBoard:Destroy(); chessBoard=nil end; 
     if promotionFrame then promotionFrame:Destroy(); promotionFrame=nil end; 
     if screenGui then screenGui:Destroy(); screenGui=nil end;
-    -- Also stop match mode and clear visuals
     if isMatching then
         isMatching = false
         clear3DVisuals()
