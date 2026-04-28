@@ -93,35 +93,6 @@ matchButton.Text = "Match 3D"
 matchButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 matchButton.TextScaled = true
 
--- Variables
-local activeConnections, chessBoard = {}, nil
-local gamePaused, gameActive, isTraining = false, false, false
-local moveHistory, squares, originalColors, promotionFrame = {}, {}, {}, nil
-local currentTurn, hasMoved, playerColor, isBoardFlipped = "White", {}, "White", false
-local stateVersion = 0 
-local isThinking = false
-
--- Match 3D Variables
-local isMatching = false
-local turnStartBoard = nil
-local createdVisuals = {}
-local MAX_DISTANCE = 80 
-local pieceKeywords = {"pawn", "knight", "bishop", "rook", "queen", "king"}
-local boardAnchor = nil
-local lastSeenBoard3D = nil
-local boardStableCount = 0
-local STABLE_FRAMES_REQUIRED = 1   -- fast response
-local currentPieceMap = {}         -- (r,c) -> model object
-
--- Suggestion highlighting
-local currentSuggestion = nil -- { fromR, fromC, toR, toC }
-local currentSuggestion3DHighlight = nil -- Highlight object on the 3D piece
-local currentSuggestion3DPlatform = nil -- Green platform on the 3D board
-
--- Prefetching Cache
-local moveCache = {}
-local prefetchThread = nil
-
 -- Depth Controls
 local stockfishDepth = 15
 local MAX_DEPTH = 15
@@ -166,7 +137,6 @@ end
 depthMinusBtn.MouseButton1Click:Connect(function()
     if stockfishDepth > MIN_DEPTH then
         stockfishDepth = stockfishDepth - 1
-        moveCache = {} -- Clear cache on depth change
         updateDepthDisplay()
     end
 end)
@@ -174,7 +144,6 @@ end)
 depthPlusBtn.MouseButton1Click:Connect(function()
     if stockfishDepth < MAX_DEPTH then
         stockfishDepth = stockfishDepth + 1
-        moveCache = {} -- Clear cache on depth change
         updateDepthDisplay()
     end
 end)
@@ -184,7 +153,6 @@ depthTextBox.FocusLost:Connect(function()
     local num = tonumber(text)
     if num then
         stockfishDepth = math.clamp(math.floor(num), MIN_DEPTH, MAX_DEPTH)
-        moveCache = {}
     end
     updateDepthDisplay()
 end)
@@ -205,6 +173,31 @@ local toggleButton = Instance.new("TextButton")
 toggleButton.Parent, toggleButton.BackgroundColor3, toggleButton.Size, toggleButton.Position, toggleButton.Text, toggleButton.TextColor3, toggleButton.TextScaled = frame, Color3.fromRGB(80, 80, 80), UDim2.new(0, 20, 0, 25), UDim2.new(0, -20, 0, -25), "<", Color3.fromRGB(255, 255, 255), true
 
 toggleButton.MouseButton1Click:Connect(function() secondFrame.Visible = not secondFrame.Visible; toggleButton.Text = secondFrame.Visible and ">" or "<" end)
+
+-- Variables
+local activeConnections, chessBoard = {}, nil
+local gamePaused, gameActive, isTraining = false, false, false
+local moveHistory, squares, originalColors, promotionFrame = {}, {}, {}, nil
+local currentTurn, hasMoved, playerColor, isBoardFlipped = "White", {}, "White", false
+local stateVersion = 0 
+local isThinking = false
+
+-- Match 3D Variables
+local isMatching = false
+local turnStartBoard = nil
+local createdVisuals = {}
+local MAX_DISTANCE = 80 
+local pieceKeywords = {"pawn", "knight", "bishop", "rook", "queen", "king"}
+local boardAnchor = nil
+local lastSeenBoard3D = nil
+local boardStableCount = 0
+local STABLE_FRAMES_REQUIRED = 1   -- fast response
+local currentPieceMap = {}         -- (r,c) -> model object
+
+-- Suggestion highlighting
+local currentSuggestion = nil -- { fromR, fromC, toR, toC }
+local currentSuggestion3DHighlight = nil -- Highlight object on the 3D piece
+local currentSuggestion3DPlatform = nil -- Green platform on the 3D board
 
 -- --- Helper Functions ---
 local function copyHasMoved(hm) local c = {}; for k, v in pairs(hm) do c[k] = v end; return c end
@@ -606,17 +599,13 @@ local function get3DBoardState()
     return board3D, pieceMap
 end
 
--- --- STOCKFISH API INTEGRATION (LOAD BALANCER) ---
-local function getFEN(board, turn, hm)
-    board = board or squares
-    turn = turn or currentTurn
-    hm = hm or hasMoved
-    
+-- --- STOCKFISH API INTEGRATION ---
+local function getFEN()
     local fen = ""
     for r = 1, 8 do
         local emptyCount = 0
         for c = 1, 8 do
-            local p = typeof(board[r][c]) == "Instance" and board[r][c].Text or board[r][c]
+            local p = squares[r][c].Text
             if p == "" then
                 emptyCount = emptyCount + 1
             else
@@ -632,15 +621,15 @@ local function getFEN(board, turn, hm)
         if r < 8 then fen = fen .. "/" end
     end
     
-    local activeColor = (turn == "White") and "w" or "b"
+    local activeColor = (currentTurn == "White") and "w" or "b"
     local castling = ""
-    if not hm["k"] then
-        if not hm["r8"] then castling = castling .. "K" end
-        if not hm["r1"] then castling = castling .. "Q" end
+    if not hasMoved["k"] then
+        if not hasMoved["r8"] then castling = castling .. "K" end
+        if not hasMoved["r1"] then castling = castling .. "Q" end
     end
-    if not hm["K"] then
-        if not hm["R8"] then castling = castling .. "k" end
-        if not hm["R1"] then castling = castling .. "q" end
+    if not hasMoved["K"] then
+        if not hasMoved["R8"] then castling = castling .. "k" end
+        if not hasMoved["R1"] then castling = castling .. "q" end
     end
     if castling == "" then castling = "-" end
     
@@ -658,164 +647,47 @@ local function uciToMove(uci)
     return r1, c1, r2, c2, promo
 end
 
--- 4 Independent APIs to bypass rate limits
-local apiEndpoints = {
-    function(fen, depth)
-        if not req then return nil end
-        local success, res = pcall(function()
-            return req({
-                Url = "https://chess-api.com/v1",
-                Method = "POST",
-                Headers = {["Content-Type"] = "application/json"},
-                Body = HttpService:JSONEncode({fen = fen, depth = depth})
-            })
-        end)
-        if success and res and res.Body then
-            local s, data = pcall(HttpService.JSONDecode, HttpService, res.Body)
-            if s and data and data.move then return data.move end
-        end
-        return nil
-    end,
-    function(fen, depth)
-        local url = "https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(depth)
-        local success, res = pcall(function()
-            if req then return req({Url = url, Method = "GET"}).Body end
-            return game:HttpGet(url)
-        end)
-        if success and res then
-            local s, data = pcall(HttpService.JSONDecode, HttpService, res)
-            if s and data and data.success and data.bestmove then
-                return data.bestmove:match("bestmove%s+(%S+)")
-            end
-        end
-        return nil
-    end,
-    function(fen, depth)
-        local url = "https://lichess.org/api/cloud-eval?fen=" .. HttpService:UrlEncode(fen)
-        local success, res = pcall(function()
-            if req then return req({Url = url, Method = "GET"}).Body end
-            return game:HttpGet(url)
-        end)
-        if success and res then
-            local s, data = pcall(HttpService.JSONDecode, HttpService, res)
-            if s and data and data.pvs and data.pvs[1] and data.pvs[1].moves then
-                return data.pvs[1].moves:match("^(%S+)")
-            end
-        end
-        return nil
-    end,
-    function(fen, depth)
-        local url = "https://www.chessdb.cn/cdb.php?action=querybest&board=" .. HttpService:UrlEncode(fen)
-        local success, res = pcall(function()
-            if req then return req({Url = url, Method = "GET"}).Body end
-            return game:HttpGet(url)
-        end)
-        if success and res and type(res) == "string" then
-            local move = res:match("move:(%S+)")
-            if move then return move end
-        end
-        return nil
-    end
-}
-
-local currentApiIndex = 1
-
 local function getBestMoveFromAPI(fen)
-    if stockfishDepth <= 0 then return nil end
+    if stockfishDepth <= 0 then return nil end -- Skip API if depth is 0
     
-    local move = nil
+    local url = "https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(stockfishDepth)
+    local body = nil
     local completed = false
     
-    -- Grab an index and increment for the next call to distribute load
-    local startIndex = currentApiIndex
-    currentApiIndex = (currentApiIndex % #apiEndpoints) + 1
-    
     task.spawn(function()
-        for i = 1, #apiEndpoints do
-            local idx = ((startIndex + i - 2) % #apiEndpoints) + 1
-            local result = apiEndpoints[idx](fen, stockfishDepth)
-            if result then
-                move = result
-                break
-            end
+        if req then
+            local success, response = pcall(function() return req({Url = url, Method = "GET"}) end)
+            if success and response then body = response.Body end
+        elseif type(game.HttpGet) == "function" then
+            local success, response = pcall(function() return game:HttpGet(url) end)
+            if success then body = response end
         end
         completed = true
     end)
     
     local t = 0
-    while not completed and t < 15 do -- 15 seconds max wait for all APIs
+    while not completed and t < 8 do
         t = t + task.wait(0.1)
     end
     
-    return move
+    if not completed then return nil end
+    
+    if body then
+        local success, data = pcall(function() return HttpService:JSONDecode(body) end)
+        if success and data and data.success and data.bestmove then
+            return data.bestmove:match("bestmove%s+(%S+)")
+        end
+    end
+    return nil
 end
 
--- --- LOCAL AI FALLBACK & EVALUATION ---
+-- --- LOCAL AI FALLBACK ---
 local PST={p={{0,0,0,0,0,0,0,0},{50,50,50,50,50,50,50,50},{10,10,20,30,30,20,10,10},{5,5,10,25,25,10,5,5},{0,0,0,20,20,0,0,0},{5,-5,-10,0,0,-10,-5,5},{5,10,10,-20,-20,10,10,5},{0,0,0,0,0,0,0,0}},n={{-50,-40,-30,-30,-30,-30,-40,-50},{-40,-20,0,0,0,0,-20,-40},{-30,0,10,15,15,10,0,-30},{-30,5,15,20,20,15,5,-30},{-30,0,15,20,20,15,0,-30},{-30,5,10,15,15,10,5,-30},{-40,-20,0,5,5,0,-20,-40},{-50,-40,-30,-30,-30,-30,-40,-50}},b={{-20,-10,-10,-10,-10,-10,-10,-20},{-10,0,0,0,0,0,0,-10},{-10,0,5,10,10,5,0,-10},{-10,5,5,10,10,5,5,-10},{-10,0,10,10,10,10,0,-10},{-10,10,10,10,10,10,10,-10},{-10,5,0,0,0,0,5,-10},{-20,-10,-10,-10,-10,-10,-10,-20}},r={{0,0,0,0,0,0,0,0},{5,10,10,10,10,10,10,5},{-5,0,0,0,0,0,0,-5},{-5,0,0,0,0,0,0,-5},{-5,0,0,0,0,0,0,-5},{-5,0,0,0,0,0,0,-5},{-5,0,0,0,0,0,0,-5},{0,0,0,5,5,0,0,0}},q={{-20,-10,-10,-5,-5,-10,-10,-20},{-10,0,0,0,0,0,0,-10},{-10,0,5,5,5,5,0,-10},{-5,0,5,5,5,5,0,-5},{0,0,5,5,5,5,0,-5},{-10,5,5,5,5,5,0,-10},{-10,0,5,0,0,0,0,-10},{-20,-10,-10,-5,-5,-10,-10,-20}},k={{-30,-40,-40,-50,-50,-40,-40,-30},{-30,-40,-40,-50,-50,-40,-40,-30},{-30,-40,-40,-50,-50,-40,-40,-30},{-30,-40,-40,-50,-50,-40,-40,-30},{-20,-30,-30,-40,-40,-30,-30,-20},{-10,-20,-20,-20,-20,-20,-20,-10},{20,20,0,0,0,0,20,20},{20,30,10,0,0,10,30,20}}}
 local function evaluateBoard(b) local s=0; for r=1,8 do for c=1,8 do local p=b[r][c]; if p~="" then local ms=PV[p] or 0; local pt,pc=p:lower(),getPieceColor(p); local ps=0; if PST[pt] then ps=(pc=="White") and PST[pt][r][c] or PST[pt][9-r][c] end; s+=(pc=="Black") and (ms-ps) or (ms+ps) end end end; return s end
 local MAX_DEPTH_LOCAL,minimax_=2,nil; minimax_=function(b,d,a,be,isM) checkYield(); if d==0 then return evaluateBoard(b) end; local m=generateLegalMoves(b,isM and "Black" or "White"); if isM then local me=-math.huge; for _,mo in ipairs(m) do local nb=cloneBoard(b); nb[mo.toR][mo.toC]=mo.piece; nb[mo.fromR][mo.fromC]=""; local e=minimax_(nb,d-1,a,be,false); me=math.max(me,e); a=math.max(a,e); if be<=a then break end end; return me else local me=math.huge; for _,mo in ipairs(m) do local nb=cloneBoard(b); nb[mo.toR][mo.toC]=mo.piece; nb[mo.fromR][mo.fromC]=""; local e=minimax_(nb,d-1,a,be,true); me=math.min(me,e); be=math.min(be,e); if be<=a then break end end; return me end end
 local function absPV(ch) return math.abs(PV[ch] or 0) end
 local function moveLeavesPieceHanging(newBoard, move, moverColor) local oppColor = (moverColor == "White") and "Black" or "White"; local destR, destC = move.toR, move.toC; local moves = generateLegalMoves(newBoard, oppColor); for _, m in ipairs(moves) do if m.toR == destR and m.toC == destC and m.captured ~= "" then local capturedVal = (move.captured ~= "") and absPV(move.captured) or 0; local movedVal = absPV(move.piece); local netForMover = capturedVal - movedVal; if netForMover < 0 then return true, -netForMover end end end; return false, 0 end
 local function findBestMoveFor(color) local board = copyBoard(squares); local bestMove, bestEval; local legalMoves = generateLegalMoves(board, color); if #legalMoves == 0 then return end; if color == "Black" then bestEval = math.huge; for _, move in ipairs(legalMoves) do checkYield(); local newBoard = cloneBoard(board); newBoard[move.toR][move.toC] = move.piece; newBoard[move.fromR][move.fromC] = ""; local eval = minimax_(newBoard, MAX_DEPTH_LOCAL - 1, -math.huge, math.huge, false); local hanging, penaltyMag = moveLeavesPieceHanging(newBoard, move, "Black"); if hanging then eval = eval + penaltyMag * 10 end; if eval < bestEval then bestEval, bestMove = eval, move end end else bestEval = -math.huge; for _, move in ipairs(legalMoves) do checkYield(); local newBoard = cloneBoard(board); newBoard[move.toR][move.toC] = move.piece; newBoard[move.fromR][move.fromC] = ""; local eval = minimax_(newBoard, MAX_DEPTH_LOCAL - 1, -math.huge, math.huge, true); local hanging, penaltyMag = moveLeavesPieceHanging(newBoard, move, "White"); if hanging then eval = eval - penaltyMag * 10 end; if eval > bestEval then bestEval, bestMove = eval, move end end end; return bestMove end
-
--- --- PREFETCHING LOGIC (TOP 5 MOVES) ---
-local function startPrefetching()
-    if prefetchThread then task.cancel(prefetchThread) end
-    prefetchThread = task.spawn(function()
-        if stockfishDepth <= 0 then return end
-        
-        local myState = stateVersion
-        local oppColor = currentTurn
-        local boardCopy = copyBoard(squares)
-        
-        -- 1. Generate all legal moves for the opponent
-        local legalMoves = generateLegalMoves(boardCopy, oppColor)
-        if #legalMoves == 0 then return end
-        
-        -- 2. Evaluate each move locally to guess what they will play
-        for _, move in ipairs(legalMoves) do
-            local tempBoard = applyMoveToBoard(boardCopy, move)
-            move.score = evaluateBoard(tempBoard)
-        end
-        
-        -- 3. Sort moves: White wants highest score, Black wants lowest score
-        table.sort(legalMoves, function(a, b)
-            if oppColor == "White" then
-                return a.score > b.score
-            else
-                return a.score < b.score
-            end
-        end)
-        
-        -- 4. Prefetch the top 5 most likely moves using the Load Balancer
-        local maxPrefetch = 5
-        for i = 1, math.min(#legalMoves, maxPrefetch) do
-            if myState ~= stateVersion then break end -- Stop if the game state changed
-            
-            local move = legalMoves[i]
-            local nextBoard = applyMoveToBoard(boardCopy, move)
-            local nextTurn = (oppColor == "White") and "Black" or "White"
-            
-            local nextHM = copyHasMoved(hasMoved)
-            nextHM[move.piece] = true
-            if move.piece:lower() == 'r' then nextHM[move.piece..move.fromC] = true end
-            
-            local predictedFEN = getFEN(nextBoard, nextTurn, nextHM)
-            
-            -- Only fetch if not already cached
-            if not moveCache[predictedFEN] then
-                -- Spawn parallel requests so they hit different APIs simultaneously
-                task.spawn(function()
-                    local ourResponseUCI = getBestMoveFromAPI(predictedFEN)
-                    if ourResponseUCI and myState == stateVersion then
-                        moveCache[predictedFEN] = ourResponseUCI
-                    end
-                end)
-                task.wait(0.2) -- slight stagger to prevent completely simultaneous requests
-            end
-        end
-    end)
-end
 
 -- --- UI and Control Functions ---
 local function clearHighlights() 
@@ -935,17 +807,10 @@ local function suggestMoveForHuman()
 
     isThinking = true
     local myState = stateVersion
-    
-    local fen = getFEN()
-    local uciMove = moveCache[fen]
-    
-    if uciMove then
-        statusLabel.Text = "Using cached Stockfish suggestion..."
-    else
-        statusLabel.Text = "Fetching Stockfish suggestion..."
-        uciMove = getBestMoveFromAPI(fen)
-    end
+    statusLabel.Text = "Generating suggestion..."
 
+    local fen = getFEN()
+    local uciMove = getBestMoveFromAPI(fen)
     local suggestion = nil
 
     if myState == stateVersion and uciMove then
@@ -961,18 +826,13 @@ local function suggestMoveForHuman()
     end
 
     if myState == stateVersion and not suggestion then
-        statusLabel.Text = "APIs busy/failed. Using Local AI fallback..."
         suggestion = findBestMoveFor(currentTurn)
     end
 
     if myState == stateVersion and suggestion then
         showSuggestion(suggestion)
-        if uciMove then
-            statusLabel.Text = "Stockfish: " .. string.char(96+suggestion.fromC) .. (9-suggestion.fromR) .. " → " .. string.char(96+suggestion.toC) .. (9-suggestion.toR)
-        else
-            statusLabel.Text = "Local AI: " .. string.char(96+suggestion.fromC) .. (9-suggestion.fromR) .. " → " .. string.char(96+suggestion.toC) .. (9-suggestion.toR)
-        end
-    elseif myState == stateVersion then
+        statusLabel.Text = "Suggestion: " .. string.char(96+suggestion.fromC) .. (9-suggestion.fromR) .. " → " .. string.char(96+suggestion.toC) .. (9-suggestion.toR)
+    else
         statusLabel.Text = "No suggestion available"
     end
     isThinking = false
@@ -1038,10 +898,6 @@ local function executeMove(move, color, promo)
     stateVersion = stateVersion + 1 
     statusLabel.Text="Status: ("..currentTurn.."'s Turn)"
     checkGameState()
-    
-    if isMatching and currentTurn ~= playerColor and not gamePaused then
-        startPrefetching()
-    end
 end
 
 local function executeAIMove(color)
@@ -1082,8 +938,7 @@ local function executeAIMove(color)
             end
         end
         
-        warn("All Stockfish APIs failed or timed out, using local AI fallback.")
-        statusLabel.Text = "APIs failed. Local AI thinking..."
+        warn("Stockfish API failed or timed out, using local AI fallback.")
         local move = findBestMoveFor(color)
         
         if stateVersion ~= myState then return end 
@@ -1288,8 +1143,6 @@ local function undoLastMove()
         clearSuggestionHighlight()
         if currentTurn == playerColor and not gamePaused then
             suggestMoveForHuman()
-        elseif currentTurn ~= playerColor and not gamePaused then
-            startPrefetching()
         end
         -- DO NOT reset boardAnchor here – keep it stable
     end
@@ -1320,7 +1173,6 @@ local function setStatusOffline()
         lastSeenBoard3D = nil
         boardStableCount = 0
         currentPieceMap = {}
-        if prefetchThread then task.cancel(prefetchThread) end
     end
     if chessBoard then chessBoard:Destroy(); chessBoard=nil end
     if promotionFrame then promotionFrame:Destroy(); promotionFrame=nil end
@@ -1338,7 +1190,6 @@ local function cleanup()
     if isMatching then
         isMatching = false
         clear3DVisuals()
-        if prefetchThread then task.cancel(prefetchThread) end
     end
 end
 
@@ -1352,7 +1203,6 @@ local function createChessGame(isEmpty)
     lastSeenBoard3D = nil
     boardStableCount = 0
     currentPieceMap = {}
-    moveCache = {}
 	hasMoved = {k=false,K=false,r1=false,r8=false,R1=false,R8=false}
 	if chessBoard then chessBoard:Destroy() end
 	chessBoard=Instance.new("Frame"); chessBoard.Parent,chessBoard.BackgroundColor3,chessBoard.Size,chessBoard.Position,chessBoard.BorderSizePixel=frame,Color3.fromRGB(200,200,200),UDim2.new(0,200,0,200),UDim2.new(0,20,0,80),0
@@ -1439,12 +1289,8 @@ local function createChessGame(isEmpty)
                         stateVersion = stateVersion + 1
                         turnStartBoard = copyBoard(squares)  -- update mirror reference
                         clearSuggestionHighlight()
-                        if not checkGameState() then
-                            if currentTurn == playerColor then
-                                suggestMoveForHuman()
-                            else
-                                startPrefetching()
-                            end
+                        if not checkGameState() and currentTurn == playerColor then
+                            suggestMoveForHuman()
                         end
                     end
                 else
@@ -1565,7 +1411,6 @@ matchButton.MouseButton1Click:Connect(function()
         lastSeenBoard3D = nil
         boardStableCount = 0
         currentPieceMap = {}
-        moveCache = {}
         clear3DVisuals()
         clearSuggestionHighlight()
         
@@ -1604,8 +1449,6 @@ matchButton.MouseButton1Click:Connect(function()
         
         if currentTurn == playerColor and not gamePaused then
             suggestMoveForHuman()
-        elseif currentTurn ~= playerColor and not gamePaused then
-            startPrefetching()
         end
     else
         -- Stop Match 3D mode
@@ -1617,7 +1460,6 @@ matchButton.MouseButton1Click:Connect(function()
         lastSeenBoard3D = nil
         boardStableCount = 0
         currentPieceMap = {}
-        if prefetchThread then task.cancel(prefetchThread) end
         statusLabel.Text = "Status: Online ("..currentTurn.."'s Turn)"
     end
 end)
