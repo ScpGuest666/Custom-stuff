@@ -95,7 +95,7 @@ matchButton.TextScaled = true
 
 -- Depth Controls
 local stockfishDepth = 15
-local MAX_DEPTH = 20
+local MAX_DEPTH = 15
 local MIN_DEPTH = 0 
 
 local depthMinusBtn = Instance.new("TextButton")
