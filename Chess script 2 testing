@@ -93,6 +93,70 @@ matchButton.Text = "Match 3D"
 matchButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 matchButton.TextScaled = true
 
+-- Depth Controls
+local stockfishDepth = 15
+local MAX_DEPTH = 20
+local MIN_DEPTH = 0 
+
+local depthMinusBtn = Instance.new("TextButton")
+depthMinusBtn.Parent = secondFrame
+depthMinusBtn.Size = UDim2.new(0, 30, 0, 25)
+depthMinusBtn.Position = UDim2.new(0, 5, 0, 215)
+depthMinusBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+depthMinusBtn.Text = "-"
+depthMinusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+depthMinusBtn.TextScaled = true
+
+local depthTextBox = Instance.new("TextBox")
+depthTextBox.Parent = secondFrame
+depthTextBox.Size = UDim2.new(0, 70, 0, 25)
+depthTextBox.Position = UDim2.new(0, 40, 0, 215)
+depthTextBox.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+depthTextBox.Text = "Depth: " .. stockfishDepth
+depthTextBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+depthTextBox.TextScaled = true
+depthTextBox.ClearTextOnFocus = false
+
+local depthPlusBtn = Instance.new("TextButton")
+depthPlusBtn.Parent = secondFrame
+depthPlusBtn.Size = UDim2.new(0, 30, 0, 25)
+depthPlusBtn.Position = UDim2.new(0, 115, 0, 215)
+depthPlusBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+depthPlusBtn.Text = "+"
+depthPlusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+depthPlusBtn.TextScaled = true
+
+local function updateDepthDisplay()
+    if stockfishDepth == 0 then
+        depthTextBox.Text = "Local AI"
+    else
+        depthTextBox.Text = "Depth: " .. stockfishDepth
+    end
+end
+
+depthMinusBtn.MouseButton1Click:Connect(function()
+    if stockfishDepth > MIN_DEPTH then
+        stockfishDepth = stockfishDepth - 1
+        updateDepthDisplay()
+    end
+end)
+
+depthPlusBtn.MouseButton1Click:Connect(function()
+    if stockfishDepth < MAX_DEPTH then
+        stockfishDepth = stockfishDepth + 1
+        updateDepthDisplay()
+    end
+end)
+
+depthTextBox.FocusLost:Connect(function()
+    local text = depthTextBox.Text:gsub("Depth: ", ""):gsub("Local AI", "0")
+    local num = tonumber(text)
+    if num then
+        stockfishDepth = math.clamp(math.floor(num), MIN_DEPTH, MAX_DEPTH)
+    end
+    updateDepthDisplay()
+end)
+
 -- Button Layout Adjustment (main frame buttons)
 local buttonWidth, buttonHeight, buttonY, buttonSpacing = 70, 25, 10, 5
 local onButton = Instance.new("TextButton")
@@ -567,7 +631,9 @@ local function uciToMove(uci)
 end
 
 local function getBestMoveFromAPI(fen)
-    local url = "https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=15"
+    if stockfishDepth <= 0 then return nil end -- Skip API if depth is 0
+    
+    local url = "https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(stockfishDepth)
     local body = nil
     local completed = false
     
