@@ -127,10 +127,12 @@ local pieceKeywords = {"pawn", "knight", "bishop", "rook", "queen", "king"}
 local boardAnchor = nil
 local lastSeenBoard3D = nil
 local boardStableCount = 0
-local STABLE_FRAMES_REQUIRED = 1   -- Reduced to 1 frame for faster response (0.3 sec)
+local STABLE_FRAMES_REQUIRED = 1   -- fast response
+local currentPieceMap = {}         -- (r,c) -> model object
 
 -- Suggestion highlighting
 local currentSuggestion = nil -- { fromR, fromC, toR, toC }
+local currentSuggestion3DHighlight = nil -- Highlight object on the 3D piece
 
 -- --- Helper Functions ---
 local function copyHasMoved(hm) local c = {}; for k, v in pairs(hm) do c[k] = v end; return c end
@@ -337,9 +339,9 @@ local function boardsMatch(b1, b2)
     return true
 end
 
--- Get 3D board state (only pieces on the board)
+-- Get 3D board state (only pieces on the board) and also build piece map
 local function get3DBoardState()
-    if not isMatching then return nil end
+    if not isMatching then return nil, nil end
     local pieces = {}
     
     for _, obj in pairs(workspace:GetDescendants()) do
@@ -359,7 +361,7 @@ local function get3DBoardState()
         end
     end
     
-    if #pieces < 4 then return nil end
+    if #pieces < 4 then return nil, nil end
     
     if not boardAnchor then
         local sumX, sumZ, count = 0, 0, 0
@@ -381,7 +383,7 @@ local function get3DBoardState()
             end
         end
         
-        if #validPieces < 4 then return nil end
+        if #validPieces < 4 then return nil, nil end
         table.sort(validXs)
         table.sort(validZs)
         
@@ -391,7 +393,7 @@ local function get3DBoardState()
         local squareSizeX = (maxX - minX) / 7
         local squareSizeZ = (maxZ - minZ) / 7
         
-        if squareSizeX < 0.1 or squareSizeZ < 0.1 then return nil end
+        if squareSizeX < 0.1 or squareSizeZ < 0.1 then return nil, nil end
         
         local tempBoard = {}
         for r=1,8 do tempBoard[r] = {} for c=1,8 do tempBoard[r][c] = "" end end
@@ -446,8 +448,7 @@ local function get3DBoardState()
     
     local board3D = {}
     for r=1,8 do board3D[r] = {} for c=1,8 do board3D[r][c] = "" end end
-    
-    local pieceMappings = {}
+    local pieceMap = {}  -- (r,c) -> model
     
     for _, p in ipairs(pieces) do
         local c = math.floor(((p.pos.X - boardAnchor.minX) / boardAnchor.squareSizeX) + 0.5) + 1
@@ -469,15 +470,14 @@ local function get3DBoardState()
             
             if board3D[r][c] == "" then 
                 board3D[r][c] = char 
-                table.insert(pieceMappings, {obj = p.obj, r = r, c = c, char = char, tColor = p.tColor, tName = p.color, pType = p.type, extra = false})
+                pieceMap[r..","..c] = p.obj
             else
-                table.insert(pieceMappings, {obj = p.obj, r = r, c = c, char = char, tColor = p.tColor, tName = p.color, pType = p.type, extra = true})
+                -- duplicate piece on same square? ignore
             end
-        else
-            table.insert(pieceMappings, {obj = p.obj, r = -1, c = -1, char = char, tColor = p.tColor, tName = p.color, pType = p.type, extra = true})
         end
     end
     
+    -- Also add the "ID" highlights for visualization (optional, keeps original behavior)
     local scriptCounts = {}
     for r=1,8 do
         for c=1,8 do
@@ -488,32 +488,34 @@ local function get3DBoardState()
         end
     end
     
-    table.sort(pieceMappings, function(a, b)
-        local aCorrect = (a.r >= 1 and a.r <= 8 and squares[a.r][a.c].Text == a.char and not a.extra)
-        local bCorrect = (b.r >= 1 and b.r <= 8 and squares[b.r][b.c].Text == b.char and not b.extra)
-        if aCorrect and not bCorrect then return true end
-        if bCorrect and not aCorrect then return false end
-        return false
-    end)
-    
-    for _, pm in ipairs(pieceMappings) do
-        local isCaptured = true
-        if scriptCounts[pm.char] and scriptCounts[pm.char] > 0 then
-            scriptCounts[pm.char] = scriptCounts[pm.char] - 1
-            isCaptured = false
+    for _, p in ipairs(pieces) do
+        local c = math.floor(((p.pos.X - boardAnchor.minX) / boardAnchor.squareSizeX) + 0.5) + 1
+        local r = math.floor(((p.pos.Z - boardAnchor.minZ) / boardAnchor.squareSizeZ) + 0.5) + 1
+        local char = ""
+        if p.type == "pawn" then char = "p"
+        elseif p.type == "knight" then char = "n"
+        elseif p.type == "bishop" then char = "b"
+        elseif p.type == "rook" then char = "r"
+        elseif p.type == "queen" then char = "q"
+        elseif p.type == "king" then char = "k"
         end
-        
-        if isCaptured then
-            local hl = pm.obj:FindFirstChild("ID_Highlight")
-            if hl then hl:Destroy() end
-            local bb = pm.obj:FindFirstChild("ID_Label")
-            if bb then bb:Destroy() end
-        else
-            identifyTarget(pm.obj, pm.tColor, pm.tName, pm.pType)
+        if p.color == "Black" then char = char:upper() end
+        if c >= 1 and c <= 8 and r >= 1 and r <= 8 then
+            local orR, orC = r, c
+            if boardAnchor.flipRow then orR = 9 - r end
+            if boardAnchor.flipCol then orC = 9 - c end
+            local isCaptured = true
+            if scriptCounts[char] and scriptCounts[char] > 0 then
+                scriptCounts[char] = scriptCounts[char] - 1
+                isCaptured = false
+            end
+            if not isCaptured then
+                identifyTarget(p.obj, p.tColor, p.color, p.type)
+            end
         end
     end
     
-    return board3D
+    return board3D, pieceMap
 end
 
 -- --- STOCKFISH API INTEGRATION ---
@@ -626,7 +628,33 @@ local function highlightValidMoves(sr,sc, pieceColor)
     end 
 end
 
--- --- Suggestion Highlight Functions (uses Stockfish) ---
+-- --- Suggestion Highlight Functions (with 3D yellow highlight using pieceMap) ---
+local function clearSuggestion3DHighlight()
+    if currentSuggestion3DHighlight and currentSuggestion3DHighlight.Parent then
+        currentSuggestion3DHighlight:Destroy()
+    end
+    currentSuggestion3DHighlight = nil
+end
+
+local function highlightSuggested3DPiece(row, col)
+    if not isMatching or not currentPieceMap then return end
+    local key = row..","..col
+    local model = currentPieceMap[key]
+    if model then
+        clearSuggestion3DHighlight()
+        local hl = Instance.new("Highlight")
+        hl.Name = "SuggestionHighlight"
+        hl.Adornee = model
+        hl.FillColor = Color3.fromRGB(255, 255, 0)  -- yellow
+        hl.OutlineColor = Color3.fromRGB(255, 255, 0)
+        hl.FillTransparency = 0.5
+        hl.Parent = model
+        currentSuggestion3DHighlight = hl
+    else
+        clearSuggestion3DHighlight()
+    end
+end
+
 local function clearSuggestionHighlight()
     if currentSuggestion then
         local fromSq = squares[currentSuggestion.fromR][currentSuggestion.fromC]
@@ -639,6 +667,7 @@ local function clearSuggestionHighlight()
         end
         currentSuggestion = nil
     end
+    clearSuggestion3DHighlight()
 end
 
 local function showSuggestion(suggestion)
@@ -653,10 +682,14 @@ local function showSuggestion(suggestion)
     if toSq then
         toSq.BackgroundColor3 = Color3.fromRGB(0, 200, 200)
     end
+    -- Also highlight the suggested piece in 3D using the persistent pieceMap
+    highlightSuggested3DPiece(suggestion.fromR, suggestion.fromC)
 end
 
 local function suggestMoveForHuman()
     if not gameActive or gamePaused or isTraining or not isMatching then return end
+    -- Only suggest if it's the turn of the player's color (detected at match start)
+    if currentTurn ~= playerColor then return end
     if isThinking then return end
 
     isThinking = true
@@ -680,7 +713,7 @@ local function suggestMoveForHuman()
     end
 
     if myState == stateVersion and not suggestion then
-        suggestion = findBestMoveFor(currentTurn)  -- suggest for the player whose turn it is
+        suggestion = findBestMoveFor(currentTurn)
     end
 
     if myState == stateVersion and suggestion then
@@ -872,12 +905,13 @@ local function matchLoop()
         task.wait(0.3)
         if gamePaused then continue end
         
-        local board3D = get3DBoardState()
+        local board3D, pieceMap = get3DBoardState()
         if not board3D then 
             lastSeenBoard3D = nil
             boardStableCount = 0
             continue 
         end
+        currentPieceMap = pieceMap or {}
         
         -- Stability check
         if lastSeenBoard3D then
@@ -924,17 +958,16 @@ local function matchLoop()
                 turnStartBoard = copyBoard(squares)
                 clearSuggestionHighlight()
                 boardStableCount = 0
-                -- After mirroring, if it's still the same player's turn? Actually executeMove flipped currentTurn.
-                -- Generate suggestion for the new currentTurn (which is now the opponent's turn)
-                if not gamePaused then
+                -- After mirroring, if it's now the player's turn, suggest a move
+                if currentTurn == playerColor and not gamePaused then
                     suggestMoveForHuman()
                 end
             else
                 statusLabel.Text = "Unclear 3D movement – cannot mirror"
             end
         else
-            -- Boards match. If no suggestion active, generate one for the current turn
-            if not gamePaused and not currentSuggestion then
+            -- Boards match. If it's player's turn and no suggestion active, generate one.
+            if currentTurn == playerColor and not gamePaused and not currentSuggestion then
                 suggestMoveForHuman()
             end
         end
@@ -949,20 +982,23 @@ matchButton.MouseButton1Click:Connect(function()
             setStatusOnline()
         end
         local detected = detectPlayerColorFrom3D()
-        playerColor = detected   -- used only for board flip orientation
-        statusLabel.Text = "Match mode: You can move any piece. AI suggests moves."
-        setBoardFlipped(playerColor == "Black")
+        playerColor = detected   -- used for suggestions and board flip
+        statusLabel.Text = "Match mode: You can move any piece. AI suggests your moves only on your turn."
+        setBoardFlipped(playerColor == "Black")  -- flip UI so your pieces are at bottom
         -- Reset match variables
-        boardAnchor = nil
+        boardAnchor = nil          -- will be recomputed on first get3DBoardState
         turnStartBoard = copyBoard(squares)
         lastSeenBoard3D = nil
         boardStableCount = 0
+        currentPieceMap = {}
         clear3DVisuals()
         clearSuggestionHighlight()
         isMatching = true
         matchButton.Text = "Stop Match"
         task.spawn(matchLoop)
-        suggestMoveForHuman()
+        if currentTurn == playerColor and not gamePaused then
+            suggestMoveForHuman()
+        end
     else
         isMatching = false
         matchButton.Text = "Match 3D"
@@ -971,6 +1007,7 @@ matchButton.MouseButton1Click:Connect(function()
         clearSuggestionHighlight()
         lastSeenBoard3D = nil
         boardStableCount = 0
+        currentPieceMap = {}
         statusLabel.Text = "Status: Online ("..currentTurn.."'s Turn)"
     end
 end)
@@ -1029,8 +1066,10 @@ local function undoLastMove()
     if isMatching then
         turnStartBoard = copyBoard(squares)
         clearSuggestionHighlight()
-        suggestMoveForHuman()
-        boardAnchor = nil
+        if currentTurn == playerColor and not gamePaused then
+            suggestMoveForHuman()
+        end
+        -- DO NOT reset boardAnchor here – keep it stable
     end
     
     statusLabel.Text="Status: Online ("..currentTurn.."'s Turn)" 
@@ -1058,6 +1097,7 @@ local function setStatusOffline()
         clearSuggestionHighlight()
         lastSeenBoard3D = nil
         boardStableCount = 0
+        currentPieceMap = {}
     end
     if chessBoard then chessBoard:Destroy(); chessBoard=nil end
     if promotionFrame then promotionFrame:Destroy(); promotionFrame=nil end
@@ -1086,6 +1126,7 @@ local function createChessGame()
     boardAnchor = nil
     lastSeenBoard3D = nil
     boardStableCount = 0
+    currentPieceMap = {}
 	hasMoved = {k=false,K=false,r1=false,r8=false,R1=false,R8=false}
 	if chessBoard then chessBoard:Destroy() end
 	chessBoard=Instance.new("Frame"); chessBoard.Parent,chessBoard.BackgroundColor3,chessBoard.Size,chessBoard.Position,chessBoard.BorderSizePixel=frame,Color3.fromRGB(200,200,200),UDim2.new(0,200,0,200),UDim2.new(0,20,0,80),0
@@ -1164,7 +1205,7 @@ local function createChessGame()
                         stateVersion = stateVersion + 1
                         turnStartBoard = copyBoard(squares)  -- update mirror reference
                         clearSuggestionHighlight()
-                        if not checkGameState() then
+                        if not checkGameState() and currentTurn == playerColor then
                             suggestMoveForHuman()
                         end
                     end
