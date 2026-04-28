@@ -974,44 +974,6 @@ local function matchLoop()
     end
 end
 
-matchButton.MouseButton1Click:Connect(function()
-    if not isMatching then
-        -- Start Match 3D mode
-        if not gameActive then
-            createChessGame()
-            setStatusOnline()
-        end
-        local detected = detectPlayerColorFrom3D()
-        playerColor = detected   -- used for suggestions and board flip
-        statusLabel.Text = "Match mode: You can move any piece. AI suggests your moves only on your turn."
-        setBoardFlipped(playerColor == "Black")  -- flip UI so your pieces are at bottom
-        -- Reset match variables
-        boardAnchor = nil          -- will be recomputed on first get3DBoardState
-        turnStartBoard = copyBoard(squares)
-        lastSeenBoard3D = nil
-        boardStableCount = 0
-        currentPieceMap = {}
-        clear3DVisuals()
-        clearSuggestionHighlight()
-        isMatching = true
-        matchButton.Text = "Stop Match"
-        task.spawn(matchLoop)
-        if currentTurn == playerColor and not gamePaused then
-            suggestMoveForHuman()
-        end
-    else
-        isMatching = false
-        matchButton.Text = "Match 3D"
-        boardAnchor = nil
-        clear3DVisuals()
-        clearSuggestionHighlight()
-        lastSeenBoard3D = nil
-        boardStableCount = 0
-        currentPieceMap = {}
-        statusLabel.Text = "Status: Online ("..currentTurn.."'s Turn)"
-    end
-end)
-
 local function flipBoard()
     if not gameActive or not chessBoard then return end
     isBoardFlipped = not isBoardFlipped
@@ -1118,7 +1080,8 @@ local function cleanup()
     end
 end
 
-local function createChessGame()
+-- Modified to accept an isEmpty parameter to spawn a blank board
+local function createChessGame(isEmpty)
 	if gameActive then return end 
 	currentTurn,gamePaused,isTraining,trainButton.Text,playerColor,isBoardFlipped = "White",false,false,"Train","White",false
 	stateVersion = 0
@@ -1131,7 +1094,15 @@ local function createChessGame()
 	if chessBoard then chessBoard:Destroy() end
 	chessBoard=Instance.new("Frame"); chessBoard.Parent,chessBoard.BackgroundColor3,chessBoard.Size,chessBoard.Position,chessBoard.BorderSizePixel=frame,Color3.fromRGB(200,200,200),UDim2.new(0,200,0,200),UDim2.new(0,20,0,80),0
 	local s=25; for r=1,8 do squares[r],originalColors[r]={},{} for c=1,8 do local sq=Instance.new("TextButton"); sq.Parent,sq.Size,sq.Position=chessBoard,UDim2.new(0,s,0,s),UDim2.new(0,(c-1)*s,0,(r-1)*s); local cl=((r+c)%2==0) and Color3.fromRGB(240,217,181) or Color3.fromRGB(181,136,99); sq.BackgroundColor3,originalColors[r][c]=cl,cl; sq.TextScaled,sq.Font,sq.TextColor3,sq.Text=true,Enum.Font.SourceSansBold,Color3.fromRGB(0,0,0),""; squares[r][c]=sq end end
-	local l={{"R","N","B","Q","K","B","N","R"},{"P","P","P","P","P","P","P","P"},{"","","","","","","",""},{"","","","","","","",""},{"","","","","","","",""},{"","","","","","","",""},{"p","p","p","p","p","p","p","p"},{"r","n","b","q","k","b","n","r"}}; for r=1,8 do for c=1,8 do local p=l[r][c]; if p~="" then squares[r][c].Text=p; squares[r][c].TextColor3=(r<=2) and Color3.fromRGB(20,20,20) or Color3.fromRGB(255,255,255) end end end
+	
+    local l
+    if isEmpty then
+        l={{"","","","","","","",""},{"","","","","","","",""},{"","","","","","","",""},{"","","","","","","",""},{"","","","","","","",""},{"","","","","","","",""},{"","","","","","","",""},{"","","","","","","",""}}
+    else
+        l={{"R","N","B","Q","K","B","N","R"},{"P","P","P","P","P","P","P","P"},{"","","","","","","",""},{"","","","","","","",""},{"","","","","","","",""},{"","","","","","","",""},{"p","p","p","p","p","p","p","p"},{"r","n","b","q","k","b","n","r"}}
+    end
+    
+    for r=1,8 do for c=1,8 do local p=l[r][c]; if p~="" then squares[r][c].Text=p; squares[r][c].TextColor3=(r<=2) and Color3.fromRGB(20,20,20) or Color3.fromRGB(255,255,255) end end end
 	
 	local function handlePromotion(pr,pc,pc_color) gamePaused=true; if promotionFrame then promotionFrame:Destroy() end; promotionFrame=Instance.new("Frame"); promotionFrame.Parent,promotionFrame.BackgroundColor3,promotionFrame.Size,promotionFrame.Position,promotionFrame.BorderSizePixel,promotionFrame.BorderColor3=frame,Color3.fromRGB(60,60,60),UDim2.new(0,200,0,40),UDim2.new(0,20,0,285),1,Color3.fromRGB(255,255,255); local ps,ptc={"Q","R","B","N"},getPieceTextColor(pc_color); for i,pl in ipairs(ps) do local btn=Instance.new("TextButton"); btn.Parent,btn.Size,btn.Position,btn.BackgroundColor3=promotionFrame,UDim2.new(0.25,0,1,0),UDim2.new((i-1)*0.25,0,0,0),Color3.fromRGB(80,80,80); local ft=(pc_color=="White") and pl:lower() or pl:upper(); btn.Text,btn.TextColor3,btn.TextScaled,btn.Font=ft,ptc,true,Enum.Font.SourceSansBold; table.insert(activeConnections,btn.MouseButton1Click:Connect(function() squares[pr][pc].Text,squares[pr][pc].TextColor3=ft,ptc; promotionFrame:Destroy(); promotionFrame,gamePaused=nil,false; currentTurn=(playerColor=="White") and "Black" or "White"; stateVersion = stateVersion + 1; if not checkGameState() then if currentTurn=="Black" then task.spawn(executeAIMoveForBlack) else task.spawn(executeAIMoveForWhite) end end end)) end end
 	local function checkPromotion(er,ec) local p=squares[er][ec].Text; if p:lower()=='p' and (er==1 or er==8) then handlePromotion(er,ec,getPieceColor(p)); return true end; return false end
@@ -1303,7 +1274,79 @@ local function createChessGame()
 end
 
 -- Button Events
-onButton.MouseButton1Click:Connect(function() if not gameActive then createChessGame(); setStatusOnline() end end)
+onButton.MouseButton1Click:Connect(function() if not gameActive then createChessGame(false); setStatusOnline() end end)
 offButton.MouseButton1Click:Connect(function() setStatusOffline() end)
 destroyButton.MouseButton1Click:Connect(cleanup)
 backButton.MouseButton1Click:Connect(undoLastMove)
+
+-- Updated Match 3D Button Logic
+matchButton.MouseButton1Click:Connect(function()
+    if not isMatching then
+        isMatching = true
+        matchButton.Text = "Stop Match"
+        
+        -- Start Match 3D mode without needing to press "On"
+        if not gameActive then
+            createChessGame(true) -- Spawns an empty board
+            setStatusOnline()
+        end
+        
+        statusLabel.Text = "Scanning 3D board..."
+        
+        -- Reset match variables
+        boardAnchor = nil
+        lastSeenBoard3D = nil
+        boardStableCount = 0
+        currentPieceMap = {}
+        clear3DVisuals()
+        clearSuggestionHighlight()
+        
+        -- Attempt to scan the board up to 10 times
+        local board3D, pieceMap
+        local attempts = 0
+        while not board3D and attempts < 10 do
+            board3D, pieceMap = get3DBoardState()
+            if not board3D then task.wait(0.5) end
+            attempts = attempts + 1
+        end
+        
+        if board3D then
+            -- Populate the 2D board with the scanned pieces
+            for r=1,8 do
+                for c=1,8 do
+                    local p = board3D[r][c]
+                    squares[r][c].Text = p
+                    if p ~= "" then
+                        squares[r][c].TextColor3 = getPieceTextColor(getPieceColor(p))
+                    end
+                end
+            end
+            currentPieceMap = pieceMap or {}
+            statusLabel.Text = "Match mode: You can move any piece. AI suggests your moves only on your turn."
+        else
+            statusLabel.Text = "Failed to detect 3D board. Ensure pieces are visible."
+        end
+        
+        local detected = detectPlayerColorFrom3D()
+        playerColor = detected
+        setBoardFlipped(playerColor == "Black")
+        
+        turnStartBoard = copyBoard(squares)
+        task.spawn(matchLoop)
+        
+        if currentTurn == playerColor and not gamePaused then
+            suggestMoveForHuman()
+        end
+    else
+        -- Stop Match 3D mode
+        isMatching = false
+        matchButton.Text = "Match 3D"
+        boardAnchor = nil
+        clear3DVisuals()
+        clearSuggestionHighlight()
+        lastSeenBoard3D = nil
+        boardStableCount = 0
+        currentPieceMap = {}
+        statusLabel.Text = "Status: Online ("..currentTurn.."'s Turn)"
+    end
+end)
