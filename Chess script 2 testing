@@ -567,7 +567,7 @@ local function uciToMove(uci)
 end
 
 local function getBestMoveFromAPI(fen)
-    local url = "https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=10"
+    local url = "https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=15"
     local body = nil
     local completed = false
     
@@ -583,7 +583,7 @@ local function getBestMoveFromAPI(fen)
     end)
     
     local t = 0
-    while not completed and t < 5 do
+    while not completed and t < 8 do
         t = t + task.wait(0.1)
     end
     
