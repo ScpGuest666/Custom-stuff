@@ -89,12 +89,12 @@ switchApiButton.Parent = secondFrame
 switchApiButton.Size = UDim2.new(1, -10, 0, 25)
 switchApiButton.Position = UDim2.new(0, 5, 0, 180)
 switchApiButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-switchApiButton.Text = "API: Stockfish"
+switchApiButton.Text = "API: Multi-Fast (10x)"
 switchApiButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 switchApiButton.TextScaled = true
 
 -- Depth Controls
-local stockfishDepth = 15
+local stockfishDepth = 10 -- Default depth to 10
 local MAX_STOCKFISH_DEPTH = 15
 local MIN_STOCKFISH_DEPTH = 0 -- 0 means Local AI only (No API)
 
@@ -187,7 +187,7 @@ local currentTurn, hasMoved, playerColor, isBoardFlipped = "White", {}, "White",
 local stateVersion = 0 
 local isThinking = false
 local positionHistory = {} -- For threefold repetition detection
-local currentApi = "Stockfish" -- Default API
+local currentApi = "Multi-Fast (10x)" -- Default API
 
 -- Match 3D Variables
 local isMatching = false
@@ -258,6 +258,10 @@ end
 -- --- 3D MATCHING LOGIC (with auto colour detection) ---
 local function getChessPieceType(name)
     local lowerName = string.lower(name)
+    -- Ignore objects that are likely the board itself
+    if string.find(lowerName, "board") or string.find(lowerName, "table") or string.find(lowerName, "square") then 
+        return nil 
+    end
     for _, keyword in ipairs(pieceKeywords) do
         if string.find(lowerName, keyword) then return keyword end
     end
@@ -379,7 +383,8 @@ local function get3DBoardState()
     for _, obj in pairs(workspace:GetDescendants()) do
         if obj:IsA("Model") and obj ~= player.Character then
             local extents = obj:GetExtentsSize()
-            if extents.X < 15 and extents.Y < 20 and extents.Z < 15 then
+            -- Strict size limit to prevent detecting the entire chessboard as a piece
+            if extents.X < 8 and extents.Y < 15 and extents.Z < 8 then
                 local pType = getChessPieceType(obj.Name)
                 if pType then
                     local pos = obj:GetPivot().Position
@@ -651,61 +656,123 @@ end
 local function getBestMoveFromAPI(fen)
     if stockfishDepth <= 0 then return nil end -- Skip API if depth is 0
     
-    local body = nil
     local completed = false
     local bestMoveStr = nil
     
-    task.spawn(function()
-        if currentApi == "Stockfish" then
-            local url = "https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(stockfishDepth)
-            if req then
-                local success, response = pcall(function() return req({Url = url, Method = "GET"}) end)
-                if success and response then body = response.Body end
-            elseif type(game.HttpGet) == "function" then
-                local success, response = pcall(function() return game:HttpGet(url) end)
-                if success then body = response end
+    local function fetchGet(url)
+        if req then
+            local success, res = pcall(function() return req({Url = url, Method = "GET"}) end)
+            if success and res then return res.Body end
+        elseif type(game.HttpGet) == "function" then
+            local success, res = pcall(function() return game:HttpGet(url) end)
+            if success then return res end
+        end
+        return nil
+    end
+
+    local function fetchPost(url, body)
+        if req then
+            local success, res = pcall(function() 
+                return req({
+                    Url = url, 
+                    Method = "POST",
+                    Headers = {["Content-Type"] = "application/json"},
+                    Body = body
+                }) 
+            end)
+            if success and res then return res.Body end
+        end
+        return nil
+    end
+
+    if currentApi == "Multi-Fast (10x)" then
+        local tasks = {
+            function() -- 1. Chess-API (Target Depth)
+                local body = fetchPost("https://chess-api.com/v1", HttpService:JSONEncode({fen = fen, depth = stockfishDepth}))
+                return HttpService:JSONDecode(body).move
+            end,
+            function() -- 2. Stockfish v2 (Target Depth)
+                local body = fetchGet("https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(stockfishDepth))
+                return HttpService:JSONDecode(body).bestmove:match("bestmove%s+(%S+)")
+            end,
+            function() -- 3. Lichess Cloud (Instant Cache)
+                local body = fetchGet("https://lichess.org/api/cloud-eval?fen=" .. HttpService:UrlEncode(fen))
+                return HttpService:JSONDecode(body).pvs[1].moves:match("^(%S+)")
+            end,
+            function() -- 4. Stockfish v1 (Target Depth)
+                local body = fetchGet("https://stockfish.online/api/s/v1.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(stockfishDepth))
+                return HttpService:JSONDecode(body).bestmove:match("bestmove%s+(%S+)")
+            end,
+            function() -- 5. Chess-API (Depth - 1)
+                local d = math.max(1, stockfishDepth - 1)
+                local body = fetchPost("https://chess-api.com/v1", HttpService:JSONEncode({fen = fen, depth = d}))
+                return HttpService:JSONDecode(body).move
+            end,
+            function() -- 6. Stockfish v2 (Depth - 1)
+                local d = math.max(1, stockfishDepth - 1)
+                local body = fetchGet("https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(d))
+                return HttpService:JSONDecode(body).bestmove:match("bestmove%s+(%S+)")
+            end,
+            function() -- 7. Chess-API (Depth + 1)
+                local d = math.min(15, stockfishDepth + 1)
+                local body = fetchPost("https://chess-api.com/v1", HttpService:JSONEncode({fen = fen, depth = d}))
+                return HttpService:JSONDecode(body).move
+            end,
+            function() -- 8. Stockfish v1 (Depth - 1)
+                local d = math.max(1, stockfishDepth - 1)
+                local body = fetchGet("https://stockfish.online/api/s/v1.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(d))
+                return HttpService:JSONDecode(body).bestmove:match("bestmove%s+(%S+)")
+            end,
+            function() -- 9. Chess-API (Depth - 2)
+                local d = math.max(1, stockfishDepth - 2)
+                local body = fetchPost("https://chess-api.com/v1", HttpService:JSONEncode({fen = fen, depth = d}))
+                return HttpService:JSONDecode(body).move
+            end,
+            function() -- 10. Stockfish v2 (Depth + 1)
+                local d = math.min(15, stockfishDepth + 1)
+                local body = fetchGet("https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(d))
+                return HttpService:JSONDecode(body).bestmove:match("bestmove%s+(%S+)")
             end
-            
+        }
+        
+        for i = 1, 10 do
+            task.spawn(function()
+                local success, move = pcall(tasks[i])
+                if success and move and not completed then
+                    bestMoveStr = move
+                    completed = true
+                end
+            end)
+        end
+        
+    elseif currentApi == "Stockfish" then
+        task.spawn(function()
+            local body = fetchGet("https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(stockfishDepth))
             if body then
                 local success, data = pcall(function() return HttpService:JSONDecode(body) end)
                 if success and data and data.success and data.bestmove then
                     bestMoveStr = data.bestmove:match("bestmove%s+(%S+)")
                 end
             end
-        elseif currentApi == "ChessAPI" then
-            local url = "https://chess-api.com/v1"
-            local postData = HttpService:JSONEncode({
-                fen = fen,
-                depth = stockfishDepth
-            })
-            
-            if req then
-                local success, response = pcall(function() 
-                    return req({
-                        Url = url, 
-                        Method = "POST",
-                        Headers = {["Content-Type"] = "application/json"},
-                        Body = postData
-                    }) 
-                end)
-                if success and response then body = response.Body end
-            else
-                warn("POST request not supported by your executor. Cannot use ChessAPI.")
-            end
-            
+            completed = true
+        end)
+    elseif currentApi == "ChessAPI" then
+        task.spawn(function()
+            local body = fetchPost("https://chess-api.com/v1", HttpService:JSONEncode({fen = fen, depth = stockfishDepth}))
             if body then
                 local success, data = pcall(function() return HttpService:JSONDecode(body) end)
                 if success and data and data.move then
                     bestMoveStr = data.move
                 end
             end
-        end
-        completed = true
-    end)
+            completed = true
+        end)
+    end
     
     local t = 0
-    while not completed and t < 8 do
-        t = t + task.wait(0.1)
+    while not completed and t < 40 do
+        t = t + 1
+        task.wait(0.1)
     end
     
     return bestMoveStr
@@ -832,7 +899,6 @@ end
 
 local function suggestMoveForHuman()
     if not gameActive or gamePaused or isTraining or not isMatching then return end
-    -- Only suggest if it's the turn of the player's color (detected at match start)
     if currentTurn ~= playerColor then return end
     if isThinking then return end
 
@@ -840,43 +906,58 @@ local function suggestMoveForHuman()
     local myState = stateVersion
     statusLabel.Text = "Generating suggestion..."
 
-    local fen = getFEN()
-    local uciMove = getBestMoveFromAPI(fen)
-    
-    if myState == stateVersion and uciMove then
-        local fromR, fromC, toR, toC, _ = uciToMove(uciMove)
-        local tempBoard = applyMoveToBoard(copyBoard(squares), {fromR=fromR, fromC=fromC, toR=toR, toC=toC, piece=squares[fromR][fromC].Text})
-        local newFen = getSimpleFEN(tempBoard)
-        if positionHistory[newFen] and positionHistory[newFen] >= 2 then
-            warn("API suggested a draw by repetition. Overriding with local AI.")
-            uciMove = nil
-        end
-    end
-    
-    local suggestion = nil
-    if myState == stateVersion and uciMove then
-        local fromR, fromC, toR, toC, _ = uciToMove(uciMove)
-        if fromR and fromC and toR and toC and squares[fromR] and squares[fromR][fromC] then
-            suggestion = {
-                fromR = fromR, fromC = fromC,
-                toR = toR, toC = toC,
-                piece = squares[fromR][fromC].Text,
-                captured = squares[toR][toC].Text
-            }
-        end
-    end
+    task.spawn(function()
+        local suggestion = nil
+        local success, err = pcall(function()
+            local fen = getFEN()
+            local uciMove = getBestMoveFromAPI(fen)
+            
+            if myState == stateVersion and uciMove then
+                local fromR, fromC, toR, toC, _ = uciToMove(uciMove)
+                if fromR and fromC and toR and toC and squares[fromR] and squares[fromR][fromC] then
+                    local tempBoard = applyMoveToBoard(copyBoard(squares), {fromR=fromR, fromC=fromC, toR=toR, toC=toC, piece=squares[fromR][fromC].Text})
+                    local newFen = getSimpleFEN(tempBoard)
+                    if positionHistory[newFen] and positionHistory[newFen] >= 2 then
+                        warn("API suggested a draw by repetition. Overriding with local AI.")
+                        uciMove = nil
+                    end
+                else
+                    uciMove = nil
+                end
+            end
+            
+            if myState == stateVersion and uciMove then
+                local fromR, fromC, toR, toC, _ = uciToMove(uciMove)
+                if fromR and fromC and toR and toC and squares[fromR] and squares[fromR][fromC] then
+                    suggestion = {
+                        fromR = fromR, fromC = fromC,
+                        toR = toR, toC = toC,
+                        piece = squares[fromR][fromC].Text,
+                        captured = squares[toR][toC].Text
+                    }
+                end
+            end
 
-    if myState == stateVersion and not suggestion then
-        suggestion = findBestMoveFor(currentTurn)
-    end
+            if myState == stateVersion and not suggestion then
+                suggestion = findBestMoveFor(currentTurn)
+            end
+        end)
 
-    if myState == stateVersion and suggestion then
-        showSuggestion(suggestion)
-        statusLabel.Text = "Suggestion: " .. string.char(96+suggestion.fromC) .. (9-suggestion.fromR) .. " → " .. string.char(96+suggestion.toC) .. (9-suggestion.toR)
-    else
-        statusLabel.Text = "No suggestion available"
-    end
-    isThinking = false
+        if not success then
+            warn("Suggestion Error: " .. tostring(err))
+        end
+
+        if myState == stateVersion then
+            if suggestion then
+                showSuggestion(suggestion)
+                statusLabel.Text = "Suggestion: " .. string.char(96+suggestion.fromC) .. (9-suggestion.fromR) .. " → " .. string.char(96+suggestion.toC) .. (9-suggestion.toR)
+            else
+                statusLabel.Text = "No suggestion available"
+            end
+        end
+        
+        isThinking = false
+    end)
 end
 
 -- --- Game State and Execution ---
@@ -1073,12 +1154,15 @@ switchButton.MouseButton1Click:Connect(function()
 end)
 
 switchApiButton.MouseButton1Click:Connect(function()
-    if currentApi == "Stockfish" then
+    if currentApi == "Multi-Fast (10x)" then
+        currentApi = "Stockfish"
+        switchApiButton.Text = "API: Stockfish"
+    elseif currentApi == "Stockfish" then
         currentApi = "ChessAPI"
         switchApiButton.Text = "API: Chess-API"
     else
-        currentApi = "Stockfish"
-        switchApiButton.Text = "API: Stockfish"
+        currentApi = "Multi-Fast (10x)"
+        switchApiButton.Text = "API: Multi-Fast (10x)"
     end
 end)
 
@@ -1300,6 +1384,17 @@ local function cleanup()
     end
 end
 
+local function isBoardValid(b)
+    local wk, bk = false, false
+    for r=1,8 do
+        for c=1,8 do
+            if b[r][c] == 'K' then bk = true end
+            if b[r][c] == 'k' then wk = true end
+        end
+    end
+    return wk and bk
+end
+
 -- Modified to accept an isEmpty parameter to spawn a blank board
 local function createChessGame(isEmpty)
 	if gameActive then return end 
@@ -1490,7 +1585,7 @@ matchButton.MouseButton1Click:Connect(function()
             attempts = attempts + 1
         end
         
-        if board3D then
+        if board3D and isBoardValid(board3D) then
             for r=1,8 do
                 for c=1,8 do
                     local p = board3D[r][c]
@@ -1516,22 +1611,27 @@ matchButton.MouseButton1Click:Connect(function()
 
             currentPieceMap = pieceMap or {}
             statusLabel.Text = "Match mode ("..currentTurn.."'s Turn)"
+            matchButton.Text = "Stop Match"
+            
+            setBoardFlipped(playerColor == "Black")
+            
+            turnStartBoard = copyBoard(squares)
+            task.spawn(matchLoop)
+            
+            if not isAutoMoveActive and currentTurn == playerColor and not gamePaused then
+                suggestMoveForHuman()
+            end
         else
-            statusLabel.Text = "Failed to detect 3D board. Ensure pieces are visible."
-        end
-        
-        setBoardFlipped(playerColor == "Black")
-        
-        turnStartBoard = copyBoard(squares)
-        task.spawn(matchLoop)
-        
-        if not isAutoMoveActive and currentTurn == playerColor and not gamePaused then
-            suggestMoveForHuman()
+            statusLabel.Text = "Failed: Missing Kings. Adjust camera closer to pieces."
+            isMatching = false
+            boardAnchor = nil
+            clear3DVisuals()
         end
     else
         isMatching = false
         isAutoMoveActive = false
         moveButton.Text = "Auto Move"
+        matchButton.Text = "Match 3D"
         boardAnchor = nil
         clear3DVisuals()
         clearSuggestionHighlight()
