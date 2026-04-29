@@ -80,23 +80,23 @@ moveButton.Parent = secondFrame
 moveButton.Size = UDim2.new(1, -10, 0, 25)
 moveButton.Position = UDim2.new(0, 5, 0, 145)
 moveButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-moveButton.Text = "Move"
+moveButton.Text = "Auto Move"
 moveButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 moveButton.TextScaled = true
 
-local matchButton = Instance.new("TextButton")
-matchButton.Parent = secondFrame
-matchButton.Size = UDim2.new(1, -10, 0, 25)
-matchButton.Position = UDim2.new(0, 5, 0, 180)
-matchButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-matchButton.Text = "Match 3D"
-matchButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-matchButton.TextScaled = true
+local switchApiButton = Instance.new("TextButton")
+switchApiButton.Parent = secondFrame
+switchApiButton.Size = UDim2.new(1, -10, 0, 25)
+switchApiButton.Position = UDim2.new(0, 5, 0, 180)
+switchApiButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+switchApiButton.Text = "API: Stockfish"
+switchApiButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+switchApiButton.TextScaled = true
 
 -- Depth Controls
 local stockfishDepth = 15
-local MAX_DEPTH = 15
-local MIN_DEPTH = 0 -- 0 means Local AI only (No API)
+local MAX_STOCKFISH_DEPTH = 15
+local MIN_STOCKFISH_DEPTH = 0 -- 0 means Local AI only (No API)
 
 local depthMinusBtn = Instance.new("TextButton")
 depthMinusBtn.Parent = secondFrame
@@ -135,14 +135,14 @@ local function updateDepthDisplay()
 end
 
 depthMinusBtn.MouseButton1Click:Connect(function()
-    if stockfishDepth > MIN_DEPTH then
+    if stockfishDepth > MIN_STOCKFISH_DEPTH then
         stockfishDepth = stockfishDepth - 1
         updateDepthDisplay()
     end
 end)
 
 depthPlusBtn.MouseButton1Click:Connect(function()
-    if stockfishDepth < MAX_DEPTH then
+    if stockfishDepth < MAX_STOCKFISH_DEPTH then
         stockfishDepth = stockfishDepth + 1
         updateDepthDisplay()
     end
@@ -152,7 +152,7 @@ depthTextBox.FocusLost:Connect(function()
     local text = depthTextBox.Text:gsub("Depth: ", ""):gsub("Local AI", "0")
     local num = tonumber(text)
     if num then
-        stockfishDepth = math.clamp(math.floor(num), MIN_DEPTH, MAX_DEPTH)
+        stockfishDepth = math.clamp(math.floor(num), MIN_STOCKFISH_DEPTH, MAX_STOCKFISH_DEPTH)
     end
     updateDepthDisplay()
 end)
@@ -165,8 +165,13 @@ local offButton = Instance.new("TextButton")
 offButton.Parent, offButton.BackgroundColor3, offButton.Size, offButton.Position, offButton.Text, offButton.TextColor3, offButton.TextScaled = frame, Color3.fromRGB(80, 80, 80), UDim2.new(0, buttonWidth, 0, buttonHeight), UDim2.new(0, buttonSpacing * 2 + buttonWidth, 0, buttonY), "Off", Color3.fromRGB(255, 255, 255), true
 local backButton = Instance.new("TextButton")
 backButton.Parent, backButton.BackgroundColor3, backButton.Size, backButton.Position, backButton.Text, backButton.TextColor3, backButton.TextScaled, backButton.Active = frame, Color3.fromRGB(80, 80, 80), UDim2.new(0, buttonWidth, 0, buttonHeight), UDim2.new(0, buttonSpacing * 3 + buttonWidth * 2, 0, buttonY), "Back", Color3.fromRGB(255, 255, 255), true, false
+
 local destroyButton = Instance.new("TextButton")
-destroyButton.Parent, destroyButton.BackgroundColor3, destroyButton.Size, destroyButton.Position, destroyButton.Text, destroyButton.TextColor3, destroyButton.TextScaled = frame, Color3.fromRGB(80, 80, 80), UDim2.new(0, 180, 0, 25), UDim2.new(0, 30, 0, 45), "Destroy", Color3.fromRGB(255, 255, 255), true
+destroyButton.Parent, destroyButton.BackgroundColor3, destroyButton.Size, destroyButton.Position, destroyButton.Text, destroyButton.TextColor3, destroyButton.TextScaled = frame, Color3.fromRGB(80, 80, 80), UDim2.new(0, 85, 0, 25), UDim2.new(0, 30, 0, 45), "Destroy", Color3.fromRGB(255, 255, 255), true
+
+local matchButton = Instance.new("TextButton")
+matchButton.Parent, matchButton.BackgroundColor3, matchButton.Size, matchButton.Position, matchButton.Text, matchButton.TextColor3, matchButton.TextScaled = frame, Color3.fromRGB(80, 80, 80), UDim2.new(0, 85, 0, 25), UDim2.new(0, 125, 0, 45), "Match 3D", Color3.fromRGB(255, 255, 255), true
+
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Parent, statusLabel.BackgroundColor3, statusLabel.Size, statusLabel.Position, statusLabel.Text, statusLabel.TextColor3, statusLabel.TextScaled = frame, Color3.fromRGB(60, 60, 60), UDim2.new(0, 240, 0, 25), UDim2.new(0, 0, 0, -25), "Status: Offline", Color3.fromRGB(255, 0, 0), true
 local toggleButton = Instance.new("TextButton")
@@ -181,9 +186,12 @@ local moveHistory, squares, originalColors, promotionFrame = {}, {}, {}, nil
 local currentTurn, hasMoved, playerColor, isBoardFlipped = "White", {}, "White", false
 local stateVersion = 0 
 local isThinking = false
+local positionHistory = {} -- For threefold repetition detection
+local currentApi = "Stockfish" -- Default API
 
 -- Match 3D Variables
 local isMatching = false
+local isAutoMoveActive = false
 local turnStartBoard = nil
 local createdVisuals = {}
 local MAX_DISTANCE = 80 
@@ -193,6 +201,8 @@ local lastSeenBoard3D = nil
 local boardStableCount = 0
 local STABLE_FRAMES_REQUIRED = 1   -- fast response
 local currentPieceMap = {}         -- (r,c) -> model object
+local persistentModelColors = {}   -- Caches the assigned color of 3D models
+local detectedPlayerColor = nil    -- The color assigned to the player based on camera
 
 -- Suggestion highlighting
 local currentSuggestion = nil -- { fromR, fromC, toR, toC }
@@ -254,19 +264,6 @@ local function getChessPieceType(name)
     return nil
 end
 
-local function getTeamColor3D(model)
-    local part = model:FindFirstChildWhichIsA("BasePart", true)
-    if part then
-        local color = part.Color
-        if (color.r + color.g + color.b) / 3 > 0.5 then
-            return Color3.fromRGB(0, 255, 255), "White" 
-        else
-            return Color3.fromRGB(255, 0, 0), "Black" 
-        end
-    end
-    return Color3.fromRGB(255, 255, 255), "Unknown"
-end
-
 local function identifyTarget(model, teamColor, teamName, pieceType)
     if model:FindFirstChild("ID_Highlight") then return end
     local highlight = Instance.new("Highlight")
@@ -321,44 +318,6 @@ local function clear3DVisuals()
     clearSuggestion3DPlatform()
 end
 
--- Auto-detect the player's colour based on camera distance (used only for initial orientation)
-local function detectPlayerColorFrom3D()
-    local pieces = {}
-    for _, obj in pairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") and obj ~= player.Character then
-            local extents = obj:GetExtentsSize()
-            if extents.X < 15 and extents.Y < 20 and extents.Z < 15 then
-                local pType = getChessPieceType(obj.Name)
-                if pType then
-                    local pos = obj:GetPivot().Position
-                    local dist = (pos - Camera.CFrame.Position).Magnitude
-                    if dist < MAX_DISTANCE then
-                        local _, color = getTeamColor3D(obj)
-                        table.insert(pieces, {dist = dist, color = color})
-                    end
-                end
-            end
-        end
-    end
-    if #pieces < 2 then return "White" end
-    local whiteDist, blackDist, whiteCount, blackCount = 0,0,0,0
-    for _, p in ipairs(pieces) do
-        if p.color == "White" then
-            whiteDist = whiteDist + p.dist
-            whiteCount = whiteCount + 1
-        else
-            blackDist = blackDist + p.dist
-            blackCount = blackCount + 1
-        end
-    end
-    if whiteCount == 0 then return "Black" end
-    if blackCount == 0 then return "White" end
-    local avgWhite = whiteDist / whiteCount
-    local avgBlack = blackDist / blackCount
-    return (avgWhite < avgBlack) and "White" or "Black"
-end
-
--- Flip board to a specific orientation (true = flipped, false = normal)
 local function setBoardFlipped(flipped)
     if not chessBoard then return end
     local size = 25
@@ -426,8 +385,7 @@ local function get3DBoardState()
                     local pos = obj:GetPivot().Position
                     local distance = (pos - Camera.CFrame.Position).Magnitude
                     if distance < MAX_DISTANCE then
-                        local tColor, tName = getTeamColor3D(obj)
-                        table.insert(pieces, {obj = obj, pos = pos, type = pType, color = tName, tColor = tColor})
+                        table.insert(pieces, {obj = obj, pos = pos, type = pType})
                     end
                 end
             end
@@ -468,20 +426,114 @@ local function get3DBoardState()
         
         if squareSizeX < 0.1 or squareSizeZ < 0.1 then return nil, nil end
         
-        -- Calculate the base Y level of the board (lowest point of the pieces)
         local minY = math.huge
         for _, p in ipairs(validPieces) do
             local bottomY = p.pos.Y - (p.obj:GetExtentsSize().Y / 2)
             if bottomY < minY then minY = bottomY end
         end
         
-        local tempBoard = {}
-        for r=1,8 do tempBoard[r] = {} for c=1,8 do tempBoard[r][c] = "" end end
+        -- Determine Player Side and Color based on distance to camera
+        local backRank1Pos = Vector3.new((minX + maxX)/2, minY, minZ)
+        local backRank2Pos = Vector3.new((minX + maxX)/2, minY, maxZ)
+        local dist1 = (backRank1Pos - Camera.CFrame.Position).Magnitude
+        local dist2 = (backRank2Pos - Camera.CFrame.Position).Magnitude
+        
+        local playerSideZ = (dist1 < dist2) and minZ or maxZ
+        local opponentSideZ = (dist1 < dist2) and maxZ or minZ
+        
+        if not detectedPlayerColor then
+            local whiteVotes, blackVotes = 0, 0
+            for _, p in ipairs(validPieces) do
+                -- Check pieces on the player's half of the board
+                if math.abs(p.pos.Z - playerSideZ) < math.abs(p.pos.Z - opponentSideZ) then
+                    local lowerName = string.lower(p.obj.Name)
+                    if string.find(lowerName, "white") then whiteVotes = whiteVotes + 1
+                    elseif string.find(lowerName, "black") then blackVotes = blackVotes + 1
+                    else
+                        local part = p.obj:FindFirstChildWhichIsA("BasePart", true)
+                        if part then
+                            local color = part.Color
+                            if (color.r + color.g + color.b) / 3 > 0.5 then whiteVotes = whiteVotes + 1
+                            else blackVotes = blackVotes + 1 end
+                        end
+                    end
+                end
+            end
+            detectedPlayerColor = (whiteVotes >= blackVotes) and "White" or "Black"
+            playerColor = detectedPlayerColor
+        end
+        
+        local opponentColor = (detectedPlayerColor == "White") and "Black" or "White"
+        
+        -- Assign persistent colors to models based on their starting side
         for _, p in ipairs(validPieces) do
-            local c = math.floor(((p.pos.X - minX) / squareSizeX) + 0.5) + 1
-            local r = math.floor(((p.pos.Z - minZ) / squareSizeZ) + 0.5) + 1
-            c = math.clamp(c, 1, 8)
-            r = math.clamp(r, 1, 8)
+            if not persistentModelColors[p.obj] then
+                if math.abs(p.pos.Z - playerSideZ) < math.abs(p.pos.Z - opponentSideZ) then
+                    persistentModelColors[p.obj] = detectedPlayerColor
+                else
+                    persistentModelColors[p.obj] = opponentColor
+                end
+            end
+        end
+        
+        local flipRow = false
+        if playerSideZ == minZ and detectedPlayerColor == "White" then flipRow = true end
+        if playerSideZ == maxZ and detectedPlayerColor == "Black" then flipRow = true end
+        
+        local whiteKingC, whiteQueenC
+        for _, p in ipairs(validPieces) do
+            if persistentModelColors[p.obj] == "White" then
+                local c = math.floor(((p.pos.X - minX) / squareSizeX) + 0.5) + 1
+                if p.type == "king" then whiteKingC = c end
+                if p.type == "queen" then whiteQueenC = c end
+            end
+        end
+        
+        local flipCol = false
+        if whiteKingC and whiteQueenC then
+            if whiteKingC < whiteQueenC then flipCol = true end
+        end
+        
+        boardAnchor = {
+            minX = minX, maxX = maxX,
+            minZ = minZ, maxZ = maxZ,
+            squareSizeX = squareSizeX,
+            squareSizeZ = squareSizeZ,
+            baseY = minY,
+            flipRow = flipRow,
+            flipCol = flipCol
+        }
+    end
+    
+    local board3D = {}
+    for r=1,8 do board3D[r] = {} for c=1,8 do board3D[r][c] = "" end end
+    local pieceMap = {}
+    
+    for _, p in ipairs(pieces) do
+        -- Fallback for new pieces (e.g., promotions)
+        if not persistentModelColors[p.obj] then
+            local lowerName = string.lower(p.obj.Name)
+            if string.find(lowerName, "white") then persistentModelColors[p.obj] = "White"
+            elseif string.find(lowerName, "black") then persistentModelColors[p.obj] = "Black"
+            else
+                local part = p.obj:FindFirstChildWhichIsA("BasePart", true)
+                if part then
+                    local color = part.Color
+                    if (color.r + color.g + color.b) / 3 > 0.5 then persistentModelColors[p.obj] = "White"
+                    else persistentModelColors[p.obj] = "Black" end
+                else
+                    persistentModelColors[p.obj] = "White"
+                end
+            end
+        end
+        p.color = persistentModelColors[p.obj]
+        
+        local c = math.floor(((p.pos.X - boardAnchor.minX) / boardAnchor.squareSizeX) + 0.5) + 1
+        local r = math.floor(((p.pos.Z - boardAnchor.minZ) / boardAnchor.squareSizeZ) + 0.5) + 1
+        
+        if c >= 1 and c <= 8 and r >= 1 and r <= 8 then
+            if boardAnchor.flipRow then r = 9 - r end
+            if boardAnchor.flipCol then c = 9 - c end
             
             local char = ""
             if p.type == "pawn" then char = "p"
@@ -493,72 +545,14 @@ local function get3DBoardState()
             end
             if p.color == "Black" then char = char:upper() end
             
-            if tempBoard[r][c] == "" then tempBoard[r][c] = char end
-        end
-        
-        local flipRow = false
-        local flipCol = false
-        
-        local whiteKingR, whiteKingC, whiteQueenC
-        for r=1,8 do for c=1,8 do if tempBoard[r][c] == 'k' then whiteKingR = r; whiteKingC = c end; if tempBoard[r][c] == 'q' then whiteQueenC = c end end end
-        
-        if whiteKingR and whiteKingR < 5 then
-            flipRow = true
-            local newBoard = {}
-            for r=1,8 do newBoard[r] = tempBoard[9-r] end
-            tempBoard = newBoard
-        end
-        
-        whiteKingC = nil; whiteQueenC = nil
-        for r=1,8 do for c=1,8 do if tempBoard[r][c] == 'k' then whiteKingC = c end; if tempBoard[r][c] == 'q' then whiteQueenC = c end end end
-        
-        if whiteKingC and whiteQueenC and whiteQueenC > whiteKingC then
-            flipCol = true
-        end
-        
-        boardAnchor = {
-            minX = minX, maxX = maxX,
-            minZ = minZ, maxZ = maxZ,
-            squareSizeX = squareSizeX,
-            squareSizeZ = squareSizeZ,
-            flipRow = flipRow,
-            flipCol = flipCol,
-            baseY = minY
-        }
-    end
-    
-    local board3D = {}
-    for r=1,8 do board3D[r] = {} for c=1,8 do board3D[r][c] = "" end end
-    local pieceMap = {}  -- (r,c) -> model
-    
-    for _, p in ipairs(pieces) do
-        local c = math.floor(((p.pos.X - boardAnchor.minX) / boardAnchor.squareSizeX) + 0.5) + 1
-        local r = math.floor(((p.pos.Z - boardAnchor.minZ) / boardAnchor.squareSizeZ) + 0.5) + 1
-        
-        local char = ""
-        if p.type == "pawn" then char = "p"
-        elseif p.type == "knight" then char = "n"
-        elseif p.type == "bishop" then char = "b"
-        elseif p.type == "rook" then char = "r"
-        elseif p.type == "queen" then char = "q"
-        elseif p.type == "king" then char = "k"
-        end
-        if p.color == "Black" then char = char:upper() end
-        
-        if c >= 1 and c <= 8 and r >= 1 and r <= 8 then
-            if boardAnchor.flipRow then r = 9 - r end
-            if boardAnchor.flipCol then c = 9 - c end
-            
             if board3D[r][c] == "" then 
                 board3D[r][c] = char 
                 pieceMap[r..","..c] = p.obj
-            else
-                -- duplicate piece on same square? ignore
             end
         end
     end
     
-    -- Also add the "ID" highlights for visualization (optional, keeps original behavior)
+    -- Visuals (ID tags)
     local scriptCounts = {}
     for r=1,8 do
         for c=1,8 do
@@ -572,26 +566,29 @@ local function get3DBoardState()
     for _, p in ipairs(pieces) do
         local c = math.floor(((p.pos.X - boardAnchor.minX) / boardAnchor.squareSizeX) + 0.5) + 1
         local r = math.floor(((p.pos.Z - boardAnchor.minZ) / boardAnchor.squareSizeZ) + 0.5) + 1
-        local char = ""
-        if p.type == "pawn" then char = "p"
-        elseif p.type == "knight" then char = "n"
-        elseif p.type == "bishop" then char = "b"
-        elseif p.type == "rook" then char = "r"
-        elseif p.type == "queen" then char = "q"
-        elseif p.type == "king" then char = "k"
-        end
-        if p.color == "Black" then char = char:upper() end
         if c >= 1 and c <= 8 and r >= 1 and r <= 8 then
             local orR, orC = r, c
             if boardAnchor.flipRow then orR = 9 - r end
             if boardAnchor.flipCol then orC = 9 - c end
+            
+            local char = ""
+            if p.type == "pawn" then char = "p"
+            elseif p.type == "knight" then char = "n"
+            elseif p.type == "bishop" then char = "b"
+            elseif p.type == "rook" then char = "r"
+            elseif p.type == "queen" then char = "q"
+            elseif p.type == "king" then char = "k"
+            end
+            if p.color == "Black" then char = char:upper() end
+            
             local isCaptured = true
             if scriptCounts[char] and scriptCounts[char] > 0 then
                 scriptCounts[char] = scriptCounts[char] - 1
                 isCaptured = false
             end
             if not isCaptured then
-                identifyTarget(p.obj, p.tColor, p.color, p.type)
+                local tColor = (p.color == "White") and Color3.fromRGB(0, 255, 255) or Color3.fromRGB(255, 0, 0)
+                identifyTarget(p.obj, tColor, p.color, p.type)
             end
         end
     end
@@ -599,13 +596,13 @@ local function get3DBoardState()
     return board3D, pieceMap
 end
 
--- --- STOCKFISH API INTEGRATION ---
-local function getFEN()
+-- --- FEN and Repetition Logic ---
+local function getSimpleFEN(board)
     local fen = ""
     for r = 1, 8 do
         local emptyCount = 0
         for c = 1, 8 do
-            local p = squares[r][c].Text
+            local p = board[r][c]
             if p == "" then
                 emptyCount = emptyCount + 1
             else
@@ -620,7 +617,11 @@ local function getFEN()
         if emptyCount > 0 then fen = fen .. tostring(emptyCount) end
         if r < 8 then fen = fen .. "/" end
     end
-    
+    return fen
+end
+
+local function getFEN()
+    local fen = getSimpleFEN(copyBoard(squares))
     local activeColor = (currentTurn == "White") and "w" or "b"
     local castling = ""
     if not hasMoved["k"] then
@@ -650,17 +651,54 @@ end
 local function getBestMoveFromAPI(fen)
     if stockfishDepth <= 0 then return nil end -- Skip API if depth is 0
     
-    local url = "https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(stockfishDepth)
     local body = nil
     local completed = false
+    local bestMoveStr = nil
     
     task.spawn(function()
-        if req then
-            local success, response = pcall(function() return req({Url = url, Method = "GET"}) end)
-            if success and response then body = response.Body end
-        elseif type(game.HttpGet) == "function" then
-            local success, response = pcall(function() return game:HttpGet(url) end)
-            if success then body = response end
+        if currentApi == "Stockfish" then
+            local url = "https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(stockfishDepth)
+            if req then
+                local success, response = pcall(function() return req({Url = url, Method = "GET"}) end)
+                if success and response then body = response.Body end
+            elseif type(game.HttpGet) == "function" then
+                local success, response = pcall(function() return game:HttpGet(url) end)
+                if success then body = response end
+            end
+            
+            if body then
+                local success, data = pcall(function() return HttpService:JSONDecode(body) end)
+                if success and data and data.success and data.bestmove then
+                    bestMoveStr = data.bestmove:match("bestmove%s+(%S+)")
+                end
+            end
+        elseif currentApi == "ChessAPI" then
+            local url = "https://chess-api.com/v1"
+            local postData = HttpService:JSONEncode({
+                fen = fen,
+                depth = stockfishDepth
+            })
+            
+            if req then
+                local success, response = pcall(function() 
+                    return req({
+                        Url = url, 
+                        Method = "POST",
+                        Headers = {["Content-Type"] = "application/json"},
+                        Body = postData
+                    }) 
+                end)
+                if success and response then body = response.Body end
+            else
+                warn("POST request not supported by your executor. Cannot use ChessAPI.")
+            end
+            
+            if body then
+                local success, data = pcall(function() return HttpService:JSONDecode(body) end)
+                if success and data and data.move then
+                    bestMoveStr = data.move
+                end
+            end
         end
         completed = true
     end)
@@ -670,15 +708,7 @@ local function getBestMoveFromAPI(fen)
         t = t + task.wait(0.1)
     end
     
-    if not completed then return nil end
-    
-    if body then
-        local success, data = pcall(function() return HttpService:JSONDecode(body) end)
-        if success and data and data.success and data.bestmove then
-            return data.bestmove:match("bestmove%s+(%S+)")
-        end
-    end
-    return nil
+    return bestMoveStr
 end
 
 -- --- LOCAL AI FALLBACK ---
@@ -687,7 +717,7 @@ local function evaluateBoard(b) local s=0; for r=1,8 do for c=1,8 do local p=b[r
 local MAX_DEPTH_LOCAL,minimax_=2,nil; minimax_=function(b,d,a,be,isM) checkYield(); if d==0 then return evaluateBoard(b) end; local m=generateLegalMoves(b,isM and "Black" or "White"); if isM then local me=-math.huge; for _,mo in ipairs(m) do local nb=cloneBoard(b); nb[mo.toR][mo.toC]=mo.piece; nb[mo.fromR][mo.fromC]=""; local e=minimax_(nb,d-1,a,be,false); me=math.max(me,e); a=math.max(a,e); if be<=a then break end end; return me else local me=math.huge; for _,mo in ipairs(m) do local nb=cloneBoard(b); nb[mo.toR][mo.toC]=mo.piece; nb[mo.fromR][mo.fromC]=""; local e=minimax_(nb,d-1,a,be,true); me=math.min(me,e); be=math.min(be,e); if be<=a then break end end; return me end end
 local function absPV(ch) return math.abs(PV[ch] or 0) end
 local function moveLeavesPieceHanging(newBoard, move, moverColor) local oppColor = (moverColor == "White") and "Black" or "White"; local destR, destC = move.toR, move.toC; local moves = generateLegalMoves(newBoard, oppColor); for _, m in ipairs(moves) do if m.toR == destR and m.toC == destC and m.captured ~= "" then local capturedVal = (move.captured ~= "") and absPV(move.captured) or 0; local movedVal = absPV(move.piece); local netForMover = capturedVal - movedVal; if netForMover < 0 then return true, -netForMover end end end; return false, 0 end
-local function findBestMoveFor(color) local board = copyBoard(squares); local bestMove, bestEval; local legalMoves = generateLegalMoves(board, color); if #legalMoves == 0 then return end; if color == "Black" then bestEval = math.huge; for _, move in ipairs(legalMoves) do checkYield(); local newBoard = cloneBoard(board); newBoard[move.toR][move.toC] = move.piece; newBoard[move.fromR][move.fromC] = ""; local eval = minimax_(newBoard, MAX_DEPTH_LOCAL - 1, -math.huge, math.huge, false); local hanging, penaltyMag = moveLeavesPieceHanging(newBoard, move, "Black"); if hanging then eval = eval + penaltyMag * 10 end; if eval < bestEval then bestEval, bestMove = eval, move end end else bestEval = -math.huge; for _, move in ipairs(legalMoves) do checkYield(); local newBoard = cloneBoard(board); newBoard[move.toR][move.toC] = move.piece; newBoard[move.fromR][move.fromC] = ""; local eval = minimax_(newBoard, MAX_DEPTH_LOCAL - 1, -math.huge, math.huge, true); local hanging, penaltyMag = moveLeavesPieceHanging(newBoard, move, "White"); if hanging then eval = eval - penaltyMag * 10 end; if eval > bestEval then bestEval, bestMove = eval, move end end end; return bestMove end
+local function findBestMoveFor(color) local board = copyBoard(squares); local bestMove, bestEval; local legalMoves = generateLegalMoves(board, color); if #legalMoves == 0 then return end; if color == "Black" then bestEval = math.huge; for _, move in ipairs(legalMoves) do checkYield(); local newBoard = applyMoveToBoard(board, move); local eval; local newFen = getSimpleFEN(newBoard); if positionHistory[newFen] and positionHistory[newFen] >= 2 then eval = 0 else eval = minimax_(newBoard, MAX_DEPTH_LOCAL - 1, -math.huge, math.huge, false) end; local hanging, penaltyMag = moveLeavesPieceHanging(newBoard, move, "Black"); if hanging then eval = eval + penaltyMag * 10 end; if eval < bestEval then bestEval, bestMove = eval, move end end else bestEval = -math.huge; for _, move in ipairs(legalMoves) do checkYield(); local newBoard = applyMoveToBoard(board, move); local eval; local newFen = getSimpleFEN(newBoard); if positionHistory[newFen] and positionHistory[newFen] >= 2 then eval = 0 else eval = minimax_(newBoard, MAX_DEPTH_LOCAL - 1, -math.huge, math.huge, true) end; local hanging, penaltyMag = moveLeavesPieceHanging(newBoard, move, "White"); if hanging then eval = eval - penaltyMag * 10 end; if eval > bestEval then bestEval, bestMove = eval, move end end end; return bestMove end
 
 -- --- UI and Control Functions ---
 local function clearHighlights() 
@@ -746,6 +776,7 @@ local function highlightSuggested3DPlatform(row, col)
     local actualR = boardAnchor.flipRow and (9 - row) or row
     local actualC = boardAnchor.flipCol and (9 - col) or col
     
+    -- Correctly calculate the center of the target square
     local targetX = boardAnchor.minX + (actualC - 1) * boardAnchor.squareSizeX
     local targetZ = boardAnchor.minZ + (actualR - 1) * boardAnchor.squareSizeZ
     
@@ -811,10 +842,20 @@ local function suggestMoveForHuman()
 
     local fen = getFEN()
     local uciMove = getBestMoveFromAPI(fen)
-    local suggestion = nil
-
+    
     if myState == stateVersion and uciMove then
-        local fromR, fromC, toR, toC, promo = uciToMove(uciMove)
+        local fromR, fromC, toR, toC, _ = uciToMove(uciMove)
+        local tempBoard = applyMoveToBoard(copyBoard(squares), {fromR=fromR, fromC=fromC, toR=toR, toC=toC, piece=squares[fromR][fromC].Text})
+        local newFen = getSimpleFEN(tempBoard)
+        if positionHistory[newFen] and positionHistory[newFen] >= 2 then
+            warn("API suggested a draw by repetition. Overriding with local AI.")
+            uciMove = nil
+        end
+    end
+    
+    local suggestion = nil
+    if myState == stateVersion and uciMove then
+        local fromR, fromC, toR, toC, _ = uciToMove(uciMove)
         if fromR and fromC and toR and toC and squares[fromR] and squares[fromR][fromC] then
             suggestion = {
                 fromR = fromR, fromC = fromC,
@@ -896,6 +937,10 @@ local function executeMove(move, color, promo)
     
     currentTurn=(color=="White") and "Black" or "White"
     stateVersion = stateVersion + 1 
+    
+    local newFen = getSimpleFEN(copyBoard(squares))
+    positionHistory[newFen] = (positionHistory[newFen] or 0) + 1
+    
     statusLabel.Text="Status: ("..currentTurn.."'s Turn)"
     checkGameState()
 end
@@ -923,6 +968,16 @@ local function executeAIMove(color)
         if stateVersion ~= myState then return end 
         
         if uciMove then
+            local fromR, fromC, toR, toC, _ = uciToMove(uciMove)
+            local tempBoard = applyMoveToBoard(copyBoard(squares), {fromR=fromR, fromC=fromC, toR=toR, toC=toC, piece=squares[fromR][fromC].Text})
+            local newFen = getSimpleFEN(tempBoard)
+            if positionHistory[newFen] and positionHistory[newFen] >= 2 then
+                warn("API suggested a draw by repetition. Overriding with local AI.")
+                uciMove = nil
+            end
+        end
+        
+        if uciMove then
             local fromR, fromC, toR, toC, promo = uciToMove(uciMove)
             if fromR and fromC and toR and toC and squares[fromR] and squares[fromR][fromC] then
                 local movedPiece = squares[fromR][fromC].Text
@@ -938,7 +993,7 @@ local function executeAIMove(color)
             end
         end
         
-        warn("Stockfish API failed or timed out, using local AI fallback.")
+        warn("API failed or timed out, using local AI fallback.")
         local move = findBestMoveFor(color)
         
         if stateVersion ~= myState then return end 
@@ -974,6 +1029,25 @@ local function trainingLoop()
     end
 end
 
+local autoMoveLoop; autoMoveLoop = function()
+    while isAutoMoveActive and isMatching and not gamePaused do
+        if currentTurn == playerColor then
+            suggestMoveForHuman()
+            -- Wait for player to move
+            local turnBeforeWait = currentTurn
+            while isAutoMoveActive and currentTurn == turnBeforeWait do
+                task.wait(0.5)
+            end
+        else
+            -- Wait for opponent to move
+            local turnBeforeWait = currentTurn
+            while isAutoMoveActive and currentTurn == turnBeforeWait do
+                task.wait(0.5)
+            end
+        end
+    end
+end
+
 trainButton.MouseButton1Click:Connect(function()
     isTraining = not isTraining
     trainButton.Text = isTraining and "Stop Training" or "Train"
@@ -998,17 +1072,39 @@ switchButton.MouseButton1Click:Connect(function()
     end
 end)
 
+switchApiButton.MouseButton1Click:Connect(function()
+    if currentApi == "Stockfish" then
+        currentApi = "ChessAPI"
+        switchApiButton.Text = "API: Chess-API"
+    else
+        currentApi = "Stockfish"
+        switchApiButton.Text = "API: Stockfish"
+    end
+end)
+
 moveButton.MouseButton1Click:Connect(function()
     if not gameActive or gamePaused then return end
-    if isThinking then
-        isThinking = false
-        stateVersion = stateVersion + 1
-        warn("Forced AI reset.")
-    end
-    if currentTurn == "White" then
-        task.spawn(executeAIMoveForWhite)
+    
+    if isMatching then
+        isAutoMoveActive = not isAutoMoveActive
+        if isAutoMoveActive then
+            moveButton.Text = "Stop Auto"
+            task.spawn(autoMoveLoop)
+        else
+            moveButton.Text = "Auto Move"
+        end
     else
-        task.spawn(executeAIMoveForBlack)
+        if isThinking then
+            isThinking = false
+            stateVersion = stateVersion + 1
+            warn("Forced AI reset.")
+            return
+        end
+        if currentTurn == "White" then
+            task.spawn(executeAIMoveForWhite)
+        else
+            task.spawn(executeAIMoveForBlack)
+        end
     end
 end)
 
@@ -1072,7 +1168,7 @@ local function matchLoop()
                 clearSuggestionHighlight()
                 boardStableCount = 0
                 -- After mirroring, if it's now the player's turn, suggest a move
-                if currentTurn == playerColor and not gamePaused then
+                if not isAutoMoveActive and currentTurn == playerColor and not gamePaused then
                     suggestMoveForHuman()
                 end
             else
@@ -1080,7 +1176,7 @@ local function matchLoop()
             end
         else
             -- Boards match. If it's player's turn and no suggestion active, generate one.
-            if currentTurn == playerColor and not gamePaused and not currentSuggestion then
+            if not isAutoMoveActive and currentTurn == playerColor and not gamePaused and not currentSuggestion then
                 suggestMoveForHuman()
             end
         end
@@ -1115,6 +1211,15 @@ local function undoLastMove()
     isThinking = false
     
     if promotionFrame then promotionFrame:Destroy(); promotionFrame=nil end; 
+    
+    local currentFen = getSimpleFEN(copyBoard(squares))
+    if positionHistory[currentFen] then
+        positionHistory[currentFen] = positionHistory[currentFen] - 1
+        if positionHistory[currentFen] == 0 then
+            positionHistory[currentFen] = nil
+        end
+    end
+    
     local lm=table.remove(moveHistory); 
     local fr,fc,tr,tc=lm.fromR,lm.fromC,lm.toR,lm.toC; 
     local mp,cp=lm.movedPiece,lm.capturedPiece; 
@@ -1144,7 +1249,6 @@ local function undoLastMove()
         if currentTurn == playerColor and not gamePaused then
             suggestMoveForHuman()
         end
-        -- DO NOT reset boardAnchor here – keep it stable
     end
     
     statusLabel.Text="Status: Online ("..currentTurn.."'s Turn)" 
@@ -1166,13 +1270,16 @@ local function setStatusOffline()
     backButton.Active=false; 
     if isMatching then
         isMatching = false
-        matchButton.Text = "Match 3D"
+        isAutoMoveActive = false
+        moveButton.Text = "Auto Move"
         boardAnchor = nil
         clear3DVisuals()
         clearSuggestionHighlight()
         lastSeenBoard3D = nil
         boardStableCount = 0
         currentPieceMap = {}
+        persistentModelColors = {}
+        detectedPlayerColor = nil
     end
     if chessBoard then chessBoard:Destroy(); chessBoard=nil end
     if promotionFrame then promotionFrame:Destroy(); promotionFrame=nil end
@@ -1203,6 +1310,7 @@ local function createChessGame(isEmpty)
     lastSeenBoard3D = nil
     boardStableCount = 0
     currentPieceMap = {}
+    positionHistory = {}
 	hasMoved = {k=false,K=false,r1=false,r8=false,R1=false,R8=false}
 	if chessBoard then chessBoard:Destroy() end
 	chessBoard=Instance.new("Frame"); chessBoard.Parent,chessBoard.BackgroundColor3,chessBoard.Size,chessBoard.Position,chessBoard.BorderSizePixel=frame,Color3.fromRGB(200,200,200),UDim2.new(0,200,0,200),UDim2.new(0,20,0,80),0
@@ -1217,6 +1325,9 @@ local function createChessGame(isEmpty)
     
     for r=1,8 do for c=1,8 do local p=l[r][c]; if p~="" then squares[r][c].Text=p; squares[r][c].TextColor3=(r<=2) and Color3.fromRGB(20,20,20) or Color3.fromRGB(255,255,255) end end end
 	
+    local initialFen = getSimpleFEN(copyBoard(squares))
+    positionHistory[initialFen] = 1
+    
 	local function handlePromotion(pr,pc,pc_color) gamePaused=true; if promotionFrame then promotionFrame:Destroy() end; promotionFrame=Instance.new("Frame"); promotionFrame.Parent,promotionFrame.BackgroundColor3,promotionFrame.Size,promotionFrame.Position,promotionFrame.BorderSizePixel,promotionFrame.BorderColor3=frame,Color3.fromRGB(60,60,60),UDim2.new(0,200,0,40),UDim2.new(0,20,0,285),1,Color3.fromRGB(255,255,255); local ps,ptc={"Q","R","B","N"},getPieceTextColor(pc_color); for i,pl in ipairs(ps) do local btn=Instance.new("TextButton"); btn.Parent,btn.Size,btn.Position,btn.BackgroundColor3=promotionFrame,UDim2.new(0.25,0,1,0),UDim2.new((i-1)*0.25,0,0,0),Color3.fromRGB(80,80,80); local ft=(pc_color=="White") and pl:lower() or pl:upper(); btn.Text,btn.TextColor3,btn.TextScaled,btn.Font=ft,ptc,true,Enum.Font.SourceSansBold; table.insert(activeConnections,btn.MouseButton1Click:Connect(function() squares[pr][pc].Text,squares[pr][pc].TextColor3=ft,ptc; promotionFrame:Destroy(); promotionFrame,gamePaused=nil,false; currentTurn=(playerColor=="White") and "Black" or "White"; stateVersion = stateVersion + 1; if not checkGameState() then if currentTurn=="Black" then task.spawn(executeAIMoveForBlack) else task.spawn(executeAIMoveForWhite) end end end)) end end
 	local function checkPromotion(er,ec) local p=squares[er][ec].Text; if p:lower()=='p' and (er==1 or er==8) then handlePromotion(er,ec,getPieceColor(p)); return true end; return false end
 	
@@ -1262,34 +1373,14 @@ local function createChessGame(isEmpty)
                     end
                 end
                 if isLegal then
-                    local mp = selected.Text
-                    table.insert(moveHistory, {fromR=sr, fromC=sc, toR=tr, toC=tc, movedPiece=mp, capturedPiece=squares[tr][tc].Text, previousHasMoved=copyHasMoved(hasMoved)})
-                    
-                    if mp:lower() == 'p' and sc ~= tc and squares[tr][tc].Text == "" then
-                        squares[sr][tc].Text = ""
-                    end
-                    
-                    sq.Text, sq.TextColor3, selected.Text = mp, selected.TextColor3, ""
-                    if mp:lower() == 'k' and math.abs(tc-sc) == 2 then
-                        local rc, nrc = (tc>sc) and 8 or 1, (tc>sc) and 6 or 4
-                        local rp = squares[sr][rc].Text
-                        squares[sr][nrc].Text, squares[sr][rc].Text = rp, ""
-                        squares[sr][nrc].TextColor3 = getPieceTextColor(pieceColor)
-                    end
-                    hasMoved[mp] = true
-                    if mp:lower() == 'r' then hasMoved[mp..sc] = true end
-                    
-                    clearHighlights()
-                    squares[sr][sc].BackgroundColor3 = Color3.fromRGB(255, 255, 0)
-                    squares[tr][tc].BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+                    local moveData = {fromR=sr, fromC=sc, toR=tr, toC=tc, piece=selected.Text}
+                    executeMove(moveData, pieceColor)
                     selected = nil
                     
-                    if not checkPromotion(tr, tc) then
-                        currentTurn = (pieceColor == "White") and "Black" or "White"
-                        stateVersion = stateVersion + 1
-                        turnStartBoard = copyBoard(squares)  -- update mirror reference
+                    if not gamePaused then
+                        turnStartBoard = copyBoard(squares)
                         clearSuggestionHighlight()
-                        if not checkGameState() and currentTurn == playerColor then
+                        if not isAutoMoveActive and currentTurn == playerColor then
                             suggestMoveForHuman()
                         end
                     end
@@ -1340,37 +1431,15 @@ local function createChessGame(isEmpty)
                 end
             end
             if isl then
-                local mp=selected.Text
-                table.insert(moveHistory,{fromR=sr,fromC=sc,toR=tr,toC=tc,movedPiece=mp,capturedPiece=squares[tr][tc].Text,previousHasMoved=copyHasMoved(hasMoved)})
-                
-                if mp:lower() == 'p' and sc ~= tc and squares[tr][tc].Text == "" then
-                    squares[sr][tc].Text = ""
-                end
-                
-                sq.Text,sq.TextColor3,selected.Text=mp,selected.TextColor3,""
-                if mp:lower()=='k' and math.abs(tc-sc)==2 then
-                    local rc,nrc=(tc>sc) and 8 or 1,(tc>sc) and 6 or 4
-                    local rp=squares[sr][rc].Text
-                    squares[sr][nrc].Text,squares[sr][rc].Text=rp,""
-                    squares[sr][nrc].TextColor3=getPieceTextColor(playerColor)
-                end
-                hasMoved[mp]=true
-                if mp:lower()=='r' then hasMoved[mp..sc]=true end
-                
-                clearHighlights()
-                squares[sr][sc].BackgroundColor3 = Color3.fromRGB(255, 255, 0)
-                squares[tr][tc].BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+                local moveData = {fromR=sr, fromC=sc, toR=tr, toC=tc, piece=selected.Text}
+                executeMove(moveData, playerColor)
                 selected=nil
                 
-                if not checkPromotion(tr,tc) then
-                    currentTurn=(playerColor=="White") and "Black" or "White"
-                    stateVersion = stateVersion + 1
-                    if not checkGameState() then
-                        if currentTurn=="Black" then
-                            task.spawn(executeAIMoveForBlack)
-                        else
-                            task.spawn(executeAIMoveForWhite)
-                        end
+                if not gamePaused then
+                    if currentTurn=="Black" then
+                        task.spawn(executeAIMoveForBlack)
+                    else
+                        task.spawn(executeAIMoveForWhite)
                     end
                 end
             else
@@ -1396,17 +1465,16 @@ backButton.MouseButton1Click:Connect(undoLastMove)
 matchButton.MouseButton1Click:Connect(function()
     if not isMatching then
         isMatching = true
-        matchButton.Text = "Stop Match"
         
-        -- Start Match 3D mode without needing to press "On"
         if not gameActive then
-            createChessGame(true) -- Spawns an empty board
+            createChessGame(true) 
             setStatusOnline()
         end
         
         statusLabel.Text = "Scanning 3D board..."
         
-        -- Reset match variables
+        persistentModelColors = {}
+        detectedPlayerColor = nil
         boardAnchor = nil
         lastSeenBoard3D = nil
         boardStableCount = 0
@@ -1414,7 +1482,6 @@ matchButton.MouseButton1Click:Connect(function()
         clear3DVisuals()
         clearSuggestionHighlight()
         
-        -- Attempt to scan the board up to 10 times
         local board3D, pieceMap
         local attempts = 0
         while not board3D and attempts < 10 do
@@ -1424,7 +1491,6 @@ matchButton.MouseButton1Click:Connect(function()
         end
         
         if board3D then
-            -- Populate the 2D board with the scanned pieces
             for r=1,8 do
                 for c=1,8 do
                     local p = board3D[r][c]
@@ -1434,32 +1500,46 @@ matchButton.MouseButton1Click:Connect(function()
                     end
                 end
             end
+            
+            positionHistory = {}
+            local initialFen = getSimpleFEN(copyBoard(squares))
+            positionHistory[initialFen] = 1
+            
+            local standardInitialBoard = {{"R","N","B","Q","K","B","N","R"},{"P","P","P","P","P","P","P","P"},{"","","","","","","",""},{"","","","","","","",""},{"","","","","","","",""},{"","","","","","","",""},{"p","p","p","p","p","p","p","p"},{"r","n","b","q","k","b","n","r"}}
+            if boardsMatch(copyBoard(squares), standardInitialBoard) then
+                currentTurn = "White"
+            else
+                local whitePieces, blackPieces = 0, 0
+                for r=1,8 do for c=1,8 do local p = squares[r][c].Text if p ~= "" then if getPieceColor(p) == "White" then whitePieces = whitePieces + 1 else blackPieces = blackPieces + 1 end end end end
+                if blackPieces < whitePieces then currentTurn = "Black" else currentTurn = "White" end
+            end
+
             currentPieceMap = pieceMap or {}
-            statusLabel.Text = "Match mode: You can move any piece. AI suggests your moves only on your turn."
+            statusLabel.Text = "Match mode ("..currentTurn.."'s Turn)"
         else
             statusLabel.Text = "Failed to detect 3D board. Ensure pieces are visible."
         end
         
-        local detected = detectPlayerColorFrom3D()
-        playerColor = detected
         setBoardFlipped(playerColor == "Black")
         
         turnStartBoard = copyBoard(squares)
         task.spawn(matchLoop)
         
-        if currentTurn == playerColor and not gamePaused then
+        if not isAutoMoveActive and currentTurn == playerColor and not gamePaused then
             suggestMoveForHuman()
         end
     else
-        -- Stop Match 3D mode
         isMatching = false
-        matchButton.Text = "Match 3D"
+        isAutoMoveActive = false
+        moveButton.Text = "Auto Move"
         boardAnchor = nil
         clear3DVisuals()
         clearSuggestionHighlight()
         lastSeenBoard3D = nil
         boardStableCount = 0
         currentPieceMap = {}
+        persistentModelColors = {}
+        detectedPlayerColor = nil
         statusLabel.Text = "Status: Online ("..currentTurn.."'s Turn)"
     end
 end)
