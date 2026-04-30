@@ -89,7 +89,7 @@ switchApiButton.Parent = secondFrame
 switchApiButton.Size = UDim2.new(1, -10, 0, 25)
 switchApiButton.Position = UDim2.new(0, 5, 0, 180)
 switchApiButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-switchApiButton.Text = "API: Multi-Fast (10x)"
+switchApiButton.Text = "API: Multi-Fast (13x)"
 switchApiButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 switchApiButton.TextScaled = true
 
@@ -187,7 +187,7 @@ local currentTurn, hasMoved, playerColor, isBoardFlipped = "White", {}, "White",
 local stateVersion = 0 
 local isThinking = false
 local positionHistory = {} -- For threefold repetition detection
-local currentApi = "Multi-Fast (10x)" -- Default API
+local currentApi = "Multi-Fast (13x)" -- Default API
 
 -- Match 3D Variables
 local isMatching = false
@@ -685,7 +685,7 @@ local function getBestMoveFromAPI(fen)
         return nil
     end
 
-    if currentApi == "Multi-Fast (10x)" then
+    if currentApi == "Multi-Fast (13x)" then
         local tasks = {
             function() -- 1. Chess-API (Target Depth)
                 local body = fetchPost("https://chess-api.com/v1", HttpService:JSONEncode({fen = fen, depth = stockfishDepth}))
@@ -732,10 +732,22 @@ local function getBestMoveFromAPI(fen)
                 local d = math.min(15, stockfishDepth + 1)
                 local body = fetchGet("https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(d))
                 return HttpService:JSONDecode(body).bestmove:match("bestmove%s+(%S+)")
+            end,
+            function() -- 11. Lichess Master Opening Explorer (Instant)
+                local body = fetchGet("https://explorer.lichess.ovh/master?fen=" .. HttpService:UrlEncode(fen))
+                return HttpService:JSONDecode(body).moves[1].uci
+            end,
+            function() -- 12. Lichess Syzygy Tablebase (Instant Endgame)
+                local body = fetchGet("https://tablebase.lichess.ovh/standard?fen=" .. HttpService:UrlEncode(fen))
+                return HttpService:JSONDecode(body).moves[1].uci
+            end,
+            function() -- 13. Fast Fallback (Depth 5)
+                local body = fetchPost("https://chess-api.com/v1", HttpService:JSONEncode({fen = fen, depth = 5}))
+                return HttpService:JSONDecode(body).move
             end
         }
         
-        for i = 1, 10 do
+        for i = 1, 13 do
             task.spawn(function()
                 local success, move = pcall(tasks[i])
                 if success and move and not completed then
@@ -1154,15 +1166,15 @@ switchButton.MouseButton1Click:Connect(function()
 end)
 
 switchApiButton.MouseButton1Click:Connect(function()
-    if currentApi == "Multi-Fast (10x)" then
+    if currentApi == "Multi-Fast (13x)" then
         currentApi = "Stockfish"
         switchApiButton.Text = "API: Stockfish"
     elseif currentApi == "Stockfish" then
         currentApi = "ChessAPI"
         switchApiButton.Text = "API: Chess-API"
     else
-        currentApi = "Multi-Fast (10x)"
-        switchApiButton.Text = "API: Multi-Fast (10x)"
+        currentApi = "Multi-Fast (13x)"
+        switchApiButton.Text = "API: Multi-Fast (13x)"
     end
 end)
 
