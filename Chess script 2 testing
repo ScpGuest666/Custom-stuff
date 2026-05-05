@@ -36,7 +36,7 @@ local secondFrameWidth = 150
 local secondFrame = Instance.new("Frame")
 secondFrame.Parent = frame 
 secondFrame.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-secondFrame.Size = UDim2.new(0, secondFrameWidth, 1, 0) 
+secondFrame.Size = UDim2.new(0, secondFrameWidth, 1, 1) 
 secondFrame.Position = UDim2.new(0, -secondFrameWidth, 0, 0) 
 secondFrame.Visible = false 
 secondFrame.Name = "SecondFrame"
@@ -690,31 +690,19 @@ local function getBestMoveFromAPI(fen, liveUpdateCallback)
 
     if apiUsed == "Multi-Best" then
         local tasks = {
-            function() -- 1. Lichess Master (Perfect Opening)
-                local body = fetchGet("https://explorer.lichess.ovh/master?fen=" .. HttpService:UrlEncode(fen))
-                return HttpService:JSONDecode(body).moves[1].uci
-            end,
-            function() -- 2. Lichess Player (Perfect Opening)
-                local body = fetchGet("https://explorer.lichess.ovh/lichess?fen=" .. HttpService:UrlEncode(fen))
-                return HttpService:JSONDecode(body).moves[1].uci
-            end,
-            function() -- 3. Lichess Cloud (Perfect Cloud Eval)
-                local body = fetchGet("https://lichess.org/api/cloud-eval?fen=" .. HttpService:UrlEncode(fen))
-                return HttpService:JSONDecode(body).pvs[1].moves:match("^(%S+)")
-            end,
-            function() -- 4. Lichess Syzygy (Perfect Endgame)
+            function() -- 1. Lichess Syzygy (Perfect Endgame)
                 local body = fetchGet("https://tablebase.lichess.ovh/standard?fen=" .. HttpService:UrlEncode(fen))
                 return HttpService:JSONDecode(body).moves[1].uci
             end,
-            function() -- 5. Chess-API (Target Depth)
+            function() -- 2. Chess-API (Target Depth)
                 local body = fetchPost("https://chess-api.com/v1", HttpService:JSONEncode({fen = fen, depth = depthUsed}))
                 return HttpService:JSONDecode(body).move
             end,
-            function() -- 6. Stockfish V2 (Target Depth)
+            function() -- 3. Stockfish V2 (Target Depth)
                 local body = fetchGet("https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(depthUsed))
                 return HttpService:JSONDecode(body).bestmove:match("bestmove%s+(%S+)")
             end,
-            function() -- 7. Stockfish V1 (Target Depth)
+            function() -- 4. Stockfish V1 (Target Depth)
                 local body = fetchGet("https://stockfish.online/api/s/v1.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(depthUsed))
                 return HttpService:JSONDecode(body).bestmove:match("bestmove%s+(%S+)")
             end
@@ -723,6 +711,7 @@ local function getBestMoveFromAPI(fen, liveUpdateCallback)
         local votes = {}
         local maxVotes = 0
         local tasksCompleted = 0
+        local completed = false
         
         local function submitMove(move)
             if not move then return end
@@ -771,6 +760,22 @@ local function getBestMoveFromAPI(fen, liveUpdateCallback)
         while not completed and t < 250 do t = t + 1 task.wait(0.1) end
         
     elseif apiUsed == "ChessAPI" then
+        local completed = false
+        task.spawn(function()
+            local body = fetchPost("https://chess-api.com/v1", HttpService:JSONEncode({fen = fen, depth = depthUsed}))
+            if body then
+                local success, data = pcall(function() return HttpService:JSONDecode(body) end)
+                if success and data and data.move then
+                    bestMoveStr = data.move
+                    if liveUpdateCallback then task.spawn(liveUpdateCallback, bestMoveStr) end
+                end
+            end
+            completed = true
+        end)
+        local t = 0
+        while not completed and t < 250 do t = t + 1 task.wait(0.1) end
+        
+    elseif apiUsed == "Saychess" then
         local completed = false
         task.spawn(function()
             local body = fetchPost("https://chess-api.com/v1", HttpService:JSONEncode({fen = fen, depth = depthUsed}))
@@ -997,7 +1002,12 @@ local function suggestMoveForHuman()
 
     isThinking = true
     local myState = stateVersion
-    statusLabel.Text = "Thinking... (" .. currentApi .. " D" .. stockfishDepth .. ")"
+    
+    if currentApi == "Saychess" and stockfishDepth >= 15 then
+        statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - Free version may not support D15)"
+    else
+        statusLabel.Text = "Thinking... (" .. currentApi .. " D" .. stockfishDepth .. ")"
+    end
 
     task.spawn(function()
         local finalSuggestion = nil
@@ -1151,7 +1161,12 @@ local function executeAIMove(color)
     if currentTurn ~= color or gamePaused or isThinking then return end
     isThinking = true
     local myState = stateVersion
-    statusLabel.Text = "Thinking... (" .. currentApi .. " D" .. stockfishDepth .. ")"
+    
+    if currentApi == "Saychess" and stockfishDepth >= 15 then
+        statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - Free version may not support D15)"
+    else
+        statusLabel.Text = "Thinking... (" .. currentApi .. " D" .. stockfishDepth .. ")"
+    end
     
     task.delay(25, function()
         if stateVersion == myState and isThinking then
@@ -1281,6 +1296,9 @@ switchApiButton.MouseButton1Click:Connect(function()
     elseif currentApi == "ChessAPI" then
         currentApi = "Multi-Best"
         switchApiButton.Text = "API: Multi-Best"
+    elseif currentApi == "Multi-Best" then
+        currentApi = "Saychess"
+        switchApiButton.Text = "API: Saychess"
     else
         currentApi = "Stockfish"
         switchApiButton.Text = "API: Stockfish"
