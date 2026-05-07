@@ -2,6 +2,7 @@
 -- Wait for player to load
 local PlayerService = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local player = PlayerService.LocalPlayer
 if not player then
     player = PlayerService.PlayerAdded:Wait()
@@ -22,11 +23,11 @@ frame.Position = UDim2.new(0.3, 0, 0.5, -82)
 frame.Active = true
 frame.Draggable = true
 
--- Row 1: On (Toggle) / Fill
+-- Row 1: On / Fill / Priority (three buttons)
 local onButton = Instance.new("TextButton")
 onButton.Parent = frame
 onButton.BackgroundColor3 = Color3.fromRGB(120, 0, 0)
-onButton.Size = UDim2.new(0, 95, 0, 30)
+onButton.Size = UDim2.new(0, 65, 0, 30)
 onButton.Position = UDim2.new(0, 10, 0, 15)
 onButton.Text = "Turn On"
 onButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -36,11 +37,20 @@ onButton.Font = Enum.Font.SourceSansBold
 local fillButton = Instance.new("TextButton")
 fillButton.Parent = frame
 fillButton.BackgroundColor3 = Color3.fromRGB(100, 0, 100)
-fillButton.Size = UDim2.new(0, 95, 0, 30)
-fillButton.Position = UDim2.new(0, 115, 0, 15)
+fillButton.Size = UDim2.new(0, 65, 0, 30)
+fillButton.Position = UDim2.new(0, 80, 0, 15)
 fillButton.Text = "Fill: OFF"
 fillButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 fillButton.TextScaled = true
+
+local priorityButton = Instance.new("TextButton")
+priorityButton.Parent = frame
+priorityButton.BackgroundColor3 = Color3.fromRGB(0, 100, 100)
+priorityButton.Size = UDim2.new(0, 65, 0, 30)
+priorityButton.Position = UDim2.new(0, 150, 0, 15)
+priorityButton.Text = "Priority"
+priorityButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+priorityButton.TextScaled = true
 
 -- Row 2: Next / Thickness Input
 local nextButton = Instance.new("TextButton")
@@ -83,7 +93,7 @@ moveButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 moveButton.TextScaled = true
 moveButton.Font = Enum.Font.SourceSansBold
 
--- Row 4: Split / Destroy
+-- Row 4: Split (2 phases) / Destroy
 local splitButton = Instance.new("TextButton")
 splitButton.Parent = frame
 splitButton.BackgroundColor3 = Color3.fromRGB(120, 60, 0)
@@ -122,9 +132,10 @@ local lineThickness = 0.5
 local modelScale = 0.5
 local isBuilding = false
 local isMovingBlock = false
-local splitMode = false
+local splitMode = false   -- false = OFF, true = HALF
 local fillMode = false
 local isSystemOn = false
+local priorityMode = false
 
 local cachedObjText = nil
 local parsedVertices = {}
@@ -135,7 +146,20 @@ local spawnCFrame = CFrame.new()
 
 local activeLines = {} 
 local activeFaces = {}
-local paletteData = {} 
+local paletteData = {}   -- { [length] = { label, part, total } }
+local priorityLines = {} -- list of line objects that are priority
+
+local visualRayPart = nil
+local targetHighlight = Instance.new("Highlight")
+targetHighlight.Name = "TargetBlockHighlight"
+targetHighlight.FillColor = Color3.fromRGB(0, 255, 0)
+targetHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+targetHighlight.FillTransparency = 0.5
+targetHighlight.OutlineTransparency = 0
+
+-- Double‑tap detection
+local lastClickTime = 0
+local lastClickedLine = nil
 
 local function updateInputs()
     lineThickness = tonumber(thickInput.Text) or 0.5
@@ -153,6 +177,63 @@ local function clearReference()
     activeLines = {}
     activeFaces = {}
     paletteData = {}
+    priorityLines = {}
+end
+
+-- Update the color of the palette block for a given length
+local function updatePaletteForLength(len)
+    local data = paletteData[len]
+    if not data or not data.part then return end
+    -- Check if any priority line has this length
+    local hasPriority = false
+    for _, line in ipairs(priorityLines) do
+        if line.rounded == len then
+            hasPriority = true
+            break
+        end
+    end
+    data.part.Color = hasPriority and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 255, 100)
+end
+
+local function addPriorityLine(line)
+    if not line or line.priority then return end
+    line.priority = true
+    if line.refPart then
+        line.refPart.Color = Color3.fromRGB(255, 255, 0)
+    end
+    table.insert(priorityLines, line)
+    updatePaletteForLength(line.rounded)
+end
+
+local function removePriorityLine(line)
+    if not line or not line.priority then return end
+    line.priority = false
+    if line.refPart then
+        line.refPart.Color = Color3.fromRGB(0, 180, 255)
+    end
+    for i, l in ipairs(priorityLines) do
+        if l == line then
+            table.remove(priorityLines, i)
+            break
+        end
+    end
+    updatePaletteForLength(line.rounded)
+end
+
+local function clearAllPriorityLines()
+    for _, line in ipairs(priorityLines) do
+        if line.refPart then
+            line.refPart.Color = Color3.fromRGB(0, 180, 255)
+        end
+        line.priority = false
+    end
+    priorityLines = {}
+    -- Reset all palette blocks to green
+    for len, data in pairs(paletteData) do
+        if data.part then
+            data.part.Color = Color3.fromRGB(0, 255, 100)
+        end
+    end
 end
 
 local function refreshPaletteUI()
@@ -165,7 +246,7 @@ local function refreshPaletteUI()
     for len, data in pairs(paletteData) do
         local remaining = currentCounts[len] or 0
         local billboard = data.label.Parent
-        local part = billboard.Adornee
+        local part = data.part
         if remaining > 0 then
             billboard.Enabled = true
             if part then part.Transparency = 0 end
@@ -184,10 +265,11 @@ task.spawn(function()
     while true do
         if #activeLines > 0 and not isBuilding then
             local overlapParams = OverlapParams.new()
-            overlapParams.FilterDescendantsInstances = {player.Character, workspace:FindFirstChild(FOLDER_NAME)}
+            local filterList = {player.Character, workspace:FindFirstChild(FOLDER_NAME)}
+            if visualRayPart then table.insert(filterList, visualRayPart) end
+            overlapParams.FilterDescendantsInstances = filterList
             overlapParams.FilterType = Enum.RaycastFilterType.Exclude
             
-            -- 1. Scan Lines
             for i = 1, #activeLines do
                 local line = activeLines[i]
                 if not line then continue end
@@ -196,11 +278,17 @@ task.spawn(function()
                 local detectedPart = nil
                 
                 pcall(function()
-                    local parts = workspace:GetPartBoundsInBox(line.cframe, Vector3.new(0.5, 0.5, line.rounded - 0.1), overlapParams)
+                    local parts = workspace:GetPartBoundsInBox(line.cframe, Vector3.new(lineThickness, lineThickness, line.rounded - 0.1), overlapParams)
                     for _, p in ipairs(parts) do
                         if p:IsA("BasePart") and p.Anchored then
-                            local pMax = math.max(p.Size.X, p.Size.Y, p.Size.Z)
-                            if math.abs(pMax - line.rounded) < 0.2 and (p.Position - line.cframe.Position).Magnitude < 0.5 then
+                            local sx, sy, sz = p.Size.X, p.Size.Y, p.Size.Z
+                            local matchCount = 0
+                            local tol = 0.15
+                            if math.abs(sx - lineThickness) <= tol then matchCount = matchCount + 1 end
+                            if math.abs(sy - lineThickness) <= tol then matchCount = matchCount + 1 end
+                            if math.abs(sz - lineThickness) <= tol then matchCount = matchCount + 1 end
+                            local pMax = math.max(sx, sy, sz)
+                            if matchCount >= 2 and math.abs(pMax - line.rounded) < 0.2 and (p.Position - line.cframe.Position).Magnitude < (lineThickness * 1.5) then
                                 isFilled = true
                                 detectedPart = p
                                 break
@@ -209,7 +297,12 @@ task.spawn(function()
                     end
                 end)
                 
-                line.isFilled = isFilled
+                if line.isFilled ~= isFilled then
+                    line.isFilled = isFilled
+                    if line.priority then
+                        removePriorityLine(line)
+                    end
+                end
                 line.detectedPart = detectedPart
                 
                 if line.refPart and line.refPart.Parent then
@@ -218,7 +311,7 @@ task.spawn(function()
                 if i % SCAN_BATCH_SIZE == 0 then task.wait(SCAN_STEP_DELAY) end
             end
             
-            -- 2. Update Face Guides (Perfect Plane Projection)
+            -- Update Face Guides
             if fillMode then
                 for _, face in ipairs(activeFaces) do
                     local filledLines = {}
@@ -233,7 +326,6 @@ task.spawn(function()
                     local normal = face.originalNormal
                     
                     if #filledLines > 0 then
-                        -- Align rotation to the first physical block, but PROJECT it onto the perfect plane
                         local rawEdge = (filledLines[1].worldP2 - filledLines[1].worldP1).Unit
                         edge1 = (rawEdge - normal * rawEdge:Dot(normal)).Unit
                         
@@ -267,7 +359,6 @@ task.spawn(function()
                                 center /= #uniquePoints
                             end
                             
-                            -- PROJECT CENTER ONTO PERFECT PLANE TO PREVENT SINKING/RAISING
                             local offset = center - face.defaultCenter
                             local distFromPlane = offset:Dot(normal)
                             center = center - (normal * distFromPlane)
@@ -299,14 +390,18 @@ local function drawLine(p1, p2, distance, parent)
     line.Anchored = true
     line.CanCollide = false
     line.CanTouch = false
-    line.CanQuery = false 
+    line.CanQuery = true
     line.Size = Vector3.new(lineThickness, lineThickness, distance)
     line.CFrame = CFrame.lookAt(p1, p2) * CFrame.new(0, 0, -distance / 2)
     line.Material = Enum.Material.SmoothPlastic
     line.Color = Color3.fromRGB(0, 180, 255)
     line.Transparency = 0.4
     line.Parent = parent
-    return line
+    
+    local detector = Instance.new("ClickDetector")
+    detector.Parent = line
+    detector.MaxActivationDistance = 100
+    return line, detector
 end
 
 local function createFaceGuide(center, normal, edgeDir, parent)
@@ -337,7 +432,7 @@ local function drawPalette(lengthCounts, folder, startPos, lookDir, rightDir)
         part.Size = Vector3.new(lineThickness, lineThickness, len)
         part.CFrame = CFrame.lookAt(pos, pos + rightDir)
         part.Material = Enum.Material.SmoothPlastic
-        part.Color = Color3.fromRGB(0, 255, 100)
+        part.Color = Color3.fromRGB(0, 255, 100) -- default green
         part.Parent = folder
         local billboard = Instance.new("BillboardGui")
         billboard.Adornee = part
@@ -354,8 +449,9 @@ local function drawPalette(lengthCounts, folder, startPos, lookDir, rightDir)
         textLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
         textLabel.TextScaled = true
         textLabel.Parent = billboard
-        paletteData[len] = { label = textLabel, total = count }
+        paletteData[len] = { label = textLabel, part = part, total = count }
     end
+    -- No global color update – each block will be updated as priorities are added
 end
 
 local function parseOBJ(objText)
@@ -420,7 +516,14 @@ local function drawLayer(index)
             local localV1 = (parsedVertices[idx1] - globalCenterOffset)
             local localV2 = (parsedVertices[idx2] - globalCenterOffset)
             
-            if not splitMode or (localV1.X >= -0.01 or localV2.X >= -0.01) then
+            local shouldDraw = true
+            if splitMode then
+                if not (localV1.X >= -0.01 or localV2.X >= -0.01) then
+                    shouldDraw = false
+                end
+            end
+            
+            if shouldDraw then
                 local worldP1 = spawnCFrame * (localV1 * modelScale)
                 local worldP2 = spawnCFrame * (localV2 * modelScale)
                 table.insert(faceWorldVerts, worldP1)
@@ -433,14 +536,31 @@ local function drawLayer(index)
                     if distance >= 0.01 then
                         local roundedDist = math.ceil(distance * 2) / 2
                         lengthCounts[roundedDist] = (lengthCounts[roundedDist] or 0) + 1
-                        local linePart = drawLine(worldP1, worldP2, distance, folder)
+                        local linePart, detector = drawLine(worldP1, worldP2, distance, folder)
+                        detector.MouseClick:Connect(function()
+                            if not priorityMode then return end
+                            local now = tick()
+                            if lastClickedLine == lineData and (now - lastClickTime) <= 0.3 then
+                                if lineData.priority then
+                                    removePriorityLine(lineData)
+                                else
+                                    addPriorityLine(lineData)
+                                end
+                                lastClickedLine = nil
+                            else
+                                lastClickTime = now
+                                lastClickedLine = lineData
+                            end
+                        end)
                         lineData = {
                             cframe = linePart.CFrame, 
                             rounded = roundedDist, 
                             refPart = linePart, 
                             isFilled = false,
                             worldP1 = worldP1,
-                            worldP2 = worldP2
+                            worldP2 = worldP2,
+                            priority = false,
+                            detector = detector
                         }
                         edgeToLineData[edgeKey] = lineData
                         table.insert(activeLines, lineData)
@@ -502,10 +622,20 @@ local function buildReference()
     if not char or not char:FindFirstChild("HumanoidRootPart") then setStatus("Char not found!", Color3.fromRGB(255, 0, 0)) isBuilding = false return end
     local hrp = char.HumanoidRootPart
     
+    local filterList = {char}
+    if visualRayPart then table.insert(filterList, visualRayPart) end
+    local humanoid = char:FindFirstChild("Humanoid")
+    if humanoid and humanoid.SeatPart then
+        for _, p in ipairs(humanoid.SeatPart:GetConnectedParts()) do
+            table.insert(filterList, p)
+        end
+    end
+    
     local rayParams = RaycastParams.new()
-    rayParams.FilterDescendantsInstances = {char}
+    rayParams.FilterDescendantsInstances = filterList
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    local result = workspace:Raycast(hrp.Position, Vector3.new(0, -100, 0), rayParams)
+    local rayOrigin = hrp.Position + Vector3.new(0, 5, 0)
+    local result = workspace:Raycast(rayOrigin, Vector3.new(0, -100, 0), rayParams)
     local spawnPos = result and (Vector3.new(result.Instance.Position.X, result.Position.Y + 5, result.Instance.Position.Z)) or (hrp.Position + Vector3.new(0, 5, 0))
     local look = hrp.CFrame.LookVector
     local angle = math.atan2(look.X, look.Z)
@@ -515,6 +645,90 @@ local function buildReference()
     drawLayer(currentLayerIndex)
     isBuilding = false
 end
+
+-- ==========================================
+--        VISUAL RAYCAST & HIGHLIGHT LOGIC
+-- ==========================================
+
+local heartbeatConnection = RunService.Heartbeat:Connect(function()
+    local char = player.Character
+    if not char then
+        if visualRayPart then visualRayPart.Transparency = 1 end
+        targetHighlight.Adornee = nil
+        targetHighlight.Parent = nil
+        return
+    end
+    
+    local humanoid = char:FindFirstChild("Humanoid")
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    
+    if humanoid and hrp and humanoid.SeatPart then
+        updateInputs()
+        
+        if not visualRayPart then
+            visualRayPart = Instance.new("Part")
+            visualRayPart.Name = "ReturnRayVisual"
+            visualRayPart.Anchored = true
+            visualRayPart.CanCollide = false
+            visualRayPart.CanQuery = false
+            visualRayPart.Material = Enum.Material.Neon
+            visualRayPart.Color = Color3.fromRGB(255, 255, 0)
+            visualRayPart.Transparency = 0.3
+            visualRayPart.Size = Vector3.new(0.15, 0.15, 1)
+            visualRayPart.Parent = workspace
+        end
+        
+        visualRayPart.Transparency = 0.3
+        
+        local filterList = {char, visualRayPart, humanoid.SeatPart}
+        local folder = workspace:FindFirstChild(FOLDER_NAME)
+        if folder then table.insert(filterList, folder) end
+        
+        local rayParams = RaycastParams.new()
+        rayParams.FilterDescendantsInstances = filterList
+        rayParams.FilterType = Enum.RaycastFilterType.Exclude
+        
+        local rayOrigin = hrp.Position + Vector3.new(0, 5, 0)
+        local rayDir = Vector3.new(0, -100, 0)
+        local rayResult = workspace:Raycast(rayOrigin, rayDir, rayParams)
+        
+        local hitPos = rayResult and rayResult.Position or (rayOrigin + rayDir)
+        local dist = (rayOrigin - hitPos).Magnitude
+        
+        visualRayPart.Size = Vector3.new(0.15, 0.15, dist)
+        visualRayPart.CFrame = CFrame.lookAt(rayOrigin, hitPos) * CFrame.new(0, 0, -dist / 2)
+        
+        local bestBlock = nil
+        if rayResult and rayResult.Instance then
+            local part = rayResult.Instance
+            if not part.Anchored then
+                local sx, sy, sz = part.Size.X, part.Size.Y, part.Size.Z
+                local matchCount = 0
+                local tol = 0.15
+                if math.abs(sx - lineThickness) <= tol then matchCount = matchCount + 1 end
+                if math.abs(sy - lineThickness) <= tol then matchCount = matchCount + 1 end
+                if math.abs(sz - lineThickness) <= tol then matchCount = matchCount + 1 end
+                if matchCount >= 2 then
+                    bestBlock = part
+                end
+            end
+        end
+        
+        if bestBlock then
+            targetHighlight.Adornee = bestBlock
+            targetHighlight.Parent = bestBlock
+        else
+            targetHighlight.Adornee = nil
+            targetHighlight.Parent = nil
+        end
+    else
+        if visualRayPart then
+            visualRayPart.Transparency = 1
+        end
+        targetHighlight.Adornee = nil
+        targetHighlight.Parent = nil
+    end
+end)
 
 -- ==========================================
 --        BUTTON CONNECTIONS
@@ -530,6 +744,7 @@ onButton.MouseButton1Click:Connect(function()
         onButton.Text = "Turn On"
         onButton.BackgroundColor3 = Color3.fromRGB(120, 0, 0)
         clearReference()
+        clearAllPriorityLines()
         setStatus("Offline", Color3.fromRGB(255, 0, 0))
     end
 end)
@@ -545,9 +760,15 @@ fillButton.MouseButton1Click:Connect(function()
     end
 end)
 
+priorityButton.MouseButton1Click:Connect(function()
+    priorityMode = not priorityMode
+    priorityButton.BackgroundColor3 = priorityMode and Color3.fromRGB(0, 200, 200) or Color3.fromRGB(0, 100, 100)
+    setStatus(priorityMode and "Priority mode ON" or "Priority mode OFF", Color3.fromRGB(255, 255, 0))
+end)
+
 splitButton.MouseButton1Click:Connect(function()
     splitMode = not splitMode
-    splitButton.Text = splitMode and "Split: ON" or "Split: OFF"
+    splitButton.Text = splitMode and "Split: HALF" or "Split: OFF"
     splitButton.BackgroundColor3 = splitMode and Color3.fromRGB(0, 200, 200) or Color3.fromRGB(120, 60, 0)
     if isSystemOn then task.spawn(buildReference) end
 end)
@@ -562,9 +783,10 @@ nextButton.MouseButton1Click:Connect(function()
     end)
 end)
 
--- INSTANT TP PHYSICS LOGIC
 moveButton.MouseButton1Click:Connect(function()
     if isMovingBlock then return end
+    updateInputs()
+    
     local char = player.Character
     if not char or not char:FindFirstChild("Humanoid") or not char:FindFirstChild("HumanoidRootPart") then return end
     local humanoid = char.Humanoid
@@ -572,27 +794,34 @@ moveButton.MouseButton1Click:Connect(function()
     local seat = humanoid.SeatPart
     if not seat then setStatus("Sit on the block first!", Color3.fromRGB(255, 165, 0)) return end
     
-    local connectedParts = seat:GetConnectedParts()
-    local targetBlock = nil
-    local maxDim = 0
-    for _, part in ipairs(connectedParts) do
-        if part ~= seat and not part:IsA("Seat") and not part:IsA("VehicleSeat") then
-            if part.Parent and not part.Parent:FindFirstChild("Humanoid") then
-                local dim = math.max(part.Size.X, part.Size.Y, part.Size.Z)
-                if dim > maxDim then maxDim = dim targetBlock = part end
-            end
-        end
+    local targetBlock = targetHighlight.Adornee
+    if not targetBlock then 
+        setStatus("No valid block highlighted!", Color3.fromRGB(255, 0, 0)) 
+        return 
     end
-    if not targetBlock then setStatus("No block attached!", Color3.fromRGB(255, 0, 0)) return end
     if targetBlock.Anchored then setStatus("Unanchor first!", Color3.fromRGB(255, 0, 0)) return end
     
     local size = targetBlock.Size
-    local maxDim = math.max(size.X, size.Y, size.Z)
-    local roundedMaxDim = math.ceil(maxDim * 2) / 2
+    local blockMaxDim = math.max(size.X, size.Y, size.Z)
+    local roundedMaxDim = math.ceil(blockMaxDim * 2) / 2
+    
+    -- Priority first
     local matchIndex = nil
     for i, line in ipairs(activeLines) do
-        if line.rounded == roundedMaxDim and not line.isFilled then matchIndex = i break end
+        if line.priority and line.rounded == roundedMaxDim and not line.isFilled then
+            matchIndex = i
+            break
+        end
     end
+    if not matchIndex then
+        for i, line in ipairs(activeLines) do
+            if line.rounded == roundedMaxDim and not line.isFilled then
+                matchIndex = i
+                break
+            end
+        end
+    end
+    
     if not matchIndex then setStatus("No " .. roundedMaxDim .. " line!", Color3.fromRGB(255, 165, 0)) return end
     
     isMovingBlock = true
@@ -605,7 +834,24 @@ moveButton.MouseButton1Click:Connect(function()
     for _, part in ipairs(char:GetDescendants()) do disableCollision(part) end
     for _, part in ipairs(seat:GetConnectedParts()) do disableCollision(part) end
     
+    local rayParamsMove = RaycastParams.new()
+    local filterList = {char}
+    if visualRayPart then table.insert(filterList, visualRayPart) end
+    for _, p in ipairs(seat:GetConnectedParts()) do table.insert(filterList, p) end
+    local folder = workspace:FindFirstChild(FOLDER_NAME)
+    if folder then table.insert(filterList, folder) end
+    
+    rayParamsMove.FilterDescendantsInstances = filterList
+    rayParamsMove.FilterType = Enum.RaycastFilterType.Exclude
+    
+    local rayOrigin = hrp.Position + Vector3.new(0, 5, 0)
+    local rayResult = workspace:Raycast(rayOrigin, Vector3.new(0, -100, 0), rayParamsMove)
+    
     local pos = hrp.Position
+    if rayResult then
+        pos = rayResult.Position + Vector3.new(0, humanoid.HipHeight + (hrp.Size.Y / 2) + 0.5, 0)
+    end
+    
     local _, yRot, _ = hrp.CFrame:ToEulerAnglesYXZ()
     local startCFrame = CFrame.new(pos) * CFrame.Angles(0, yRot, 0)
     
@@ -622,6 +868,7 @@ moveButton.MouseButton1Click:Connect(function()
             lineData.isFilled = true
             lineData.detectedPart = targetBlock
             if lineData.refPart then lineData.refPart.Transparency = 1 end
+            if lineData.priority then removePriorityLine(lineData) end
             refreshPaletteUI()
             anchorConnection:Disconnect()
         end
@@ -658,4 +905,11 @@ moveButton.MouseButton1Click:Connect(function()
     end)
 end)
 
-destroyButton.MouseButton1Click:Connect(function() clearReference() screenGui:Destroy() end)
+destroyButton.MouseButton1Click:Connect(function() 
+    clearReference() 
+    clearAllPriorityLines()
+    if heartbeatConnection then heartbeatConnection:Disconnect() end
+    if visualRayPart then visualRayPart:Destroy() end
+    if targetHighlight then targetHighlight:Destroy() end
+    screenGui:Destroy() 
+end)
