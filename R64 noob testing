@@ -1,4 +1,3 @@
--- https://anyconv.com/fbx-to-obj-converter/
 -- Wait for player to load
 local PlayerService = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -7,791 +6,581 @@ if not player then
     player = PlayerService.PlayerAdded:Wait()
 end
 
+-- Wait for player GUI to be ready
 player:WaitForChild("PlayerGui")
 
+-- Create ScreenGui
 local screenGui = Instance.new("ScreenGui")
 screenGui.Parent = player.PlayerGui
 screenGui.ResetOnSpawn = false
-screenGui.Name = "GuiVersion34_PerfectPlane"
+screenGui.Name = "GuiVersion22"
 
+-- Create Main Frame
 local frame = Instance.new("Frame")
 frame.Parent = screenGui
 frame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-frame.Size = UDim2.new(0, 220, 0, 165)
-frame.Position = UDim2.new(0.3, 0, 0.5, -82)
+frame.Size = UDim2.new(0, 200, 0, 100)
+frame.Position = UDim2.new(0.3, 0, 0.5, -50)
 frame.Active = true
 frame.Draggable = true
 
--- Row 1: On (Toggle) / Fill
+-- Create Emote Side Frame (Attached to the left)
+local emoteFrame = Instance.new("Frame")
+emoteFrame.Parent = frame
+emoteFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+emoteFrame.Size = UDim2.new(0, 150, 0, 150)
+emoteFrame.Position = UDim2.new(0, -155, 0, -30)
+emoteFrame.Visible = false
+emoteFrame.BorderSizePixel = 2
+
+-- Emote List (25 Emotes)
+local emoteData = {
+    {Name = "P: Push Up", ID = "108890286629805"},
+    {Name = "P: 1arm pushups", ID = "110904780556875"},
+    {Name = "P: Salute", ID = "104670223060882"},
+    {Name = "P: Kneel down", ID = "111189505793517"},
+    {Name = "D: Rat Dance", ID = "94083401455021"},
+    {Name = "P: Sit", ID = "101935805910670"},
+    {Name = "P: Relax Sit", ID = "84979703556782"},
+    {Name = "P: Honor Kneel", ID = "103663987050338"},
+    {Name = "P: Countly Bow", ID = "72613272882226"},
+    {Name = "P: Lay", ID = "134624712364333"},
+    {Name = "P: Lay Left Side", ID = "91064891341996"},
+    {Name = "P: Lay Right Side", ID = "132546814741927"},
+    {Name = "D: California Dance", ID = "95528267749447"},
+    {Name = "D: It goes hard", ID = "109910154206713"},
+    {Name = "D: Bhangra Dance", ID = "93968837624319"},
+    {Name = "D: Low Cortisol", ID = "127791529447152"}
+}
+
+-- Create Scrolling List for Emotes
+local scroll = Instance.new("ScrollingFrame")
+scroll.Parent = emoteFrame
+scroll.Size = UDim2.new(1, -10, 1, -10)
+scroll.Position = UDim2.new(0, 5, 0, 5)
+scroll.BackgroundTransparency = 1
+scroll.ScrollBarThickness = 4
+scroll.CanvasSize = UDim2.new(0, 0, 0, #emoteData * 35)
+
+local listLayout = Instance.new("UIListLayout")
+listLayout.Parent = scroll
+listLayout.Padding = UDim.new(0, 5)
+
+-- Create Buttons
 local onButton = Instance.new("TextButton")
 onButton.Parent = frame
-onButton.BackgroundColor3 = Color3.fromRGB(120, 0, 0)
-onButton.Size = UDim2.new(0, 95, 0, 30)
-onButton.Position = UDim2.new(0, 10, 0, 15)
-onButton.Text = "Turn On"
+onButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+onButton.Size = UDim2.new(0, 85, 0, 25)
+onButton.Position = UDim2.new(0, 10, 0, 10)
+onButton.Text = "On"
 onButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 onButton.TextScaled = true
-onButton.Font = Enum.Font.SourceSansBold
 
-local fillButton = Instance.new("TextButton")
-fillButton.Parent = frame
-fillButton.BackgroundColor3 = Color3.fromRGB(100, 0, 100)
-fillButton.Size = UDim2.new(0, 95, 0, 30)
-fillButton.Position = UDim2.new(0, 115, 0, 15)
-fillButton.Text = "Fill: OFF"
-fillButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-fillButton.TextScaled = true
+local offButton = Instance.new("TextButton")
+offButton.Parent = frame
+offButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+offButton.Size = UDim2.new(0, 85, 0, 25)
+offButton.Position = UDim2.new(0, 105, 0, 10)
+offButton.Text = "Off"
+offButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+offButton.TextScaled = true
 
--- Row 2: Next / Thickness Input
-local nextButton = Instance.new("TextButton")
-nextButton.Parent = frame
-nextButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-nextButton.Size = UDim2.new(0, 95, 0, 30)
-nextButton.Position = UDim2.new(0, 10, 0, 50)
-nextButton.Text = "Next"
-nextButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-nextButton.TextScaled = true
-
-local thickInput = Instance.new("TextBox")
-thickInput.Parent = frame
-thickInput.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-thickInput.Size = UDim2.new(0, 95, 0, 30)
-thickInput.Position = UDim2.new(0, 115, 0, 50)
-thickInput.TextColor3 = Color3.fromRGB(0, 255, 255)
-thickInput.PlaceholderText = "Thick"
-thickInput.Text = "0.5" 
-thickInput.TextScaled = true
-
--- Row 3: Model Size Input / Move Block
-local sizeInput = Instance.new("TextBox")
-sizeInput.Parent = frame
-sizeInput.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-sizeInput.Size = UDim2.new(0, 70, 0, 30)
-sizeInput.Position = UDim2.new(0, 10, 0, 85)
-sizeInput.TextColor3 = Color3.fromRGB(255, 255, 255)
-sizeInput.PlaceholderText = "Size"
-sizeInput.Text = "0.5" 
-sizeInput.TextScaled = true
-
-local moveButton = Instance.new("TextButton")
-moveButton.Parent = frame
-moveButton.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
-moveButton.Size = UDim2.new(0, 120, 0, 30)
-moveButton.Position = UDim2.new(0, 90, 0, 85)
-moveButton.Text = "Move Block"
-moveButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-moveButton.TextScaled = true
-moveButton.Font = Enum.Font.SourceSansBold
-
--- Row 4: Split / Destroy
-local splitButton = Instance.new("TextButton")
-splitButton.Parent = frame
-splitButton.BackgroundColor3 = Color3.fromRGB(120, 60, 0)
-splitButton.Size = UDim2.new(0, 95, 0, 30)
-splitButton.Position = UDim2.new(0, 10, 0, 120)
-splitButton.Text = "Split: OFF"
-splitButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-splitButton.TextScaled = true
+local emoteToggleButton = Instance.new("TextButton")
+emoteToggleButton.Parent = frame
+emoteToggleButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+emoteToggleButton.Size = UDim2.new(0, 180, 0, 25)
+emoteToggleButton.Position = UDim2.new(0, 10, 0, 40)
+emoteToggleButton.Text = "Emotes"
+emoteToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+emoteToggleButton.TextScaled = true
 
 local destroyButton = Instance.new("TextButton")
 destroyButton.Parent = frame
 destroyButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-destroyButton.Size = UDim2.new(0, 95, 0, 30)
-destroyButton.Position = UDim2.new(0, 115, 0, 120)
+destroyButton.Size = UDim2.new(0, 180, 0, 25)
+destroyButton.Position = UDim2.new(0, 10, 0, 70)
 destroyButton.Text = "Destroy"
 destroyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 destroyButton.TextScaled = true
 
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Parent = frame
-statusLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-statusLabel.Size = UDim2.new(0, 220, 0, 30)
+statusLabel.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+statusLabel.Size = UDim2.new(0, 200, 0, 30)
 statusLabel.Position = UDim2.new(0, 0, 0, -30)
 statusLabel.Text = "Status: Offline"
 statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
 statusLabel.TextScaled = true
 
--- ==========================================
---        BUILDER LOGIC & SCANNING
--- ==========================================
+-- Global Variables
+local isCustomAnimActive = false
+local charConnections = {}
+local idleSequenceTask = nil
+local isIdle = false
+local isManualEmotePlaying = false
+local currentMovementState = "Stopped"
+local originalC0s = {}
 
-local FOLDER_NAME = "RobloxR64Noob"
-local OBJ_URL = "https://raw.githubusercontent.com/ScpGuest666/Image-loader/refs/heads/main/Noob.obj"
+-- Possession Variables
+local noobDummy = nil
+local originalCharacter = nil
+local camera = workspace.CurrentCamera
 
-local lineThickness = 0.5
-local modelScale = 0.5
-local isBuilding = false
-local isMovingBlock = false
-local splitMode = false
-local fillMode = false
-local isSystemOn = false
+-- Tracks
+local customRunTrack, customWalkTrack
+local idleTrack1, idleTrack2
+local loadedManualEmotes = {}
 
-local cachedObjText = nil
-local parsedVertices = {}
-local parsedLayers = {}
-local currentLayerIndex = 1
-local globalCenterOffset = Vector3.new()
-local spawnCFrame = CFrame.new()
+-- IDs
+local customRunId = "137533936366581"
+local customWalkId = "76652628117042"
+local customIdle1Id = "106574892374436"
+local customIdle2Id = "120083676685180"
 
-local activeLines = {} 
-local activeFaces = {}
-local paletteData = {} 
-
-local visualRayPart = nil
-local targetHighlight = Instance.new("Highlight")
-targetHighlight.Name = "TargetBlockHighlight"
-targetHighlight.FillColor = Color3.fromRGB(0, 255, 0)
-targetHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
-targetHighlight.FillTransparency = 0.5
-targetHighlight.OutlineTransparency = 0
-
-local function updateInputs()
-    lineThickness = tonumber(thickInput.Text) or 0.5
-    modelScale = tonumber(sizeInput.Text) or 0.5
-end
-
-local function setStatus(text, color)
-    statusLabel.Text = "Status: " .. text
-    statusLabel.TextColor3 = color
-end
-
-local function clearReference()
-    local folder = workspace:FindFirstChild(FOLDER_NAME)
-    if folder then folder:Destroy() end
-    activeLines = {}
-    activeFaces = {}
-    paletteData = {}
-end
-
-local function refreshPaletteUI()
-    local currentCounts = {}
-    for _, line in ipairs(activeLines) do
-        if not line.isFilled then
-            currentCounts[line.rounded] = (currentCounts[line.rounded] or 0) + 1
+-- Helper: Convert ID
+local function getTrueAnimationId(id)
+    local strId = tostring(id):gsub("rbxassetid://", "")
+    local success, assets = pcall(function() return game:GetObjects("rbxassetid://" .. strId) end)
+    if success and assets then
+        for _, asset in ipairs(assets) do
+            if asset:IsA("Animation") then return asset.AnimationId end
+            local anim = asset:FindFirstChildWhichIsA("Animation", true)
+            if anim then return anim.AnimationId end
         end
     end
-    for len, data in pairs(paletteData) do
-        local remaining = currentCounts[len] or 0
-        local billboard = data.label.Parent
-        local part = billboard.Adornee
-        if remaining > 0 then
-            billboard.Enabled = true
-            if part then part.Transparency = 0 end
-            data.label.Text = string.format("%g, %g, %g\nx%d", lineThickness, lineThickness, len, remaining)
-        else
-            billboard.Enabled = false
-            if part then part.Transparency = 1 end
-        end
+    return "rbxassetid://" .. strId
+end
+
+-- Helper: Check Special States
+local function isSpecialMovementState(state)
+    return state == Enum.HumanoidStateType.Jumping 
+        or state == Enum.HumanoidStateType.Freefall 
+        or state == Enum.HumanoidStateType.Climbing 
+        or state == Enum.HumanoidStateType.Swimming 
+        or state == Enum.HumanoidStateType.Seated
+        or state == Enum.HumanoidStateType.GettingUp
+        or state == Enum.HumanoidStateType.FallingDown
+        or state == Enum.HumanoidStateType.Ragdoll
+        or state == Enum.HumanoidStateType.Flying
+        or state == Enum.HumanoidStateType.Physics
+        or state == Enum.HumanoidStateType.Dead
+end
+
+-- Stop everything
+local function stopAllManualTracks()
+    isManualEmotePlaying = false
+    isIdle = false
+    if idleSequenceTask then task.cancel(idleSequenceTask); idleSequenceTask = nil end
+    if idleTrack1 then idleTrack1:Stop(0.2) end
+    if idleTrack2 then idleTrack2:Stop(0.2) end
+    for _, track in pairs(loadedManualEmotes) do
+        track:Stop(0.2)
     end
 end
 
--- SMART BATCHED SCANNER (PERFECT PLANE PROJECTION)
-task.spawn(function()
-    local SCAN_BATCH_SIZE = 50 
-    local SCAN_STEP_DELAY = 0.03
-    while true do
-        if #activeLines > 0 and not isBuilding then
-            local overlapParams = OverlapParams.new()
-            local filterList = {player.Character, workspace:FindFirstChild(FOLDER_NAME)}
-            if visualRayPart then table.insert(filterList, visualRayPart) end
-            overlapParams.FilterDescendantsInstances = filterList
-            overlapParams.FilterType = Enum.RaycastFilterType.Exclude
+-- Idle Sequence Logic
+local function startIdleSequence()
+    if isIdle or not isCustomAnimActive or isManualEmotePlaying then return end
+    
+    local char = player.Character
+    if char and char:FindFirstChild("Humanoid") then
+        local state = char.Humanoid:GetState()
+        if isSpecialMovementState(state) then return end
+    end
+
+    isIdle = true
+    if idleSequenceTask then task.cancel(idleSequenceTask) end
+
+    idleSequenceTask = task.spawn(function()
+        while isIdle and isCustomAnimActive do
+            if isManualEmotePlaying then task.wait(0.5) continue end
+            if idleTrack1 and not idleTrack1.IsPlaying then idleTrack1:Play(0.3) end
             
-            -- 1. Scan Lines
-            for i = 1, #activeLines do
-                local line = activeLines[i]
-                if not line then continue end
-                
-                local isFilled = false
-                local detectedPart = nil
-                
-                pcall(function()
-                    local parts = workspace:GetPartBoundsInBox(line.cframe, Vector3.new(lineThickness, lineThickness, line.rounded - 0.1), overlapParams)
-                    for _, p in ipairs(parts) do
-                        if p:IsA("BasePart") and p.Anchored then
-                            local sx, sy, sz = p.Size.X, p.Size.Y, p.Size.Z
-                            
-                            local matchCount = 0
-                            local tol = 0.15
-                            if math.abs(sx - lineThickness) <= tol then matchCount = matchCount + 1 end
-                            if math.abs(sy - lineThickness) <= tol then matchCount = matchCount + 1 end
-                            if math.abs(sz - lineThickness) <= tol then matchCount = matchCount + 1 end
-                            
-                            local pMax = math.max(sx, sy, sz)
-                            if matchCount >= 2 and math.abs(pMax - line.rounded) < 0.2 and (p.Position - line.cframe.Position).Magnitude < (lineThickness * 1.5) then
-                                isFilled = true
-                                detectedPart = p
-                                break
-                            end
-                        end
-                    end
-                end)
-                
-                line.isFilled = isFilled
-                line.detectedPart = detectedPart
-                
-                if line.refPart and line.refPart.Parent then
-                    line.refPart.Transparency = isFilled and 1 or 0.4
+            local waitTime = (idleTrack1 and idleTrack1.Length > 0) and idleTrack1.Length or 5
+            task.wait(waitTime)
+            
+            if not isIdle or isManualEmotePlaying then break end
+            
+            if math.random(1, 100) <= 20 then
+                if idleTrack1 then idleTrack1:Stop(0.3) end
+                if idleTrack2 then
+                    idleTrack2:Play(0.3)
+                    task.wait(99999999999999999)
+                    if not isIdle or isManualEmotePlaying then break end
+                    idleTrack2:Stop(0.3)
                 end
-                if i % SCAN_BATCH_SIZE == 0 then task.wait(SCAN_STEP_DELAY) end
+            end
+        end
+    end)
+end
+
+-- Apply Animations
+local function applyCustomAnimation(character)
+    local humanoid = character:WaitForChild("Humanoid", 5)
+    local animator = humanoid:WaitForChild("Animator", 5)
+    if not animator then return end
+
+    -- Clear old connections
+    for _, conn in pairs(charConnections) do conn:Disconnect() end
+    charConnections = {}
+    currentMovementState = "Stopped"
+    
+    -- Save original Motor6D C0s
+    originalC0s = {}
+    for _, desc in ipairs(character:GetDescendants()) do
+        if desc:IsA("Motor6D") then
+            originalC0s[desc] = desc.C0
+        end
+    end
+
+    -- Load Movement Tracks
+    local rAnim = Instance.new("Animation"); rAnim.AnimationId = getTrueAnimationId(customRunId)
+    customRunTrack = animator:LoadAnimation(rAnim); customRunTrack.Priority = Enum.AnimationPriority.Action3
+    
+    local wAnim = Instance.new("Animation"); wAnim.AnimationId = getTrueAnimationId(customWalkId)
+    customWalkTrack = animator:LoadAnimation(wAnim); customWalkTrack.Priority = Enum.AnimationPriority.Action3
+
+    -- Load Idles
+    local a1 = Instance.new("Animation"); a1.AnimationId = getTrueAnimationId(customIdle1Id)
+    idleTrack1 = animator:LoadAnimation(a1); idleTrack1.Priority = Enum.AnimationPriority.Action2
+    
+    local a2 = Instance.new("Animation"); a2.AnimationId = getTrueAnimationId(customIdle2Id)
+    idleTrack2 = animator:LoadAnimation(a2); idleTrack2.Priority = Enum.AnimationPriority.Action2
+
+    -- Load Manual Emotes
+    loadedManualEmotes = {}
+    for _, data in ipairs(emoteData) do
+        local anim = Instance.new("Animation")
+        anim.AnimationId = getTrueAnimationId(data.ID)
+        local track = animator:LoadAnimation(anim)
+        track.Priority = Enum.AnimationPriority.Action4
+        loadedManualEmotes[data.Name] = track
+    end
+
+    -- Heartbeat Loop
+    table.insert(charConnections, RunService.Heartbeat:Connect(function()
+        if not isCustomAnimActive then return end
+        
+        local state = humanoid:GetState()
+        local isSpecialState = isSpecialMovementState(state)
+        
+        if not isSpecialState then
+            for motor, c0 in pairs(originalC0s) do
+                if motor.Parent and (motor.Name:match("Shoulder") or motor.Name == "Waist" or motor.Name == "Neck") then
+                    motor.C0 = c0
+                end
+            end
+        end
+
+        if isSpecialState then
+            local stateStr = tostring(state)
+            if currentMovementState ~= stateStr then
+                currentMovementState = stateStr
+                stopAllManualTracks()
+                if customWalkTrack then customWalkTrack:Stop(0.2) end
+                if customRunTrack then customRunTrack:Stop(0.2) end
+            end
+            return -- Exit early so the default Animate script can play your mixed jump/fall/climb naturally
+        end
+
+        local isMoving = humanoid.MoveDirection.Magnitude > 0.05
+        
+        if isMoving then
+            local velocity = humanoid.RootPart and humanoid.RootPart.Velocity or Vector3.new(0,0,0)
+            local flatSpeed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
+            local animSpeed = math.max(flatSpeed, 2)
+            
+            local directionMultiplier = 1
+            if humanoid.RootPart then
+                local moveDir = humanoid.MoveDirection
+                local lookDir = humanoid.RootPart.CFrame.LookVector
+                if moveDir:Dot(lookDir) < -0.1 then
+                    directionMultiplier = -1
+                end
             end
             
-            -- 2. Update Face Guides (Perfect Plane Projection)
-            if fillMode then
-                for _, face in ipairs(activeFaces) do
-                    local filledLines = {}
-                    for _, line in ipairs(face.lines) do
-                        if line.isFilled and line.detectedPart then
-                            table.insert(filledLines, line)
-                        end
-                    end
-                    
-                    local center = face.defaultCenter
-                    local edge1 = face.defaultEdge
-                    local normal = face.originalNormal
-                    
-                    if #filledLines > 0 then
-                        local rawEdge = (filledLines[1].worldP2 - filledLines[1].worldP1).Unit
-                        edge1 = (rawEdge - normal * rawEdge:Dot(normal)).Unit
-                        
-                        if #filledLines >= 2 then
-                            local uniquePoints = {}
-                            local function addPoint(p)
-                                for _, existing in ipairs(uniquePoints) do
-                                    if (existing.pos - p).Magnitude < 0.01 then
-                                        existing.count = existing.count + 1
-                                        return
-                                    end
-                                end
-                                table.insert(uniquePoints, {pos = p, count = 1})
-                            end
-                            
-                            for _, line in ipairs(filledLines) do
-                                addPoint(line.worldP1)
-                                addPoint(line.worldP2)
-                            end
-                            
-                            local extremities = {}
-                            for _, pt in ipairs(uniquePoints) do
-                                if pt.count == 1 then table.insert(extremities, pt.pos) end
-                            end
-                            
-                            if #filledLines == 2 and #extremities == 2 then
-                                center = (extremities[1] + extremities[2]) / 2
-                            else
-                                center = Vector3.new(0,0,0)
-                                for _, pt in ipairs(uniquePoints) do center += pt.pos end
-                                center /= #uniquePoints
-                            end
-                            
-                            local offset = center - face.defaultCenter
-                            local distFromPlane = offset:Dot(normal)
-                            center = center - (normal * distFromPlane)
-                        end
-                    end
-                    
-                    if face.guidePart then
-                        local backVector = edge1:Cross(normal).Unit
-                        face.guidePart.CFrame = CFrame.fromMatrix(center, edge1, normal, backVector)
-                        face.guidePart.Transparency = 0.5
-                    end
+            if flatSpeed <= 10 then
+                if currentMovementState ~= "Walking" then
+                    currentMovementState = "Walking"
+                    stopAllManualTracks()
+                    if customRunTrack then customRunTrack:Stop(0.2) end
+                    if customWalkTrack then customWalkTrack:Play(0.2) end
                 end
+                if customWalkTrack then customWalkTrack:AdjustSpeed((animSpeed / 3) * directionMultiplier) end
             else
-                for _, face in ipairs(activeFaces) do
-                    if face.guidePart then face.guidePart.Transparency = 1 end
+                if currentMovementState ~= "Running" then
+                    currentMovementState = "Running"
+                    stopAllManualTracks()
+                    if customWalkTrack then customWalkTrack:Stop(0.2) end
+                    if customRunTrack then customRunTrack:Play(0.2) end
                 end
+                if customRunTrack then customRunTrack:AdjustSpeed((animSpeed / 16) * directionMultiplier) end
             end
-            
-            refreshPaletteUI()
-            task.wait()
         else
-            task.wait(1)
+            if currentMovementState ~= "Stopped" then
+                currentMovementState = "Stopped"
+                if customWalkTrack then customWalkTrack:Stop(0.2) end
+                if customRunTrack then customRunTrack:Stop(0.2) end
+            end
+            if not isManualEmotePlaying then startIdleSequence() end
+        end
+    end))
+end
+
+-- Function to spawn the R15 Noob
+local function spawnNoob()
+    if noobDummy then
+        noobDummy:Destroy()
+        noobDummy = nil
+    end
+
+    -- Create HumanoidDescription for classic noob colors
+    local desc = Instance.new("HumanoidDescription")
+    desc.HeadColor = Color3.fromRGB(245, 205, 48)
+    desc.LeftArmColor = Color3.fromRGB(245, 205, 48)
+    desc.RightArmColor = Color3.fromRGB(245, 205, 48)
+    desc.TorsoColor = Color3.fromRGB(13, 105, 172)
+    desc.LeftLegColor = Color3.fromRGB(164, 189, 71)
+    desc.RightLegColor = Color3.fromRGB(164, 189, 71)
+
+    -- Copy the exact animation mix from your original character!
+    if originalCharacter and originalCharacter:FindFirstChild("Humanoid") then
+        local success, playerDesc = pcall(function()
+            return originalCharacter.Humanoid:GetAppliedDescription()
+        end)
+        if success and playerDesc then
+            desc.ClimbAnimation = playerDesc.ClimbAnimation
+            desc.FallAnimation = playerDesc.FallAnimation
+            desc.IdleAnimation = playerDesc.IdleAnimation
+            desc.JumpAnimation = playerDesc.JumpAnimation
+            desc.RunAnimation = playerDesc.RunAnimation
+            desc.SwimAnimation = playerDesc.SwimAnimation
+            desc.WalkAnimation = playerDesc.WalkAnimation
         end
     end
-end)
 
-local function drawLine(p1, p2, distance, parent)
-    local line = Instance.new("Part")
-    line.Anchored = true
-    line.CanCollide = false
-    line.CanTouch = false
-    line.CanQuery = false 
-    line.Size = Vector3.new(lineThickness, lineThickness, distance)
-    line.CFrame = CFrame.lookAt(p1, p2) * CFrame.new(0, 0, -distance / 2)
-    line.Material = Enum.Material.SmoothPlastic
-    line.Color = Color3.fromRGB(0, 180, 255)
-    line.Transparency = 0.4
-    line.Parent = parent
-    return line
-end
-
-local function createFaceGuide(center, normal, edgeDir, parent)
-    local guide = Instance.new("Part")
-    guide.Anchored = true
-    guide.CanCollide = false
-    guide.CanQuery = true
-    guide.Transparency = fillMode and 0.5 or 1
-    guide.Color = Color3.fromRGB(255, 0, 255)
-    guide.Material = Enum.Material.SmoothPlastic
-    guide.Size = Vector3.new(0.5, 0.5, 0.5)
-    guide.CFrame = CFrame.fromMatrix(center, edgeDir, normal, edgeDir:Cross(normal))
-    guide.Parent = parent
-    return guide
-end
-
-local function drawPalette(lengthCounts, folder, startPos, lookDir, rightDir)
-    local sortedLengths = {}
-    for len, _ in pairs(lengthCounts) do table.insert(sortedLengths, len) end
-    table.sort(sortedLengths)
-    for i, len in ipairs(sortedLengths) do
-        local count = lengthCounts[len]
-        local pos = startPos + (lookDir * ((i - 1) * 2))
-        local part = Instance.new("Part")
-        part.Anchored = true
-        part.CanCollide = false
-        part.CanQuery = false 
-        part.Size = Vector3.new(lineThickness, lineThickness, len)
-        part.CFrame = CFrame.lookAt(pos, pos + rightDir)
-        part.Material = Enum.Material.SmoothPlastic
-        part.Color = Color3.fromRGB(0, 255, 100)
-        part.Parent = folder
-        local billboard = Instance.new("BillboardGui")
-        billboard.Adornee = part
-        billboard.Size = UDim2.new(4, 0, 2, 0) 
-        billboard.StudsOffset = Vector3.new(0, 1.5, 0)
-        billboard.AlwaysOnTop = true
-        billboard.Parent = part
-        local textLabel = Instance.new("TextLabel")
-        textLabel.Size = UDim2.new(1, 0, 1, 0)
-        textLabel.BackgroundTransparency = 1
-        textLabel.Text = string.format("%g, %g, %g\nx%d", lineThickness, lineThickness, len, count)
-        textLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-        textLabel.TextStrokeTransparency = 0
-        textLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-        textLabel.TextScaled = true
-        textLabel.Parent = billboard
-        paletteData[len] = { label = textLabel, total = count }
-    end
-end
-
-local function parseOBJ(objText)
-    parsedVertices = {}
-    parsedLayers = {}
-    local currentLayerFaces = {}
-    local minX, minY, minZ = math.huge, math.huge, math.huge
-    local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
-    for line in objText:gmatch("[^\r\n]+") do
-        line = line:match("^%s*(.-)%s*$")
-        if line:sub(1, 2) == "v " then
-            local coords = {}
-            for val in line:gmatch("%S+") do if val ~= "v" then table.insert(coords, tonumber(val)) end end
-            if #coords >= 3 then
-                local v = Vector3.new(coords[1], coords[2], coords[3])
-                table.insert(parsedVertices, v)
-                minX = math.min(minX, v.X); minY = math.min(minY, v.Y); minZ = math.min(minZ, v.Z)
-                maxX = math.max(maxX, v.X); maxY = math.max(maxY, v.Y); maxZ = math.max(maxZ, v.Z)
-            end
-        elseif line:sub(1, 2) == "f " then
-            local faceVerts = {}
-            for block in line:gmatch("%S+") do
-                if block ~= "f" then
-                    local vIdx = tonumber(block:match("^([^/]+)"))
-                    if vIdx then if vIdx < 0 then vIdx = #parsedVertices + vIdx + 1 end table.insert(faceVerts, vIdx) end
-                end
-            end
-            if #faceVerts >= 3 then table.insert(currentLayerFaces, faceVerts) end
-        elseif line:sub(1, 2) == "o " or line:sub(1, 2) == "g " or line:sub(1, 7) == "usemtl " then
-            if #currentLayerFaces > 0 then table.insert(parsedLayers, currentLayerFaces) currentLayerFaces = {} end
+    -- Apply the requested Clothes/Bundle ID
+    local targetId = 33230277606065
+    
+    -- Try to load it as an Asset (Shirt, Pants, Accessory, Body Part)
+    local success, productInfo = pcall(function()
+        return game:GetService("MarketplaceService"):GetProductInfo(targetId)
+    end)
+    
+    if success then
+        local typeId = productInfo.AssetTypeId
+        if typeId == 11 then desc.Shirt = targetId
+        elseif typeId == 12 then desc.Pants = targetId
+        elseif typeId == 2 then desc.GraphicTShirt = targetId
+        elseif typeId == 8 or typeId == 41 or typeId == 42 or typeId == 43 then
+            desc.HatAccessory = tostring(targetId)
+        elseif typeId == 27 then desc.Torso = targetId
+        elseif typeId == 28 then desc.RightArm = targetId
+        elseif typeId == 29 then desc.LeftArm = targetId
+        elseif typeId == 30 then desc.LeftLeg = targetId
+        elseif typeId == 31 then desc.RightLeg = targetId
         end
     end
-    if #currentLayerFaces > 0 then table.insert(parsedLayers, currentLayerFaces) end
-    globalCenterOffset = Vector3.new((minX + maxX)/2, (minY + maxY)/2, (minZ + maxZ)/2)
-end
 
-local function drawLayer(index)
-    clearReference()
-    updateInputs()
-    local folder = Instance.new("Folder", workspace)
-    folder.Name = FOLDER_NAME
-    local faces = parsedLayers[index]
-    if not faces then return end
-    setStatus("Drawing Layer " .. index, Color3.fromRGB(0, 255, 255))
-    nextButton.Text = "Next (" .. index .. "/" .. #parsedLayers .. ")"
-    
-    local edgeToLineData = {}
-    local lengthCounts = {}
-    local char = player.Character
-    local hrp = char.HumanoidRootPart
-    local paletteRightDir = hrp.CFrame.RightVector
-    local paletteLookDir = hrp.CFrame.LookVector
-    local paletteStartPos = hrp.Position + (paletteRightDir * 20)
-    
-    for _, face in ipairs(faces) do
-        local faceLines = {}
-        local faceWorldVerts = {}
-        
-        for i = 1, #face do
-            local idx1 = face[i]
-            local idx2 = face[i % #face + 1]
-            local localV1 = (parsedVertices[idx1] - globalCenterOffset)
-            local localV2 = (parsedVertices[idx2] - globalCenterOffset)
-            
-            if not splitMode or (localV1.X >= -0.01 or localV2.X >= -0.01) then
-                local worldP1 = spawnCFrame * (localV1 * modelScale)
-                local worldP2 = spawnCFrame * (localV2 * modelScale)
-                table.insert(faceWorldVerts, worldP1)
-                
-                local edgeKey = math.min(idx1, idx2) .. "_" .. math.max(idx1, idx2)
-                local lineData = edgeToLineData[edgeKey]
-                
-                if not lineData then
-                    local distance = (worldP2 - worldP1).Magnitude
-                    if distance >= 0.01 then
-                        local roundedDist = math.ceil(distance * 2) / 2
-                        lengthCounts[roundedDist] = (lengthCounts[roundedDist] or 0) + 1
-                        local linePart = drawLine(worldP1, worldP2, distance, folder)
-                        lineData = {
-                            cframe = linePart.CFrame, 
-                            rounded = roundedDist, 
-                            refPart = linePart, 
-                            isFilled = false,
-                            worldP1 = worldP1,
-                            worldP2 = worldP2
-                        }
-                        edgeToLineData[edgeKey] = lineData
-                        table.insert(activeLines, lineData)
+    -- Also try to load it as a Bundle just in case
+    pcall(function()
+        local bundleDetails = game:GetService("AssetService"):GetBundleDetailsAsync(targetId)
+        if bundleDetails and bundleDetails.Items then
+            for _, item in ipairs(bundleDetails.Items) do
+                if item.Type == "Asset" then
+                    local s2, pInfo = pcall(function() return game:GetService("MarketplaceService"):GetProductInfo(item.Id) end)
+                    if s2 then
+                        local tId = pInfo.AssetTypeId
+                        if tId == 27 then desc.Torso = item.Id
+                        elseif tId == 28 then desc.RightArm = item.Id
+                        elseif tId == 29 then desc.LeftArm = item.Id
+                        elseif tId == 30 then desc.LeftLeg = item.Id
+                        elseif tId == 31 then desc.RightLeg = item.Id
+                        elseif tId == 17 then desc.Head = item.Id
+                        end
                     end
                 end
-                if lineData then table.insert(faceLines, lineData) end
+            end
+        end
+    end)
+
+    -- Generate R15 rig
+    local model = PlayerService:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
+    model.Name = "NoobController"
+    noobDummy = model
+
+    -- Position near the original character
+    if originalCharacter and originalCharacter:FindFirstChild("HumanoidRootPart") then
+        model:SetPrimaryPartCFrame(originalCharacter.HumanoidRootPart.CFrame * CFrame.new(5, 0, 0))
+    end
+    
+    model.Parent = workspace
+
+    -- Remove the auto-generated server script "Animate" because it won't run locally
+    local badAnimate = model:FindFirstChild("Animate")
+    if badAnimate then
+        badAnimate:Destroy()
+    end
+end
+
+-- Helper function to safely swap characters without breaking tools or flashing red
+local function safeSwapCharacter(newCharacter)
+    local currentChar = player.Character
+    if currentChar then
+        local hum = currentChar:FindFirstChildOfClass("Humanoid")
+        if hum then hum:UnequipTools() end
+    end
+
+    -- Save tools from Backpack so they don't get deleted
+    local savedTools = {}
+    local backpack = player:FindFirstChildOfClass("Backpack")
+    if backpack then
+        for _, tool in ipairs(backpack:GetChildren()) do
+            if tool:IsA("Tool") then
+                tool.Parent = player -- Temporarily hold them safely
+                table.insert(savedTools, tool)
+            end
+        end
+    end
+
+    -- Hide Health GUI to prevent red flash
+    pcall(function() game:GetService("StarterGui"):SetCoreGuiEnabled(Enum.CoreGuiType.Health, false) end)
+
+    player.Character = newCharacter
+
+    -- Restore tools to the new Backpack
+    task.spawn(function()
+        local newBackpack = player:WaitForChild("Backpack", 3)
+        if newBackpack then
+            newBackpack:ClearAllChildren() -- Remove auto-cloned StarterPack tools to prevent duplicates
+            for _, tool in ipairs(savedTools) do
+                tool.Parent = newBackpack
             end
         end
         
-        if #faceWorldVerts >= 3 then
-            local center = Vector3.new(0,0,0)
-            for _, v in ipairs(faceWorldVerts) do center += v end
-            center /= #faceWorldVerts
-            
-            local shortestEdgeLen = math.huge
-            local bestEdgeDir = (faceWorldVerts[2] - faceWorldVerts[1]).Unit
-            for i = 1, #faceWorldVerts do
-                local p1 = faceWorldVerts[i]
-                local p2 = faceWorldVerts[i % #faceWorldVerts + 1]
-                local dir = p2 - p1
-                local len = dir.Magnitude
-                if len < shortestEdgeLen and len > 0.01 then
-                    shortestEdgeLen = len
-                    bestEdgeDir = dir.Unit
+        -- Re-enable Health GUI
+        task.wait(0.5)
+        pcall(function() game:GetService("StarterGui"):SetCoreGuiEnabled(Enum.CoreGuiType.Health, true) end)
+    end)
+end
+
+-- Restore Original Animations & Revert Control
+local function revertControl()
+    isCustomAnimActive = false
+    
+    -- Disconnect our overrides
+    for _, conn in pairs(charConnections) do conn:Disconnect() end
+    charConnections = {}
+    originalC0s = {}
+
+    -- Stop all our custom tracks
+    if customWalkTrack then customWalkTrack:Stop(0.2) end
+    if customRunTrack then customRunTrack:Stop(0.2) end
+    stopAllManualTracks()
+
+    -- Revert Possession
+    if not originalCharacter then return end
+
+    safeSwapCharacter(originalCharacter)
+
+    camera.CameraSubject = originalCharacter:FindFirstChildOfClass("Humanoid")
+    
+    if originalCharacter:FindFirstChild("HumanoidRootPart") then
+        originalCharacter.HumanoidRootPart.Anchored = false
+    end
+    
+    if noobDummy then
+        noobDummy:Destroy()
+        noobDummy = nil
+    end
+    originalCharacter = nil
+end
+
+-- Create Emote Buttons in Scroll
+for _, data in ipairs(emoteData) do
+    local btn = Instance.new("TextButton")
+    btn.Name = data.Name
+    btn.Parent = scroll
+    btn.Size = UDim2.new(1, -5, 0, 30)
+    btn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    btn.Text = data.Name
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextScaled = true
+    
+    btn.MouseButton1Click:Connect(function()
+        local char = player.Character
+        if not char or not isCustomAnimActive then return end
+        local hum = char:FindFirstChild("Humanoid")
+        
+        if hum then
+            local state = hum:GetState()
+            if hum.MoveDirection.Magnitude < 0.1 and not isSpecialMovementState(state) then
+                stopAllManualTracks()
+                isManualEmotePlaying = true
+                local track = loadedManualEmotes[data.Name]
+                if track then 
+                    track:Play(0.3) 
+                    local conn; conn = track.Stopped:Connect(function()
+                        isManualEmotePlaying = false
+                        if hum.MoveDirection.Magnitude < 0.1 then startIdleSequence() end
+                        conn:Disconnect()
+                    end)
                 end
             end
-            
-            local normal = bestEdgeDir:Cross((faceWorldVerts[3] - faceWorldVerts[1]).Unit).Unit
-            if normal.Magnitude < 0.01 then normal = Vector3.new(0,1,0) end
-            
-            local guide = createFaceGuide(center, normal, bestEdgeDir, folder)
-            table.insert(activeFaces, {
-                lines = faceLines, 
-                guidePart = guide, 
-                originalNormal = normal,
-                defaultCenter = center,
-                defaultEdge = bestEdgeDir
-            })
         end
-    end
-    
-    drawPalette(lengthCounts, folder, paletteStartPos, paletteLookDir, paletteRightDir)
-    setStatus("Online", Color3.fromRGB(0, 255, 0))
+    end)
 end
 
-local function buildReference()
-    if isBuilding then return end
-    isBuilding = true
-    clearReference()
-    updateInputs()
-    if not cachedObjText then
-        setStatus("Fetching OBJ...", Color3.fromRGB(255, 255, 0))
-        local success, objText = pcall(function() return game:HttpGet(OBJ_URL) end)
-        if not success or not objText then setStatus("Fetch Failed!", Color3.fromRGB(255, 0, 0)) isBuilding = false return end
-        cachedObjText = objText
-    end
-    if #parsedLayers == 0 then parseOBJ(cachedObjText) end
-    local char = player.Character
-    if not char or not char:FindFirstChild("HumanoidRootPart") then setStatus("Char not found!", Color3.fromRGB(255, 0, 0)) isBuilding = false return end
-    local hrp = char.HumanoidRootPart
-    
-    local filterList = {char}
-    if visualRayPart then table.insert(filterList, visualRayPart) end
-    local humanoid = char:FindFirstChild("Humanoid")
-    if humanoid and humanoid.SeatPart then
-        for _, p in ipairs(humanoid.SeatPart:GetConnectedParts()) do
-            table.insert(filterList, p)
-        end
-    end
-    
-    local rayParams = RaycastParams.new()
-    rayParams.FilterDescendantsInstances = filterList
-    rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    local rayOrigin = hrp.Position + Vector3.new(0, 5, 0)
-    local result = workspace:Raycast(rayOrigin, Vector3.new(0, -100, 0), rayParams)
-    local spawnPos = result and (Vector3.new(result.Instance.Position.X, result.Position.Y + 5, result.Instance.Position.Z)) or (hrp.Position + Vector3.new(0, 5, 0))
-    local look = hrp.CFrame.LookVector
-    local angle = math.atan2(look.X, look.Z)
-    local snappedAngle = math.round(angle / (math.pi / 2)) * (math.pi / 2)
-    spawnCFrame = CFrame.new(spawnPos) * CFrame.Angles(0, snappedAngle, 0)
-    
-    drawLayer(currentLayerIndex)
-    isBuilding = false
-end
+-- UI Toggles
+emoteToggleButton.MouseButton1Click:Connect(function()
+    emoteFrame.Visible = not emoteFrame.Visible
+end)
 
--- ==========================================
---        VISUAL RAYCAST & HIGHLIGHT LOGIC (FIXED)
--- ==========================================
+onButton.MouseButton1Click:Connect(function()
+    if originalCharacter then return end -- Prevent running if already in control of noob
 
-local heartbeatConnection = RunService.Heartbeat:Connect(function()
-    local char = player.Character
-    if not char then
-        if visualRayPart then visualRayPart.Transparency = 1 end
-        targetHighlight.Adornee = nil
-        targetHighlight.Parent = nil
-        return
+    isCustomAnimActive = true
+    statusLabel.Text = "Status: Online"
+    statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+
+    originalCharacter = player.Character
+    if originalCharacter and originalCharacter:FindFirstChild("HumanoidRootPart") then
+        originalCharacter.HumanoidRootPart.Anchored = true -- Make original character stationary
     end
-    
-    local humanoid = char:FindFirstChild("Humanoid")
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    
-    if humanoid and hrp and humanoid.SeatPart then
-        updateInputs()
+
+    spawnNoob()
+
+    if noobDummy then
+        safeSwapCharacter(noobDummy)
         
-        if not visualRayPart then
-            visualRayPart = Instance.new("Part")
-            visualRayPart.Name = "ReturnRayVisual"
-            visualRayPart.Anchored = true
-            visualRayPart.CanCollide = false
-            visualRayPart.CanQuery = false
-            visualRayPart.Material = Enum.Material.Neon
-            visualRayPart.Color = Color3.fromRGB(255, 255, 0)
-            visualRayPart.Transparency = 0.3
-            visualRayPart.Size = Vector3.new(0.15, 0.15, 1)
-            visualRayPart.Parent = workspace
-        end
+        task.wait(0.5) -- WAIT for Roblox to finish setting up the new Animator before loading tracks!
+        camera.CameraSubject = noobDummy:FindFirstChildOfClass("Humanoid")
         
-        visualRayPart.Transparency = 0.3
-        
-        --- FIX: Exclude only the player, the visual ray part, and the seat block itself.
-        --- Do NOT exclude connected parts – we want to highlight any block of matching size.
-        local filterList = {char, visualRayPart, humanoid.SeatPart}
-        local folder = workspace:FindFirstChild(FOLDER_NAME)
-        if folder then table.insert(filterList, folder) end
-        
-        local rayParams = RaycastParams.new()
-        rayParams.FilterDescendantsInstances = filterList
-        rayParams.FilterType = Enum.RaycastFilterType.Exclude
-        
-        local rayOrigin = hrp.Position + Vector3.new(0, 5, 0)
-        local rayDir = Vector3.new(0, -100, 0)
-        local rayResult = workspace:Raycast(rayOrigin, rayDir, rayParams)
-        
-        local hitPos = rayResult and rayResult.Position or (rayOrigin + rayDir)
-        local dist = (rayOrigin - hitPos).Magnitude
-        
-        visualRayPart.Size = Vector3.new(0.15, 0.15, dist)
-        visualRayPart.CFrame = CFrame.lookAt(rayOrigin, hitPos) * CFrame.new(0, 0, -dist / 2)
-        
-        local bestBlock = nil
-        if rayResult and rayResult.Instance then
-            local part = rayResult.Instance
-            
-            --- FIX: Remove the connection check. Any block (even unattached) that matches thickness gets highlighted.
-            local sx, sy, sz = part.Size.X, part.Size.Y, part.Size.Z
-            local matchCount = 0
-            local tol = 0.15
-            if math.abs(sx - lineThickness) <= tol then matchCount = matchCount + 1 end
-            if math.abs(sy - lineThickness) <= tol then matchCount = matchCount + 1 end
-            if math.abs(sz - lineThickness) <= tol then matchCount = matchCount + 1 end
-            
-            -- Must have at least two dimensions equal to lineThickness (i.e., a beam/rod shape)
-            if matchCount >= 2 then
-                bestBlock = part
+        -- Clone the working LocalScript Animate from the original character so it has your exact mix!
+        if originalCharacter then
+            local origAnimate = originalCharacter:FindFirstChild("Animate")
+            if origAnimate and origAnimate:IsA("LocalScript") then
+                local clonedAnimate = origAnimate:Clone()
+                clonedAnimate.Disabled = false
+                clonedAnimate.Parent = noobDummy
             end
         end
         
-        if bestBlock then
-            targetHighlight.Adornee = bestBlock
-            targetHighlight.Parent = bestBlock
-        else
-            targetHighlight.Adornee = nil
-            targetHighlight.Parent = nil
-        end
-    else
-        if visualRayPart then
-            visualRayPart.Transparency = 1
-        end
-        targetHighlight.Adornee = nil
-        targetHighlight.Parent = nil
+        -- Apply the R15 animation pack to the noob
+        applyCustomAnimation(noobDummy)
     end
 end)
 
--- ==========================================
---        BUTTON CONNECTIONS
--- ==========================================
+offButton.MouseButton1Click:Connect(function()
+    if not originalCharacter then return end -- Do nothing if not controlling the noob
 
-onButton.MouseButton1Click:Connect(function() 
-    isSystemOn = not isSystemOn
-    if isSystemOn then
-        onButton.Text = "Turn Off"
-        onButton.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
-        task.spawn(buildReference)
-    else
-        onButton.Text = "Turn On"
-        onButton.BackgroundColor3 = Color3.fromRGB(120, 0, 0)
-        clearReference()
-        setStatus("Offline", Color3.fromRGB(255, 0, 0))
-    end
+    statusLabel.Text = "Status: Offline"
+    statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+    
+    revertControl()
 end)
 
-fillButton.MouseButton1Click:Connect(function()
-    fillMode = not fillMode
-    fillButton.Text = fillMode and "Fill: ON" or "Fill: OFF"
-    fillButton.BackgroundColor3 = fillMode and Color3.fromRGB(255, 0, 255) or Color3.fromRGB(100, 0, 100)
-    for _, face in ipairs(activeFaces) do
-        if face.guidePart then
-            face.guidePart.Transparency = fillMode and 0.5 or 1
-        end
-    end
-end)
-
-splitButton.MouseButton1Click:Connect(function()
-    splitMode = not splitMode
-    splitButton.Text = splitMode and "Split: ON" or "Split: OFF"
-    splitButton.BackgroundColor3 = splitMode and Color3.fromRGB(0, 200, 200) or Color3.fromRGB(120, 60, 0)
-    if isSystemOn then task.spawn(buildReference) end
-end)
-
-nextButton.MouseButton1Click:Connect(function()
-    if isBuilding or #parsedLayers == 0 then return end
-    task.spawn(function()
-        isBuilding = true
-        currentLayerIndex = (currentLayerIndex % #parsedLayers) + 1
-        drawLayer(currentLayerIndex)
-        isBuilding = false
-    end)
-end)
-
--- INSTANT TP PHYSICS LOGIC (unchanged, uses highlighted block)
-moveButton.MouseButton1Click:Connect(function()
-    if isMovingBlock then return end
-    updateInputs()
-    
-    local char = player.Character
-    if not char or not char:FindFirstChild("Humanoid") or not char:FindFirstChild("HumanoidRootPart") then return end
-    local humanoid = char.Humanoid
-    local hrp = char.HumanoidRootPart
-    local seat = humanoid.SeatPart
-    if not seat then setStatus("Sit on the block first!", Color3.fromRGB(255, 165, 0)) return end
-    
-    -- Use the block that the raycast highlighted (now works for any matching block)
-    local targetBlock = targetHighlight.Adornee
-    
-    if not targetBlock then 
-        setStatus("No valid block highlighted!", Color3.fromRGB(255, 0, 0)) 
-        return 
-    end
-    
-    if targetBlock.Anchored then setStatus("Unanchor first!", Color3.fromRGB(255, 0, 0)) return end
-    
-    local size = targetBlock.Size
-    local blockMaxDim = math.max(size.X, size.Y, size.Z)
-    local roundedMaxDim = math.ceil(blockMaxDim * 2) / 2
-    local matchIndex = nil
-    for i, line in ipairs(activeLines) do
-        if line.rounded == roundedMaxDim and not line.isFilled then matchIndex = i break end
-    end
-    if not matchIndex then setStatus("No " .. roundedMaxDim .. " line!", Color3.fromRGB(255, 165, 0)) return end
-    
-    isMovingBlock = true
-    humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
-    seat.CanQuery = false 
-    local originalCollisions = {}
-    local function disableCollision(part)
-        if part:IsA("BasePart") then originalCollisions[part] = part.CanCollide part.CanCollide = false end
-    end
-    for _, part in ipairs(char:GetDescendants()) do disableCollision(part) end
-    for _, part in ipairs(seat:GetConnectedParts()) do disableCollision(part) end
-    
-    -- Return position raycast (ignores all connected parts to find the ground)
-    local rayParamsMove = RaycastParams.new()
-    local filterList = {char}
-    if visualRayPart then table.insert(filterList, visualRayPart) end
-    for _, p in ipairs(seat:GetConnectedParts()) do table.insert(filterList, p) end
-    local folder = workspace:FindFirstChild(FOLDER_NAME)
-    if folder then table.insert(filterList, folder) end
-    
-    rayParamsMove.FilterDescendantsInstances = filterList
-    rayParamsMove.FilterType = Enum.RaycastFilterType.Exclude
-    
-    local rayOrigin = hrp.Position + Vector3.new(0, 5, 0)
-    local rayResult = workspace:Raycast(rayOrigin, Vector3.new(0, -100, 0), rayParamsMove)
-    
-    local pos = hrp.Position
-    if rayResult then
-        pos = rayResult.Position + Vector3.new(0, humanoid.HipHeight + (hrp.Size.Y / 2) + 0.5, 0)
-    end
-    
-    local _, yRot, _ = hrp.CFrame:ToEulerAnglesYXZ()
-    local startCFrame = CFrame.new(pos) * CFrame.Angles(0, yRot, 0)
-    
-    local lineData = activeLines[matchIndex]
-    local targetBlockCFrame = lineData.cframe
-    if size.X > size.Y and size.X > size.Z then targetBlockCFrame *= CFrame.Angles(0, math.rad(90), 0)
-    elseif size.Y > size.X and size.Y > size.Z then targetBlockCFrame *= CFrame.Angles(math.rad(90), 0, 0) end
-    local seatOffset = targetBlock.CFrame:ToObjectSpace(seat.CFrame)
-    local targetSeatCFrame = targetBlockCFrame * seatOffset
-    
-    local anchorConnection
-    anchorConnection = targetBlock:GetPropertyChangedSignal("Anchored"):Connect(function()
-        if targetBlock.Anchored then
-            lineData.isFilled = true
-            lineData.detectedPart = targetBlock
-            if lineData.refPart then lineData.refPart.Transparency = 1 end
-            refreshPaletteUI()
-            anchorConnection:Disconnect()
-        end
-    end)
-    
-    local bv = Instance.new("BodyVelocity", seat)
-    bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-    bv.Velocity = Vector3.new(0, 0, 0)
-    local bg = Instance.new("BodyGyro", seat)
-    bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-    bg.P = 9e9 
-    bg.D = 9e9 
-    bg.CFrame = targetSeatCFrame
-    
-    seat.CFrame = targetSeatCFrame
-    setStatus("Arrived! Anchor & Jump.", Color3.fromRGB(0, 255, 0))
-    
-    local jumpConnection
-    jumpConnection = humanoid:GetPropertyChangedSignal("SeatPart"):Connect(function()
-        if not humanoid.SeatPart then
-            bv:Destroy() bg:Destroy() jumpConnection:Disconnect()
-            if anchorConnection then anchorConnection:Disconnect() end
-            if seat and seat.Parent then seat.CanQuery = true end
-            task.wait(0.1)
-            hrp.Velocity = Vector3.new(0,0,0)
-            hrp.RotVelocity = Vector3.new(0,0,0)
-            hrp.CFrame = startCFrame
-            for part, state in pairs(originalCollisions) do if part and part.Parent then part.CanCollide = state end end
-            task.wait(0.2)
-            humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
-            setStatus("Returned.", Color3.fromRGB(0, 255, 0))
-            isMovingBlock = false
-        end
-    end)
-end)
-
-destroyButton.MouseButton1Click:Connect(function() 
-    clearReference() 
-    if heartbeatConnection then heartbeatConnection:Disconnect() end
-    if visualRayPart then visualRayPart:Destroy() end
-    if targetHighlight then targetHighlight:Destroy() end
-    screenGui:Destroy() 
+destroyButton.MouseButton1Click:Connect(function()
+    revertControl()
+    screenGui:Destroy()
 end)
