@@ -795,6 +795,71 @@ local function getBestMoveFromAPI(fen, liveUpdateCallback)
     return bestMoveStr
 end
 
+local function countPieces(board)
+    local count = 0
+    for r = 1, 8 do
+        for c = 1, 8 do
+            if board[r] and board[r][c] and board[r][c].Text ~= "" then
+                count = count + 1
+            end
+        end
+    end
+    return count
+end
+
+local function getEndgameSuggestion(fen, pieceCount)
+    local bestMoveStr = nil
+    local engineName = ""
+    
+    local function fetchGet(url)
+        if req then
+            local success, res = pcall(function() return req({Url = url, Method = "GET"}) end)
+            if success and res then return res.Body end
+        elseif type(game.HttpGet) == "function" then
+            local success, res = pcall(function() return game:HttpGet(url) end)
+            if success then return res end
+        end
+        return nil
+    end
+
+    local function fetchPost(url, body, contentType)
+        if req then
+            local success, res = pcall(function() 
+                return req({
+                    Url = url, 
+                    Method = "POST",
+                    Headers = {["Content-Type"] = contentType or "application/json"},
+                    Body = body
+                }) 
+            end)
+            if success and res then return res.Body end
+        end
+        return nil
+    end
+
+    if pieceCount <= 7 then
+        engineName = "Lichess Syzygy"
+        local body = fetchGet("https://tablebase.lichess.ovh/standard?fen=" .. HttpService:UrlEncode(fen))
+        if body then
+            local success, data = pcall(function() return HttpService:JSONDecode(body) end)
+            if success and data and data.moves and data.moves[1] then
+                bestMoveStr = data.moves[1].uci
+            end
+        end
+    elseif pieceCount >= 8 and pieceCount <= 12 then
+        engineName = "Lc0"
+        local body = fetchPost("https://chess-api.com/v1", HttpService:JSONEncode({fen = fen, depth = 15}))
+        if body then
+            local success, data = pcall(function() return HttpService:JSONDecode(body) end)
+            if success and data and data.move then
+                bestMoveStr = data.move
+            end
+        end
+    end
+    
+    return bestMoveStr, engineName
+end
+
 -- --- LOCAL AI FALLBACK ---
 local PST={p={{0,0,0,0,0,0,0,0},{50,50,50,50,50,50,50,50},{10,10,20,30,30,20,10,10},{5,5,10,25,25,10,5,5},{0,0,0,20,20,0,0,0},{5,-5,-10,0,0,-10,-5,5},{5,10,10,-20,-20,10,10,5},{0,0,0,0,0,0,0,0}},n={{-50,-40,-30,-30,-30,-30,-40,-50},{-40,-20,0,0,0,0,-20,-40},{-30,0,10,15,15,10,0,-30},{-30,5,15,20,20,15,5,-30},{-30,0,15,20,20,15,0,-30},{-30,5,10,15,15,10,5,-30},{-40,-20,0,5,5,0,-20,-40},{-50,-40,-30,-30,-30,-30,-40,-50}},b={{-20,-10,-10,-10,-10,-10,-10,-20},{-10,0,0,0,0,0,0,-10},{-10,0,5,10,10,5,0,-10},{-10,5,5,10,10,5,5,-10},{-10,0,10,10,10,10,0,-10},{-10,10,10,10,10,10,10,-10},{-10,5,0,0,0,0,5,-10},{-20,-10,-10,-10,-10,-10,-10,-20}},r={{0,0,0,0,0,0,0,0},{5,10,10,10,10,10,10,5},{-5,0,0,0,0,0,0,-5},{-5,0,0,0,0,0,0,-5},{-5,0,0,0,0,0,0,-5},{-5,0,0,0,0,0,0,-5},{-5,0,0,0,0,0,0,-5},{0,0,0,5,5,0,0,0}},q={{-20,-10,-10,-5,-5,-10,-10,-20},{-10,0,0,0,0,0,0,-10},{-10,0,5,5,5,5,0,-10},{-5,0,5,5,5,5,0,-5},{0,0,5,5,5,5,0,-5},{-10,5,5,5,5,5,0,-10},{-10,0,5,0,0,0,0,-10},{-20,-10,-10,-5,-5,-10,-10,-20}},k={{-30,-40,-40,-50,-50,-40,-40,-30},{-30,-40,-40,-50,-50,-40,-40,-30},{-30,-40,-40,-50,-50,-40,-40,-30},{-30,-40,-40,-50,-50,-40,-40,-30},{-20,-30,-30,-40,-40,-30,-30,-20},{-10,-20,-20,-20,-20,-20,-20,-10},{20,20,0,0,0,0,20,20},{20,30,10,0,0,10,30,20}}}
 local function evaluateBoard(b) local s=0; for r=1,8 do for c=1,8 do local p=b[r][c]; if p~="" then local ms=PV[p] or 0; local pt,pc=p:lower(),getPieceColor(p); local ps=0; if PST[pt] then ps=(pc=="White") and PST[pt][r][c] or PST[pt][9-r][c] end; s+=(pc=="Black") and (ms-ps) or (ms+ps) end end end; return s end
@@ -891,7 +956,7 @@ local function clearSuggestion3DHighlight()
     currentSuggestion3DHighlight = nil
 end
 
-local function highlightSuggested3DPiece(row, col)
+local function highlightSuggested3DPiece(row, col, isEndgame)
     if not isMatching or not currentPieceMap then return end
     local key = row..","..col
     local model = currentPieceMap[key]
@@ -900,8 +965,9 @@ local function highlightSuggested3DPiece(row, col)
         local hl = Instance.new("Highlight")
         hl.Name = "SuggestionHighlight"
         hl.Adornee = model
-        hl.FillColor = Color3.fromRGB(255, 255, 0)  -- yellow
-        hl.OutlineColor = Color3.fromRGB(255, 255, 0)
+        local hlColor = isEndgame and Color3.fromRGB(255, 0, 0) or Color3.fromRGB(255, 255, 0)
+        hl.FillColor = hlColor
+        hl.OutlineColor = hlColor
         hl.FillTransparency = 0.5
         hl.Parent = model
         currentSuggestion3DHighlight = hl
@@ -910,7 +976,7 @@ local function highlightSuggested3DPiece(row, col)
     end
 end
 
-local function highlightSuggested3DPlatform(row, col, isPreliminary)
+local function highlightSuggested3DPlatform(row, col, isPreliminary, isEndgame)
     if not isMatching or not boardAnchor then return end
     clearSuggestion3DPlatform()
     
@@ -932,7 +998,12 @@ local function highlightSuggested3DPlatform(row, col, isPreliminary)
     platformPart.Position = Vector3.new(targetX, boardAnchor.baseY, targetZ)
     platformPart.Parent = workspace
     
-    local platformColor = isPreliminary and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 255, 0)
+    local platformColor
+    if isEndgame then
+        platformColor = Color3.fromRGB(255, 0, 0)
+    else
+        platformColor = isPreliminary and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 255, 0)
+    end
     
     -- Use BoxHandleAdornment to guarantee it renders through custom board skins
     local adornment = Instance.new("BoxHandleAdornment")
@@ -977,22 +1048,25 @@ local function clearSuggestionHighlight()
     clearSuggestion3DPlatform()
 end
 
-local function showSuggestion(suggestion, isPreliminary)
+local function showSuggestion(suggestion, isPreliminary, isEndgame)
     if not suggestion then return end
     clearSuggestionHighlight()
     currentSuggestion = suggestion
     local fromSq = squares[suggestion.fromR][suggestion.fromC]
     local toSq = squares[suggestion.toR][suggestion.toC]
+    
+    local highlightColor2D = isEndgame and Color3.fromRGB(255, 0, 0) or Color3.fromRGB(0, 200, 200)
+    
     if fromSq then
-        fromSq.BackgroundColor3 = Color3.fromRGB(0, 200, 200) -- cyan
+        fromSq.BackgroundColor3 = highlightColor2D
     end
     if toSq then
-        toSq.BackgroundColor3 = Color3.fromRGB(0, 200, 200)
+        toSq.BackgroundColor3 = highlightColor2D
     end
     -- Highlight the suggested piece in 3D
-    highlightSuggested3DPiece(suggestion.fromR, suggestion.fromC)
+    highlightSuggested3DPiece(suggestion.fromR, suggestion.fromC, isEndgame)
     -- Highlight the destination square in 3D
-    highlightSuggested3DPlatform(suggestion.toR, suggestion.toC, isPreliminary)
+    highlightSuggested3DPlatform(suggestion.toR, suggestion.toC, isPreliminary, isEndgame)
 end
 
 local function suggestMoveForHuman()
@@ -1003,10 +1077,21 @@ local function suggestMoveForHuman()
     isThinking = true
     local myState = stateVersion
     
-    if currentApi == "Saychess" and stockfishDepth >= 15 then
-        statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - Free version may not support D15)"
+    local pCount = countPieces(squares)
+    local isEndgame = (pCount <= 12)
+    
+    if isEndgame then
+        if pCount <= 7 then
+            statusLabel.Text = "Thinking... (Lichess Syzygy)"
+        else
+            statusLabel.Text = "Thinking... (Lc0)"
+        end
     else
-        statusLabel.Text = "Thinking... (" .. currentApi .. " D" .. stockfishDepth .. ")"
+        if currentApi == "Saychess" and stockfishDepth >= 15 then
+            statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - Free version may not support D15)"
+        else
+            statusLabel.Text = "Thinking... (" .. currentApi .. " D" .. stockfishDepth .. ")"
+        end
     end
 
     task.spawn(function()
@@ -1032,7 +1117,7 @@ local function suggestMoveForHuman()
                     piece = squares[fromR][fromC].Text,
                     captured = squares[toR][toC].Text
                 }
-                showSuggestion(suggestion, true) -- true for preliminary (yellow)
+                showSuggestion(suggestion, true, isEndgame) -- true for preliminary (yellow/red)
                 statusLabel.Text = "Suggestion: " .. string.char(96+suggestion.fromC) .. (9-suggestion.fromR) .. " → " .. string.char(96+suggestion.toC) .. (9-suggestion.toR)
                 hasValidSuggestion = true
                 finalSuggestion = suggestion
@@ -1041,7 +1126,13 @@ local function suggestMoveForHuman()
 
         local success, err = pcall(function()
             local fen = getFEN()
-            local uciMove = getBestMoveFromAPI(fen, onLiveUpdate)
+            local uciMove = nil
+            
+            if isEndgame then
+                uciMove, _ = getEndgameSuggestion(fen, pCount)
+            else
+                uciMove = getBestMoveFromAPI(fen, onLiveUpdate)
+            end
             
             if myState == stateVersion and uciMove then
                 local fromR, fromC, toR, toC, _ = uciToMove(uciMove)
@@ -1080,7 +1171,7 @@ local function suggestMoveForHuman()
 
         if myState == stateVersion then
             if finalSuggestion then
-                showSuggestion(finalSuggestion, false) -- false for final (green)
+                showSuggestion(finalSuggestion, false, isEndgame) -- false for final (green/red)
                 statusLabel.Text = "Suggestion: " .. string.char(96+finalSuggestion.fromC) .. (9-finalSuggestion.fromR) .. " → " .. string.char(96+finalSuggestion.toC) .. (9-finalSuggestion.toR)
             else
                 statusLabel.Text = "No suggestion available"
@@ -1162,10 +1253,21 @@ local function executeAIMove(color)
     isThinking = true
     local myState = stateVersion
     
-    if currentApi == "Saychess" and stockfishDepth >= 15 then
-        statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - Free version may not support D15)"
+    local pCount = countPieces(squares)
+    local isEndgame = (pCount <= 12)
+    
+    if isEndgame then
+        if pCount <= 7 then
+            statusLabel.Text = "Thinking... (Lichess Syzygy)"
+        else
+            statusLabel.Text = "Thinking... (Lc0)"
+        end
     else
-        statusLabel.Text = "Thinking... (" .. currentApi .. " D" .. stockfishDepth .. ")"
+        if currentApi == "Saychess" and stockfishDepth >= 15 then
+            statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - Free version may not support D15)"
+        else
+            statusLabel.Text = "Thinking... (" .. currentApi .. " D" .. stockfishDepth .. ")"
+        end
     end
     
     task.delay(25, function()
@@ -1180,7 +1282,13 @@ local function executeAIMove(color)
     
     local success, err = pcall(function()
         local fen = getFEN()
-        local uciMove = getBestMoveFromAPI(fen)
+        local uciMove = nil
+        
+        if isEndgame then
+            uciMove, _ = getEndgameSuggestion(fen, pCount)
+        else
+            uciMove = getBestMoveFromAPI(fen)
+        end
         
         if stateVersion ~= myState then return end 
         
