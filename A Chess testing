@@ -15,7 +15,7 @@ player:WaitForChild("PlayerGui")
 
 -- ==========================================
 -- PASTE YOUR PINGGY LINK HERE:
-local TERMUX_SERVER_URL = "https://73eaee25e2d380.lhr.life"
+local TERMUX_SERVER_URL = "https://609a3894539bb2.lhr.life"
 -- ==========================================
 
 -- HTTP Request function
