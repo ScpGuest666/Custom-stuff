@@ -91,7 +91,7 @@ switchApiButton.Parent = secondFrame
 switchApiButton.Size = UDim2.new(1, -10, 0, 25)
 switchApiButton.Position = UDim2.new(0, 5, 0, 180)
 switchApiButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-switchApiButton.Text = "API: Stockfish"
+switchApiButton.Text = "API: Saychess"
 switchApiButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 switchApiButton.TextScaled = true
 
@@ -189,7 +189,7 @@ local currentTurn, hasMoved, playerColor, isBoardFlipped = "White", {}, "White",
 local stateVersion = 0 
 local isThinking = false
 local positionHistory = {} -- For threefold repetition detection
-local currentApi = "Stockfish" -- Default API
+local currentApi = "Saychess" -- Default API
 
 -- Match 3D Variables
 local isMatching = false
