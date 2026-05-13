@@ -656,7 +656,7 @@ local function uciToMove(uci)
 end
 
 local function getBestMoveFromAPI(fen, liveUpdateCallback)
-    if stockfishDepth <= 0 then return nil end
+    if stockfishDepth <= 0 or currentApi == "Local API" then return nil end
     
     local bestMoveStr = nil
     local apiUsed = currentApi
@@ -988,6 +988,27 @@ local function highlightSuggested3DPlatform(row, col, isPreliminary, isEndgame)
     local targetX = boardAnchor.minX + (actualC - 1) * boardAnchor.squareSizeX
     local targetZ = boardAnchor.minZ + (actualR - 1) * boardAnchor.squareSizeZ
     
+    -- Raycast to find the exact top surface of the board skin
+    local rayOrigin = Vector3.new(targetX, boardAnchor.baseY + 15, targetZ)
+    local rayDirection = Vector3.new(0, -30, 0)
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    
+    local ignoreList = {}
+    if player.Character then table.insert(ignoreList, player.Character) end
+    for _, model in pairs(currentPieceMap) do
+        if model and typeof(model) == "Instance" then
+            table.insert(ignoreList, model)
+        end
+    end
+    rayParams.FilterDescendantsInstances = ignoreList
+    
+    local rayResult = workspace:Raycast(rayOrigin, rayDirection, rayParams)
+    local platformY = boardAnchor.baseY
+    if rayResult then
+        platformY = rayResult.Position.Y
+    end
+    
     -- Create an invisible anchor part
     local platformPart = Instance.new("Part")
     platformPart.Name = "SuggestionPlatformAnchor"
@@ -995,7 +1016,7 @@ local function highlightSuggested3DPlatform(row, col, isPreliminary, isEndgame)
     platformPart.CanCollide = false
     platformPart.Transparency = 1 -- Make the part itself invisible
     platformPart.Size = Vector3.new(0.1, 0.1, 0.1)
-    platformPart.Position = Vector3.new(targetX, boardAnchor.baseY, targetZ)
+    platformPart.Position = Vector3.new(targetX, platformY, targetZ)
     platformPart.Parent = workspace
     
     local platformColor
@@ -1008,7 +1029,7 @@ local function highlightSuggested3DPlatform(row, col, isPreliminary, isEndgame)
     -- Use BoxHandleAdornment to guarantee it renders through custom board skins
     local adornment = Instance.new("BoxHandleAdornment")
     adornment.Name = "SuggestionPlatformAdornment"
-    adornment.Size = Vector3.new(boardAnchor.squareSizeX * 0.9, 0.2, boardAnchor.squareSizeZ * 0.9)
+    adornment.Size = Vector3.new(boardAnchor.squareSizeX * 0.9, 0.4, boardAnchor.squareSizeZ * 0.9) -- Made thicker
     adornment.Color3 = platformColor
     adornment.Transparency = 0.5 -- 0.5 opacity
     adornment.AlwaysOnTop = true -- Forces it to render through the board skin
@@ -1089,6 +1110,8 @@ local function suggestMoveForHuman()
     else
         if currentApi == "Saychess" and stockfishDepth >= 15 then
             statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - Free version may not support D15)"
+        elseif currentApi == "Local API" then
+            statusLabel.Text = "Thinking... (Local AI)"
         else
             statusLabel.Text = "Thinking... (" .. currentApi .. " D" .. stockfishDepth .. ")"
         end
@@ -1265,6 +1288,8 @@ local function executeAIMove(color)
     else
         if currentApi == "Saychess" and stockfishDepth >= 15 then
             statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - Free version may not support D15)"
+        elseif currentApi == "Local API" then
+            statusLabel.Text = "Thinking... (Local AI)"
         else
             statusLabel.Text = "Thinking... (" .. currentApi .. " D" .. stockfishDepth .. ")"
         end
@@ -1398,18 +1423,35 @@ switchButton.MouseButton1Click:Connect(function()
 end)
 
 switchApiButton.MouseButton1Click:Connect(function()
-    if currentApi == "Stockfish" then
+    if currentApi == "Saychess" then
+        currentApi = "Stockfish"
+        switchApiButton.Text = "API: Stockfish"
+        MAX_STOCKFISH_DEPTH = 15
+        if stockfishDepth > 15 then stockfishDepth = 15; updateDepthDisplay() end
+    elseif currentApi == "Stockfish" then
         currentApi = "ChessAPI"
         switchApiButton.Text = "API: Chess-API"
+        MAX_STOCKFISH_DEPTH = 20
     elseif currentApi == "ChessAPI" then
         currentApi = "Multi-Best"
         switchApiButton.Text = "API: Multi-Best"
+        MAX_STOCKFISH_DEPTH = 15
+        if stockfishDepth > 15 then stockfishDepth = 15; updateDepthDisplay() end
     elseif currentApi == "Multi-Best" then
+        currentApi = "Local API"
+        switchApiButton.Text = "API: Local API"
+        MAX_STOCKFISH_DEPTH = 15
+        if stockfishDepth > 15 then stockfishDepth = 15; updateDepthDisplay() end
+    elseif currentApi == "Local API" then
         currentApi = "Saychess"
         switchApiButton.Text = "API: Saychess"
+        MAX_STOCKFISH_DEPTH = 15
+        if stockfishDepth > 15 then stockfishDepth = 15; updateDepthDisplay() end
     else
-        currentApi = "Stockfish"
-        switchApiButton.Text = "API: Stockfish"
+        currentApi = "Saychess"
+        switchApiButton.Text = "API: Saychess"
+        MAX_STOCKFISH_DEPTH = 15
+        if stockfishDepth > 15 then stockfishDepth = 15; updateDepthDisplay() end
     end
 end)
 
@@ -1479,25 +1521,55 @@ local function matchLoop()
         -- Compare with the last known 2D board (turnStartBoard)
         if not boardsMatch(turnStartBoard, board3D) then
             local legalMoves = generateLegalMoves(turnStartBoard, currentTurn)
-            local matchedMove = nil
+            local matchedMove1 = nil
+            local matchedMove2 = nil
+            
+            -- 1. Check for a single move
             for _, move in ipairs(legalMoves) do
                 local tempBoard = applyMoveToBoard(turnStartBoard, move)
                 if boardsMatch(tempBoard, board3D) then
-                    matchedMove = move
+                    matchedMove1 = move
                     break
                 end
             end
             
-            if matchedMove then
-                -- Apply the mirrored move to the 2D board
+            -- 2. Check for a two-move sequence (Player moved, then Opponent moved rapidly)
+            if not matchedMove1 then
+                for _, move1 in ipairs(legalMoves) do
+                    local tempBoard1 = applyMoveToBoard(turnStartBoard, move1)
+                    local nextTurn = (currentTurn == "White") and "Black" or "White"
+                    local nextLegalMoves = generateLegalMoves(tempBoard1, nextTurn)
+                    
+                    for _, move2 in ipairs(nextLegalMoves) do
+                        local tempBoard2 = applyMoveToBoard(tempBoard1, move2)
+                        if boardsMatch(tempBoard2, board3D) then
+                            matchedMove1 = move1
+                            matchedMove2 = move2
+                            break
+                        end
+                    end
+                    if matchedMove1 then break end
+                end
+            end
+            
+            if matchedMove1 then
+                -- Apply the mirrored move(s) to the 2D board
                 for r=1,8 do for c=1,8 do 
                     squares[r][c].Text = turnStartBoard[r][c]
                     squares[r][c].TextColor3 = getPieceTextColor(getPieceColor(turnStartBoard[r][c]))
                 end end
-                executeMove(matchedMove, currentTurn)
+                
+                executeMove(matchedMove1, currentTurn)
+                
+                if matchedMove2 then
+                    -- currentTurn was flipped by executeMove, so it's correct for move2
+                    executeMove(matchedMove2, currentTurn)
+                end
+                
                 turnStartBoard = copyBoard(squares)
                 clearSuggestionHighlight()
                 boardStableCount = 0
+                
                 -- After mirroring, if it's now the player's turn, suggest a move
                 if not isAutoMoveActive and currentTurn == playerColor and not gamePaused then
                     suggestMoveForHuman()
