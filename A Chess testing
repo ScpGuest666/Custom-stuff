@@ -1,3 +1,6 @@
+-- PASTE YOUR CLOUDFLARE LINK HERE (Keep the quotes, no slash at the end)
+local POCO_URL = "https://pgxru-175-100-48-137.run.pinggy-free.link"
+
 -- Wait for player to load
 local PlayerService = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -13,13 +16,157 @@ if not player then
 end
 player:WaitForChild("PlayerGui")
 
--- ==========================================
--- PASTE YOUR PINGGY LINK HERE:
-local TERMUX_SERVER_URL = "https://609a3894539bb2.lhr.life"
--- ==========================================
-
 -- HTTP Request function
 local req = (typeof(request) == "function" and request) or (typeof(http_request) == "function" and http_request) or (typeof(http) == "table" and type(http.request) == "function" and http.request) or (typeof(syn) == "table" and type(syn.request) == "function" and syn.request)
+
+-- Download and Parse Opening Books
+local openingBook = {White = {}, Black = {}}
+local possibleBooks = {}
+local bookPly = 1
+
+local twentyFiveMovesBook = {White = {}, Black = {}}
+local possible25Books = {}
+local book25Ply = 1
+
+local function copyPossibleBooks(pb)
+    local c = {}
+    for _, b in ipairs(pb) do table.insert(c, b) end
+    return c
+end
+
+task.spawn(function()
+    -- 1. Fetch CSV Opening Book (tomgp)
+    local success1, res1 = pcall(function()
+        if req then return req({Url = "https://raw.githubusercontent.com/tomgp/chess-canvas/refs/heads/master/pgn/chess_openings.csv", Method = "GET"}).Body
+        elseif type(game.HttpGet) == "function" then return game:HttpGet("https://raw.githubusercontent.com/tomgp/chess-canvas/refs/heads/master/pgn/chess_openings.csv") end
+    end)
+    if success1 and res1 then
+        for line in res1:gmatch("[^\r\n]+") do
+            local eco, name, movesStr = line:match('^"([^"]*)","([^"]*)","([^"]*)"')
+            if movesStr then
+                local moves = {}
+                local cleanMovesStr = movesStr:gsub("%d+%.%s*", "")
+                for move in cleanMovesStr:gmatch("%S+") do
+                    table.insert(moves, move)
+                end
+                table.insert(openingBook.White, {name = name, moves = moves})
+                table.insert(openingBook.Black, {name = name, moves = moves})
+            end
+        end
+        print("Loaded CSV openings.")
+    else
+        warn("Failed to load CSV opening book.")
+    end
+
+    -- 2. Fetch JSON Opening Book (ecoB.json)
+    local success2, res2 = pcall(function()
+        if req then return req({Url = "https://raw.githubusercontent.com/hayatbiralem/eco.json/master/ecoB.json", Method = "GET"}).Body
+        elseif type(game.HttpGet) == "function" then return game:HttpGet("https://raw.githubusercontent.com/hayatbiralem/eco.json/master/ecoB.json") end
+    end)
+    if success2 and res2 then
+        local s, decoded = pcall(function() return HttpService:JSONDecode(res2) end)
+        if s and type(decoded) == "table" then
+            for fen, data in pairs(decoded) do
+                if type(data) == "table" and data.moves and data.name then
+                    local moves = {}
+                    local cleanMovesStr = data.moves:gsub("%d+%.%s*", "")
+                    for move in cleanMovesStr:gmatch("%S+") do
+                        table.insert(moves, move)
+                    end
+                    table.insert(openingBook.White, {name = data.name, moves = moves})
+                    table.insert(openingBook.Black, {name = data.name, moves = moves})
+                end
+            end
+            print("Loaded JSON openings.")
+        else
+            warn("Failed to decode JSON opening book.")
+        end
+    else
+        warn("Failed to load JSON opening book.")
+    end
+    
+    -- 3. Fetch New CSV Opening Book (ScpGuest666)
+    local success4, res4 = pcall(function()
+        if req then return req({Url = "https://raw.githubusercontent.com/ScpGuest666/Chess-opening-moves/refs/heads/main/openings.csv", Method = "GET"}).Body
+        elseif type(game.HttpGet) == "function" then return game:HttpGet("https://raw.githubusercontent.com/ScpGuest666/Chess-opening-moves/refs/heads/main/openings.csv") end
+    end)
+    if success4 and res4 then
+        for line in res4:gmatch("[^\r\n]+") do
+            if not line:match("^Opening,Colour") then
+                local name = line:match('^%d+,%s*"([^"]+)"') or line:match('^%d+,%s*([^,]+)')
+                local movesStr = line:match(",([^,]+),\"%['")
+                local w_win_str, b_win_str = line:match(",([^,]+),([^,]+),[^,]*,[^,]*,[^,]*$")
+                
+                if name and movesStr and w_win_str and b_win_str then
+                    local w_win = tonumber(w_win_str)
+                    local b_win = tonumber(b_win_str)
+                    
+                    if w_win and b_win then
+                        local moves = {}
+                        local cleanMovesStr = movesStr:gsub("%d+%.%s*", "")
+                        for move in cleanMovesStr:gmatch("%S+") do
+                            table.insert(moves, move)
+                        end
+                        
+                        if w_win >= b_win then
+                            table.insert(openingBook.White, {name = name, moves = moves})
+                        end
+                        if b_win >= w_win then
+                            table.insert(openingBook.Black, {name = name, moves = moves})
+                        end
+                    end
+                end
+            end
+        end
+        print("Loaded ScpGuest666 openings.")
+    else
+        warn("Failed to load ScpGuest666 opening book.")
+    end
+    
+    print("Total openings loaded - White: " .. #openingBook.White .. ", Black: " .. #openingBook.Black)
+    
+    -- 4. Fetch 25 Moves Book
+    local success3, res3 = pcall(function()
+        if req then return req({Url = "https://raw.githubusercontent.com/ScpGuest666/Chess-opening-moves/refs/heads/main/25%20or%20less%20moves", Method = "GET"}).Body
+        elseif type(game.HttpGet) == "function" then return game:HttpGet("https://raw.githubusercontent.com/ScpGuest666/Chess-opening-moves/refs/heads/main/25%20or%20less%20moves") end
+    end)
+    if success3 and res3 then
+        for line in res3:gmatch("[^\r\n]+") do
+            if not line:match("^Game Number") then
+                local movesStr = line:match('^%d+,%s*"([^"]+)"')
+                if not movesStr then
+                    movesStr = line:match('^%d+,%s*(.+)')
+                end
+                
+                if movesStr then
+                    local result = movesStr:match("(%S+)%s*$")
+                    local cleanMovesStr = movesStr:gsub("%d+%.%s*", ""):gsub("1%-0", ""):gsub("0%-1", ""):gsub("1/2%-1/2", "")
+                    local moves = {}
+                    for move in cleanMovesStr:gmatch("%S+") do
+                        table.insert(moves, move)
+                    end
+                    
+                    if result == "1-0" then
+                        table.insert(twentyFiveMovesBook.White, {name = "25 Moves (White Win)", moves = moves})
+                    elseif result == "0-1" then
+                        table.insert(twentyFiveMovesBook.Black, {name = "25 Moves (Black Win)", moves = moves})
+                    end
+                end
+            end
+        end
+        print("Loaded 25 Moves book. White wins: " .. #twentyFiveMovesBook.White .. ", Black wins: " .. #twentyFiveMovesBook.Black)
+    else
+        warn("Failed to load 25 Moves book.")
+    end
+    
+    -- If the game hasn't progressed past ply 1 yet, update the possible books
+    if bookPly == 1 then
+        possibleBooks = copyPossibleBooks(openingBook[playerColor] or {})
+    end
+    if book25Ply == 1 then
+        possible25Books = copyPossibleBooks(twentyFiveMovesBook[playerColor] or {})
+    end
+end)
 
 -- Screen GUI
 local screenGui = Instance.new("ScreenGui")
@@ -58,7 +205,7 @@ secondFrameLabel.TextScaled = true
 local trainButton = Instance.new("TextButton")
 trainButton.Parent = secondFrame
 trainButton.Size = UDim2.new(1, -10, 0, 25)
-trainButton.Position = UDim2.new(0, 5, 0, 40)
+trainButton.Position = UDim2.new(0, 5, 0, 35)
 trainButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 trainButton.Text = "Train"
 trainButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -67,7 +214,7 @@ trainButton.TextScaled = true
 local switchButton = Instance.new("TextButton")
 switchButton.Parent = secondFrame
 switchButton.Size = UDim2.new(1, -10, 0, 25)
-switchButton.Position = UDim2.new(0, 5, 0, 75)
+switchButton.Position = UDim2.new(0, 5, 0, 65)
 switchButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 switchButton.Text = "Switch Sides"
 switchButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -76,7 +223,7 @@ switchButton.TextScaled = true
 local flipButton = Instance.new("TextButton")
 flipButton.Parent = secondFrame
 flipButton.Size = UDim2.new(1, -10, 0, 25)
-flipButton.Position = UDim2.new(0, 5, 0, 110)
+flipButton.Position = UDim2.new(0, 5, 0, 95)
 flipButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 flipButton.Text = "Flip Board"
 flipButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -85,7 +232,7 @@ flipButton.TextScaled = true
 local moveButton = Instance.new("TextButton")
 moveButton.Parent = secondFrame
 moveButton.Size = UDim2.new(1, -10, 0, 25)
-moveButton.Position = UDim2.new(0, 5, 0, 145)
+moveButton.Position = UDim2.new(0, 5, 0, 125)
 moveButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 moveButton.Text = "Auto Move"
 moveButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -94,7 +241,7 @@ moveButton.TextScaled = true
 local switchApiButton = Instance.new("TextButton")
 switchApiButton.Parent = secondFrame
 switchApiButton.Size = UDim2.new(1, -10, 0, 25)
-switchApiButton.Position = UDim2.new(0, 5, 0, 180)
+switchApiButton.Position = UDim2.new(0, 5, 0, 155)
 switchApiButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 switchApiButton.Text = "API: Saychess"
 switchApiButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -102,13 +249,13 @@ switchApiButton.TextScaled = true
 
 -- Depth Controls
 local stockfishDepth = 10 -- Default depth to 10
-local MAX_STOCKFISH_DEPTH = 24 -- Increased for Local Termux
+local MAX_STOCKFISH_DEPTH = 15
 local MIN_STOCKFISH_DEPTH = 0 -- 0 means Local AI only (No API)
 
 local depthMinusBtn = Instance.new("TextButton")
 depthMinusBtn.Parent = secondFrame
 depthMinusBtn.Size = UDim2.new(0, 30, 0, 25)
-depthMinusBtn.Position = UDim2.new(0, 5, 0, 215)
+depthMinusBtn.Position = UDim2.new(0, 5, 0, 185)
 depthMinusBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 depthMinusBtn.Text = "-"
 depthMinusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -117,7 +264,7 @@ depthMinusBtn.TextScaled = true
 local depthTextBox = Instance.new("TextBox")
 depthTextBox.Parent = secondFrame
 depthTextBox.Size = UDim2.new(0, 70, 0, 25)
-depthTextBox.Position = UDim2.new(0, 40, 0, 215)
+depthTextBox.Position = UDim2.new(0, 40, 0, 185)
 depthTextBox.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
 depthTextBox.Text = "Depth: " .. stockfishDepth
 depthTextBox.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -127,7 +274,7 @@ depthTextBox.ClearTextOnFocus = false
 local depthPlusBtn = Instance.new("TextButton")
 depthPlusBtn.Parent = secondFrame
 depthPlusBtn.Size = UDim2.new(0, 30, 0, 25)
-depthPlusBtn.Position = UDim2.new(0, 115, 0, 215)
+depthPlusBtn.Position = UDim2.new(0, 115, 0, 185)
 depthPlusBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 depthPlusBtn.Text = "+"
 depthPlusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -162,6 +309,81 @@ depthTextBox.FocusLost:Connect(function()
         stockfishDepth = math.clamp(math.floor(num), MIN_STOCKFISH_DEPTH, MAX_STOCKFISH_DEPTH)
     end
     updateDepthDisplay()
+end)
+
+-- Bot Selection Controls
+local bot1Api = "None"
+local bot2Api = "None"
+local whiteApi = "None"
+local blackApi = "None"
+
+local bot1Button = Instance.new("TextButton")
+bot1Button.Parent = secondFrame
+bot1Button.Size = UDim2.new(1, -10, 0, 25)
+bot1Button.Position = UDim2.new(0, 5, 0, 215)
+bot1Button.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+bot1Button.Text = "Bot 1: None"
+bot1Button.TextColor3 = Color3.fromRGB(255, 255, 255)
+bot1Button.TextScaled = true
+
+local bot2Button = Instance.new("TextButton")
+bot2Button.Parent = secondFrame
+bot2Button.Size = UDim2.new(1, -10, 0, 25)
+bot2Button.Position = UDim2.new(0, 5, 0, 245)
+bot2Button.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+bot2Button.Text = "Bot 2: None"
+bot2Button.TextColor3 = Color3.fromRGB(255, 255, 255)
+bot2Button.TextScaled = true
+
+local engineOptions = {"None", "Saychess", "Stockfish", "ChessAPI", "Opening Book", "25 moves", "Local API", "ShashChess (Poco)"}
+local function getNextEngine(current)
+    for i, v in ipairs(engineOptions) do
+        if v == current then return engineOptions[(i % #engineOptions) + 1] end
+    end
+    return "None"
+end
+
+bot1Button.MouseButton1Click:Connect(function()
+    bot1Api = getNextEngine(bot1Api)
+    bot1Button.Text = "Bot 1: " .. bot1Api
+end)
+
+bot2Button.MouseButton1Click:Connect(function()
+    bot2Api = getNextEngine(bot2Api)
+    bot2Button.Text = "Bot 2: " .. bot2Api
+end)
+
+-- Test Poco Connection Button
+local testPocoBtn = Instance.new("TextButton")
+testPocoBtn.Parent = secondFrame
+testPocoBtn.Size = UDim2.new(1, -10, 0, 25)
+testPocoBtn.Position = UDim2.new(0, 5, 0, 275)
+testPocoBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+testPocoBtn.Text = "Test Poco Connection"
+testPocoBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+testPocoBtn.TextScaled = true
+
+testPocoBtn.MouseButton1Click:Connect(function()
+    testPocoBtn.Text = "Testing..."
+    local url = POCO_URL .. "/getmove?fen=rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR%20w%20KQkq%20-%200%201&depth=1"
+    
+    local success, res = pcall(function()
+        if req then return req({Url = url, Method = "GET"}).Body
+        elseif type(game.HttpGet) == "function" then return game:HttpGet(url) end
+    end)
+    
+    if success and res and res ~= "" then
+        testPocoBtn.Text = "Connected! ("..res..")"
+        testPocoBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+    else
+        testPocoBtn.Text = "Failed! Check Link"
+        testPocoBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
+    end
+    
+    task.delay(3, function()
+        testPocoBtn.Text = "Test Poco Connection"
+        testPocoBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    end)
 end)
 
 -- Button Layout Adjustment (main frame buttons)
@@ -260,6 +482,69 @@ local function generateLegalMoves(b,c)
 		return s1 > s2
 	end)
 	return m 
+end
+
+-- --- SAN PARSER FOR OPENING BOOK ---
+local function matchSanToMove(san, legalMoves, color)
+    local cleanSan = san:gsub("[%+%#]", "")
+    
+    if cleanSan == "O-O" or cleanSan == "0-0" then
+        for _, m in ipairs(legalMoves) do
+            if m.piece:lower() == 'k' and m.toC - m.fromC == 2 then return m end
+        end
+        return nil
+    elseif cleanSan == "O-O-O" or cleanSan == "0-0-0" then
+        for _, m in ipairs(legalMoves) do
+            if m.piece:lower() == 'k' and m.fromC - m.toC == 2 then return m end
+        end
+        return nil
+    end
+
+    local piece = "P"
+    local firstChar = cleanSan:sub(1,1)
+    if firstChar == "K" or firstChar == "Q" or firstChar == "R" or firstChar == "B" or firstChar == "N" then
+        piece = firstChar
+        cleanSan = cleanSan:sub(2)
+    end
+
+    local promo = nil
+    if cleanSan:find("=") then
+        promo = cleanSan:sub(-1)
+        cleanSan = cleanSan:sub(1, -3)
+    end
+
+    cleanSan = cleanSan:gsub("x", "")
+
+    local destFileStr, destRankStr = cleanSan:match("([a-h])([1-8])$")
+    if not destFileStr then return nil end
+    local destC = destFileStr:byte() - 96
+    local destR = 9 - tonumber(destRankStr)
+
+    local disambig = cleanSan:sub(1, -3)
+    local disFile, disRank = nil, nil
+    if #disambig == 1 then
+        if disambig:match("[a-h]") then disFile = disambig:byte() - 96
+        elseif disambig:match("[1-8]") then disRank = 9 - tonumber(disambig) end
+    elseif #disambig == 2 then
+        disFile = disambig:sub(1,1):byte() - 96
+        disRank = 9 - tonumber(disambig:sub(2,2))
+    end
+
+    for _, m in ipairs(legalMoves) do
+        local mPieceUpper = m.piece:upper()
+        if piece == "P" then mPieceUpper = "P" end
+
+        if mPieceUpper == piece and m.toR == destR and m.toC == destC then
+            local match = true
+            if disFile and m.fromC ~= disFile then match = false end
+            if disRank and m.fromR ~= disRank then match = false end
+            if match then
+                if promo then m.promo = promo end
+                return m
+            end
+        end
+    end
+    return nil
 end
 
 -- --- 3D MATCHING LOGIC (with auto colour detection) ---
@@ -660,11 +945,11 @@ local function uciToMove(uci)
     return r1, c1, r2, c2, promo
 end
 
-local function getBestMoveFromAPI(fen, liveUpdateCallback)
-    if stockfishDepth <= 0 then return nil end
+local function getBestMoveFromAPI(fen, apiOverride)
+    local apiUsed = apiOverride or currentApi
+    if stockfishDepth <= 0 or apiUsed == "Local API" then return nil end
     
     local bestMoveStr = nil
-    local apiUsed = currentApi
     local depthUsed = stockfishDepth
 
     local function fetchGet(url)
@@ -693,60 +978,18 @@ local function getBestMoveFromAPI(fen, liveUpdateCallback)
         return nil
     end
 
-    if apiUsed == "Multi-Best" then
-        local tasks = {
-            function() -- 1. Lichess Syzygy (Perfect Endgame)
-                local body = fetchGet("https://tablebase.lichess.ovh/standard?fen=" .. HttpService:UrlEncode(fen))
-                return HttpService:JSONDecode(body).moves[1].uci
-            end,
-            function() -- 2. Chess-API (Target Depth)
-                local body = fetchPost("https://chess-api.com/v1", HttpService:JSONEncode({fen = fen, depth = depthUsed}))
-                return HttpService:JSONDecode(body).move
-            end,
-            function() -- 3. Stockfish V2 (Target Depth)
-                local body = fetchGet("https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(depthUsed))
-                return HttpService:JSONDecode(body).bestmove:match("bestmove%s+(%S+)")
-            end,
-            function() -- 4. Stockfish V1 (Target Depth)
-                local body = fetchGet("https://stockfish.online/api/s/v1.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(depthUsed))
-                return HttpService:JSONDecode(body).bestmove:match("bestmove%s+(%S+)")
-            end
-        }
-        
-        local votes = {}
-        local maxVotes = 0
-        local tasksCompleted = 0
+    if apiUsed == "ShashChess (Poco)" then
         local completed = false
-        
-        local function submitMove(move)
-            if not move then return end
-            votes[move] = (votes[move] or 0) + 1
-            if votes[move] > maxVotes then
-                maxVotes = votes[move]
-                if bestMoveStr ~= move then
-                    bestMoveStr = move
-                    if liveUpdateCallback then
-                        task.spawn(liveUpdateCallback, bestMoveStr)
-                    end
-                end
+        task.spawn(function()
+            local url = POCO_URL .. "/getmove?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(depthUsed)
+            local body = fetchGet(url)
+            if body and body ~= "" then
+                bestMoveStr = body
             end
-        end
-
-        for i = 1, #tasks do
-            task.spawn(function()
-                local success, move = pcall(tasks[i])
-                if success and move then
-                    submitMove(move)
-                end
-                tasksCompleted = tasksCompleted + 1
-            end)
-        end
-        
+            completed = true
+        end)
         local t = 0
-        while tasksCompleted < #tasks and t < 250 do 
-            t = t + 1
-            task.wait(0.1)
-        end
+        while not completed and t < 250 do t = t + 1 task.wait(0.1) end
         
     elseif apiUsed == "Stockfish" then
         local completed = false
@@ -756,7 +999,6 @@ local function getBestMoveFromAPI(fen, liveUpdateCallback)
                 local success, data = pcall(function() return HttpService:JSONDecode(body) end)
                 if success and data and data.success and data.bestmove then
                     bestMoveStr = data.bestmove:match("bestmove%s+(%S+)")
-                    if liveUpdateCallback then task.spawn(liveUpdateCallback, bestMoveStr) end
                 end
             end
             completed = true
@@ -764,7 +1006,7 @@ local function getBestMoveFromAPI(fen, liveUpdateCallback)
         local t = 0
         while not completed and t < 250 do t = t + 1 task.wait(0.1) end
         
-    elseif apiUsed == "ChessAPI" then
+    elseif apiUsed == "ChessAPI" or apiUsed == "Saychess" then
         local completed = false
         task.spawn(function()
             local body = fetchPost("https://chess-api.com/v1", HttpService:JSONEncode({fen = fen, depth = depthUsed}))
@@ -772,44 +1014,7 @@ local function getBestMoveFromAPI(fen, liveUpdateCallback)
                 local success, data = pcall(function() return HttpService:JSONDecode(body) end)
                 if success and data and data.move then
                     bestMoveStr = data.move
-                    if liveUpdateCallback then task.spawn(liveUpdateCallback, bestMoveStr) end
                 end
-            end
-            completed = true
-        end)
-        local t = 0
-        while not completed and t < 250 do t = t + 1 task.wait(0.1) end
-        
-    elseif apiUsed == "Saychess" then
-        local completed = false
-        task.spawn(function()
-            local body = fetchPost("https://chess-api.com/v1", HttpService:JSONEncode({fen = fen, depth = depthUsed}))
-            if body then
-                local success, data = pcall(function() return HttpService:JSONDecode(body) end)
-                if success and data and data.move then
-                    bestMoveStr = data.move
-                    if liveUpdateCallback then task.spawn(liveUpdateCallback, bestMoveStr) end
-                end
-            end
-            completed = true
-        end)
-        local t = 0
-        while not completed and t < 250 do t = t + 1 task.wait(0.1) end
-        
-    elseif apiUsed == "Local Termux" then
-        local completed = false
-        task.spawn(function()
-            -- Using the Pinggy URL to bypass executor blocks
-            local url = TERMUX_SERVER_URL .. "/move?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(depthUsed)
-            local body = fetchGet(url)
-            if body then
-                local success, data = pcall(function() return HttpService:JSONDecode(body) end)
-                if success and data and data.bestmove then
-                    bestMoveStr = data.bestmove
-                    if liveUpdateCallback then task.spawn(liveUpdateCallback, bestMoveStr) end
-                end
-            else
-                warn("Local Termux connection failed! Did you paste the Pinggy link correctly?")
             end
             completed = true
         end)
@@ -889,8 +1094,6 @@ end
 local PST={p={{0,0,0,0,0,0,0,0},{50,50,50,50,50,50,50,50},{10,10,20,30,30,20,10,10},{5,5,10,25,25,10,5,5},{0,0,0,20,20,0,0,0},{5,-5,-10,0,0,-10,-5,5},{5,10,10,-20,-20,10,10,5},{0,0,0,0,0,0,0,0}},n={{-50,-40,-30,-30,-30,-30,-40,-50},{-40,-20,0,0,0,0,-20,-40},{-30,0,10,15,15,10,0,-30},{-30,5,15,20,20,15,5,-30},{-30,0,15,20,20,15,0,-30},{-30,5,10,15,15,10,5,-30},{-40,-20,0,5,5,0,-20,-40},{-50,-40,-30,-30,-30,-30,-40,-50}},b={{-20,-10,-10,-10,-10,-10,-10,-20},{-10,0,0,0,0,0,0,-10},{-10,0,5,10,10,5,0,-10},{-10,5,5,10,10,5,5,-10},{-10,0,10,10,10,10,0,-10},{-10,10,10,10,10,10,10,-10},{-10,5,0,0,0,0,5,-10},{-20,-10,-10,-10,-10,-10,-10,-20}},r={{0,0,0,0,0,0,0,0},{5,10,10,10,10,10,10,5},{-5,0,0,0,0,0,0,-5},{-5,0,0,0,0,0,0,-5},{-5,0,0,0,0,0,0,-5},{-5,0,0,0,0,0,0,-5},{-5,0,0,0,0,0,0,-5},{0,0,0,5,5,0,0,0}},q={{-20,-10,-10,-5,-5,-10,-10,-20},{-10,0,0,0,0,0,0,-10},{-10,0,5,5,5,5,0,-10},{-5,0,5,5,5,5,0,-5},{0,0,5,5,5,5,0,-5},{-10,5,5,5,5,5,0,-10},{-10,0,5,0,0,0,0,-10},{-20,-10,-10,-5,-5,-10,-10,-20}},k={{-30,-40,-40,-50,-50,-40,-40,-30},{-30,-40,-40,-50,-50,-40,-40,-30},{-30,-40,-40,-50,-50,-40,-40,-30},{-30,-40,-40,-50,-50,-40,-40,-30},{-20,-30,-30,-40,-40,-30,-30,-20},{-10,-20,-20,-20,-20,-20,-20,-10},{20,20,0,0,0,0,20,20},{20,30,10,0,0,10,30,20}}}
 local function evaluateBoard(b) local s=0; for r=1,8 do for c=1,8 do local p=b[r][c]; if p~="" then local ms=PV[p] or 0; local pt,pc=p:lower(),getPieceColor(p); local ps=0; if PST[pt] then ps=(pc=="White") and PST[pt][r][c] or PST[pt][9-r][c] end; s+=(pc=="Black") and (ms-ps) or (ms+ps) end end end; return s end
 local MAX_DEPTH_LOCAL,minimax_=2,nil; minimax_=function(b,d,a,be,isM) checkYield(); if d==0 then return evaluateBoard(b) end; local m=generateLegalMoves(b,isM and "Black" or "White"); if isM then local me=-math.huge; for _,mo in ipairs(m) do local nb=cloneBoard(b); nb[mo.toR][mo.toC]=mo.piece; nb[mo.fromR][mo.fromC]=""; local e=minimax_(nb,d-1,a,be,false); me=math.max(me,e); a=math.max(a,e); if be<=a then break end end; return me else local me=math.huge; for _,mo in ipairs(m) do local nb=cloneBoard(b); nb[mo.toR][mo.toC]=mo.piece; nb[mo.fromR][mo.fromC]=""; local e=minimax_(nb,d-1,a,be,true); me=math.min(me,e); be=math.min(be,e); if be<=a then break end end; return me end end
-local function absPV(ch) return math.abs(PV[ch] or 0) end
-local function moveLeavesPieceHanging(newBoard, move, moverColor) local oppColor = (moverColor == "White") and "Black" or "White"; local destR, destC = move.toR, move.toC; local moves = generateLegalMoves(newBoard, oppColor); for _, m in ipairs(moves) do if m.toR == destR and m.toC == destC and m.captured ~= "" then local capturedVal = (move.captured ~= "") and absPV(move.captured) or 0; local movedVal = absPV(move.piece); local netForMover = capturedVal - movedVal; if netForMover < 0 then return true, -netForMover end end end; return false, 0 end
 
 local function findBestMoveFor(color) 
     local board = copyBoard(squares); 
@@ -911,8 +1114,6 @@ local function findBestMoveFor(color)
             else 
                 eval = minimax_(newBoard, MAX_DEPTH_LOCAL - 1, -math.huge, math.huge, false) 
             end; 
-            local hanging, penaltyMag = moveLeavesPieceHanging(newBoard, move, "Black"); 
-            if hanging then eval = eval + penaltyMag * 10 end; 
             
             if eval < bestEval then 
                 bestEval = eval
@@ -933,8 +1134,6 @@ local function findBestMoveFor(color)
             else 
                 eval = minimax_(newBoard, MAX_DEPTH_LOCAL - 1, -math.huge, math.huge, true) 
             end; 
-            local hanging, penaltyMag = moveLeavesPieceHanging(newBoard, move, "White"); 
-            if hanging then eval = eval - penaltyMag * 10 end; 
             
             if eval > bestEval then 
                 bestEval = eval
@@ -1013,6 +1212,27 @@ local function highlightSuggested3DPlatform(row, col, isPreliminary, isEndgame)
     local targetX = boardAnchor.minX + (actualC - 1) * boardAnchor.squareSizeX
     local targetZ = boardAnchor.minZ + (actualR - 1) * boardAnchor.squareSizeZ
     
+    -- Raycast to find the exact top surface of the board skin
+    local rayOrigin = Vector3.new(targetX, boardAnchor.baseY + 15, targetZ)
+    local rayDirection = Vector3.new(0, -30, 0)
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    
+    local ignoreList = {}
+    if player.Character then table.insert(ignoreList, player.Character) end
+    for _, model in pairs(currentPieceMap) do
+        if model and typeof(model) == "Instance" then
+            table.insert(ignoreList, model)
+        end
+    end
+    rayParams.FilterDescendantsInstances = ignoreList
+    
+    local rayResult = workspace:Raycast(rayOrigin, rayDirection, rayParams)
+    local platformY = boardAnchor.baseY
+    if rayResult then
+        platformY = rayResult.Position.Y
+    end
+    
     -- Create an invisible anchor part
     local platformPart = Instance.new("Part")
     platformPart.Name = "SuggestionPlatformAnchor"
@@ -1020,7 +1240,7 @@ local function highlightSuggested3DPlatform(row, col, isPreliminary, isEndgame)
     platformPart.CanCollide = false
     platformPart.Transparency = 1 -- Make the part itself invisible
     platformPart.Size = Vector3.new(0.1, 0.1, 0.1)
-    platformPart.Position = Vector3.new(targetX, boardAnchor.baseY, targetZ)
+    platformPart.Position = Vector3.new(targetX, platformY, targetZ)
     platformPart.Parent = workspace
     
     local platformColor
@@ -1033,7 +1253,7 @@ local function highlightSuggested3DPlatform(row, col, isPreliminary, isEndgame)
     -- Use BoxHandleAdornment to guarantee it renders through custom board skins
     local adornment = Instance.new("BoxHandleAdornment")
     adornment.Name = "SuggestionPlatformAdornment"
-    adornment.Size = Vector3.new(boardAnchor.squareSizeX * 0.9, 0.2, boardAnchor.squareSizeZ * 0.9)
+    adornment.Size = Vector3.new(boardAnchor.squareSizeX * 0.9, 0.4, boardAnchor.squareSizeZ * 0.9) -- Made thicker
     adornment.Color3 = platformColor
     adornment.Transparency = 0.5 -- 0.5 opacity
     adornment.AlwaysOnTop = true -- Forces it to render through the board skin
@@ -1105,6 +1325,18 @@ local function suggestMoveForHuman()
     local pCount = countPieces(squares)
     local isEndgame = (pCount <= 12)
     
+    local fen = getFEN()
+    local saychessPromise = nil
+    
+    -- Secretly pre-fetch Saychess move if we are using a Book API
+    if not isEndgame and (currentApi == "Opening Book" or currentApi == "25 moves") then
+        saychessPromise = {done = false, move = nil}
+        task.spawn(function()
+            saychessPromise.move = getBestMoveFromAPI(fen, "Saychess")
+            saychessPromise.done = true
+        end)
+    end
+    
     if isEndgame then
         if pCount <= 7 then
             statusLabel.Text = "Thinking... (Lichess Syzygy)"
@@ -1112,8 +1344,22 @@ local function suggestMoveForHuman()
             statusLabel.Text = "Thinking... (Lc0)"
         end
     else
-        if currentApi == "Saychess" and stockfishDepth >= 15 then
+        if currentApi == "Opening Book" then
+            if #possibleBooks > 0 then
+                statusLabel.Text = "Thinking... (Opening Book)"
+            else
+                statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - Book Exhausted)"
+            end
+        elseif currentApi == "25 moves" then
+            if #possible25Books > 0 then
+                statusLabel.Text = "Thinking... (25 Moves Book)"
+            else
+                statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - 25 Moves Exhausted)"
+            end
+        elseif currentApi == "Saychess" and stockfishDepth >= 15 then
             statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - Free version may not support D15)"
+        elseif currentApi == "Local API" then
+            statusLabel.Text = "Thinking... (Local AI)"
         else
             statusLabel.Text = "Thinking... (" .. currentApi .. " D" .. stockfishDepth .. ")"
         end
@@ -1150,13 +1396,59 @@ local function suggestMoveForHuman()
         end
 
         local success, err = pcall(function()
-            local fen = getFEN()
             local uciMove = nil
             
             if isEndgame then
                 uciMove, _ = getEndgameSuggestion(fen, pCount)
             else
-                uciMove = getBestMoveFromAPI(fen, onLiveUpdate)
+                local apiToCall = currentApi
+                if apiToCall == "Opening Book" then
+                    if #possibleBooks > 0 then
+                        local chosenBook = possibleBooks[math.random(1, #possibleBooks)]
+                        local expectedSan = chosenBook.moves[bookPly]
+                        if expectedSan then
+                            local legalMoves = generateLegalMoves(copyBoard(squares), currentTurn)
+                            local expectedMove = matchSanToMove(expectedSan, legalMoves, currentTurn)
+                            if expectedMove then
+                                finalSuggestion = expectedMove
+                            end
+                        end
+                    end
+                    if not finalSuggestion then
+                        apiToCall = "Saychess"
+                    end
+                elseif apiToCall == "25 moves" then
+                    if #possible25Books > 0 then
+                        local chosenBook = possible25Books[math.random(1, #possible25Books)]
+                        local expectedSan = chosenBook.moves[book25Ply]
+                        if expectedSan then
+                            local legalMoves = generateLegalMoves(copyBoard(squares), currentTurn)
+                            local expectedMove = matchSanToMove(expectedSan, legalMoves, currentTurn)
+                            if expectedMove then
+                                finalSuggestion = expectedMove
+                            end
+                        end
+                    end
+                    if not finalSuggestion then
+                        apiToCall = "Saychess"
+                    end
+                end
+                
+                if not finalSuggestion and apiToCall ~= "Opening Book" and apiToCall ~= "25 moves" then
+                    if apiToCall == "Saychess" and saychessPromise then
+                        -- Wait for the secretly pre-fetched move
+                        local t = 0
+                        while not saychessPromise.done and t < 250 do
+                            t = t + 1
+                            task.wait(0.1)
+                        end
+                        uciMove = saychessPromise.move
+                        if uciMove then onLiveUpdate(uciMove) end
+                    else
+                        uciMove = getBestMoveFromAPI(fen, apiToCall)
+                        if uciMove then onLiveUpdate(uciMove) end
+                    end
+                end
             end
             
             if myState == stateVersion and uciMove then
@@ -1186,10 +1478,6 @@ local function suggestMoveForHuman()
             end
 
             if myState == stateVersion and not finalSuggestion then
-                if currentApi == "Local Termux" then
-                    statusLabel.Text = "Termux Failed! Using Weak AI."
-                    task.wait(1)
-                end
                 finalSuggestion = findBestMoveFor(currentTurn)
             end
         end)
@@ -1230,12 +1518,54 @@ local function checkGameState()
 end
 
 local function executeMove(move, color, promo)
+    -- Check if move matches opening book before applying
+    if #possibleBooks > 0 then
+        local nextPossibleBooks = {}
+        local legalMoves = generateLegalMoves(copyBoard(squares), color)
+        for _, book in ipairs(possibleBooks) do
+            local expectedSan = book.moves[bookPly]
+            if expectedSan then
+                local expectedMove = matchSanToMove(expectedSan, legalMoves, color)
+                if expectedMove and expectedMove.fromR == move.fromR and expectedMove.fromC == move.fromC and expectedMove.toR == move.toR and expectedMove.toC == move.toC then
+                    table.insert(nextPossibleBooks, book)
+                end
+            end
+        end
+        possibleBooks = nextPossibleBooks
+        bookPly = bookPly + 1
+    end
+
+    -- Check if move matches 25 moves book before applying
+    if #possible25Books > 0 then
+        local nextPossible25Books = {}
+        local legalMoves = generateLegalMoves(copyBoard(squares), color)
+        for _, book in ipairs(possible25Books) do
+            local expectedSan = book.moves[book25Ply]
+            if expectedSan then
+                local expectedMove = matchSanToMove(expectedSan, legalMoves, color)
+                if expectedMove and expectedMove.fromR == move.fromR and expectedMove.fromC == move.fromC and expectedMove.toR == move.toR and expectedMove.toC == move.toC then
+                    table.insert(nextPossible25Books, book)
+                end
+            end
+        end
+        possible25Books = nextPossible25Books
+        book25Ply = book25Ply + 1
+    end
+
     local fromR,fromC,toR,toC,movedPiece = move.fromR,move.fromC,move.toR,move.toC,move.piece
     local startSq,endSq=squares[fromR][fromC],squares[toR][toC]
     
     clearHighlights() 
     
-    table.insert(moveHistory,{fromR=fromR,fromC=fromC,toR=toR,toC=toC,movedPiece=movedPiece,capturedPiece=endSq.Text,previousHasMoved=copyHasMoved(hasMoved)})
+    table.insert(moveHistory,{
+        fromR=fromR,fromC=fromC,toR=toR,toC=toC,
+        movedPiece=movedPiece,capturedPiece=endSq.Text,
+        previousHasMoved=copyHasMoved(hasMoved),
+        previousPossibleBooks=copyPossibleBooks(possibleBooks),
+        previousBookPly=bookPly,
+        previousPossible25Books=copyPossibleBooks(possible25Books),
+        previousBook25Ply=book25Ply
+    })
     
     if movedPiece:lower() == 'p' and fromC ~= toC and endSq.Text == "" then
         squares[fromR][toC].Text = ""
@@ -1285,6 +1615,23 @@ local function executeAIMove(color)
     local pCount = countPieces(squares)
     local isEndgame = (pCount <= 12)
     
+    local apiToCall = currentApi
+    if isTraining then
+        apiToCall = (color == "White") and whiteApi or blackApi
+    end
+    
+    local fen = getFEN()
+    local saychessPromise = nil
+    
+    -- Secretly pre-fetch Saychess move if we are using a Book API
+    if not isEndgame and (apiToCall == "Opening Book" or apiToCall == "25 moves") then
+        saychessPromise = {done = false, move = nil}
+        task.spawn(function()
+            saychessPromise.move = getBestMoveFromAPI(fen, "Saychess")
+            saychessPromise.done = true
+        end)
+    end
+    
     if isEndgame then
         if pCount <= 7 then
             statusLabel.Text = "Thinking... (Lichess Syzygy)"
@@ -1292,10 +1639,24 @@ local function executeAIMove(color)
             statusLabel.Text = "Thinking... (Lc0)"
         end
     else
-        if currentApi == "Saychess" and stockfishDepth >= 15 then
+        if apiToCall == "Opening Book" then
+            if #possibleBooks > 0 then
+                statusLabel.Text = "Thinking... (Opening Book)"
+            else
+                statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - Book Exhausted)"
+            end
+        elseif apiToCall == "25 moves" then
+            if #possible25Books > 0 then
+                statusLabel.Text = "Thinking... (25 Moves Book)"
+            else
+                statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - 25 Moves Exhausted)"
+            end
+        elseif apiToCall == "Saychess" and stockfishDepth >= 15 then
             statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - Free version may not support D15)"
+        elseif apiToCall == "Local API" then
+            statusLabel.Text = "Thinking... (Local AI)"
         else
-            statusLabel.Text = "Thinking... (" .. currentApi .. " D" .. stockfishDepth .. ")"
+            statusLabel.Text = "Thinking... (" .. apiToCall .. " D" .. stockfishDepth .. ")"
         end
     end
     
@@ -1310,13 +1671,60 @@ local function executeAIMove(color)
     task.wait(0.05) 
     
     local success, err = pcall(function()
-        local fen = getFEN()
         local uciMove = nil
         
         if isEndgame then
             uciMove, _ = getEndgameSuggestion(fen, pCount)
         else
-            uciMove = getBestMoveFromAPI(fen)
+            if apiToCall == "Opening Book" then
+                if #possibleBooks > 0 then
+                    local chosenBook = possibleBooks[math.random(1, #possibleBooks)]
+                    local expectedSan = chosenBook.moves[bookPly]
+                    if expectedSan then
+                        local legalMoves = generateLegalMoves(copyBoard(squares), currentTurn)
+                        local expectedMove = matchSanToMove(expectedSan, legalMoves, currentTurn)
+                        if expectedMove then
+                            statusLabel.Text = "Thinking... (Book: " .. chosenBook.name .. ")"
+                            task.wait(0.5)
+                            executeMove(expectedMove, currentTurn, expectedMove.promo)
+                            isThinking = false
+                            return
+                        end
+                    end
+                end
+                apiToCall = "Saychess"
+            elseif apiToCall == "25 moves" then
+                if #possible25Books > 0 then
+                    local chosenBook = possible25Books[math.random(1, #possible25Books)]
+                    local expectedSan = chosenBook.moves[book25Ply]
+                    if expectedSan then
+                        local legalMoves = generateLegalMoves(copyBoard(squares), currentTurn)
+                        local expectedMove = matchSanToMove(expectedSan, legalMoves, currentTurn)
+                        if expectedMove then
+                            statusLabel.Text = "Thinking... (Book: " .. chosenBook.name .. ")"
+                            task.wait(0.5)
+                            executeMove(expectedMove, currentTurn, expectedMove.promo)
+                            isThinking = false
+                            return
+                        end
+                    end
+                end
+                apiToCall = "Saychess"
+            end
+            
+            if apiToCall ~= "Opening Book" and apiToCall ~= "25 moves" then
+                if apiToCall == "Saychess" and saychessPromise then
+                    -- Wait for the secretly pre-fetched move
+                    local t = 0
+                    while not saychessPromise.done and t < 250 do
+                        t = t + 1
+                        task.wait(0.1)
+                    end
+                    uciMove = saychessPromise.move
+                else
+                    uciMove = getBestMoveFromAPI(fen, apiToCall)
+                end
+            end
         end
         
         if stateVersion ~= myState then return end 
@@ -1345,11 +1753,6 @@ local function executeAIMove(color)
                 isThinking = false
                 return
             end
-        end
-        
-        if currentApi == "Local Termux" then
-            statusLabel.Text = "Termux Failed! Using Weak AI."
-            task.wait(1)
         end
         
         warn("API failed or timed out, using local AI fallback.")
@@ -1410,8 +1813,19 @@ end
 trainButton.MouseButton1Click:Connect(function()
     isTraining = not isTraining
     trainButton.Text = isTraining and "Stop Training" or "Train"
-    if isTraining and not gamePaused then
-        task.spawn(trainingLoop)
+    if isTraining then
+        local b1 = (bot1Api ~= "None") and bot1Api or currentApi
+        local b2 = (bot2Api ~= "None") and bot2Api or currentApi
+        if math.random() > 0.5 then
+            whiteApi = b1
+            blackApi = b2
+        else
+            whiteApi = b2
+            blackApi = b1
+        end
+        if not gamePaused then
+            task.spawn(trainingLoop)
+        end
     end
 end)
 
@@ -1419,6 +1833,14 @@ switchButton.MouseButton1Click:Connect(function()
     if not gameActive or isTraining then return end
     playerColor = (playerColor == "White") and "Black" or "White"
     statusLabel.Text = "You are now " .. playerColor
+    
+    if bookPly == 1 then
+        possibleBooks = copyPossibleBooks(openingBook[playerColor] or {})
+    end
+    if book25Ply == 1 then
+        possible25Books = copyPossibleBooks(twentyFiveMovesBook[playerColor] or {})
+    end
+    
     task.wait(1)
     statusLabel.Text = "Status: Online ("..currentTurn.."'s Turn)"
     
@@ -1435,18 +1857,42 @@ switchApiButton.MouseButton1Click:Connect(function()
     if currentApi == "Saychess" then
         currentApi = "Stockfish"
         switchApiButton.Text = "API: Stockfish"
+        MAX_STOCKFISH_DEPTH = 15
+        if stockfishDepth > 15 then stockfishDepth = 15; updateDepthDisplay() end
     elseif currentApi == "Stockfish" then
         currentApi = "ChessAPI"
         switchApiButton.Text = "API: Chess-API"
+        MAX_STOCKFISH_DEPTH = 20
     elseif currentApi == "ChessAPI" then
-        currentApi = "Multi-Best"
-        switchApiButton.Text = "API: Multi-Best"
-    elseif currentApi == "Multi-Best" then
-        currentApi = "Local Termux"
-        switchApiButton.Text = "API: Local Termux"
+        currentApi = "Opening Book"
+        switchApiButton.Text = "API: Opening Book"
+        MAX_STOCKFISH_DEPTH = 15
+        if stockfishDepth > 15 then stockfishDepth = 15; updateDepthDisplay() end
+    elseif currentApi == "Opening Book" then
+        currentApi = "25 moves"
+        switchApiButton.Text = "API: 25 moves"
+        MAX_STOCKFISH_DEPTH = 15
+        if stockfishDepth > 15 then stockfishDepth = 15; updateDepthDisplay() end
+    elseif currentApi == "25 moves" then
+        currentApi = "Local API"
+        switchApiButton.Text = "API: Local API"
+        MAX_STOCKFISH_DEPTH = 15
+        if stockfishDepth > 15 then stockfishDepth = 15; updateDepthDisplay() end
+    elseif currentApi == "Local API" then
+        currentApi = "ShashChess (Poco)"
+        switchApiButton.Text = "API: ShashChess (Poco)"
+        MAX_STOCKFISH_DEPTH = 15
+        if stockfishDepth > 15 then stockfishDepth = 15; updateDepthDisplay() end
+    elseif currentApi == "ShashChess (Poco)" then
+        currentApi = "Saychess"
+        switchApiButton.Text = "API: Saychess"
+        MAX_STOCKFISH_DEPTH = 15
+        if stockfishDepth > 15 then stockfishDepth = 15; updateDepthDisplay() end
     else
         currentApi = "Saychess"
         switchApiButton.Text = "API: Saychess"
+        MAX_STOCKFISH_DEPTH = 15
+        if stockfishDepth > 15 then stockfishDepth = 15; updateDepthDisplay() end
     end
 end)
 
@@ -1516,25 +1962,55 @@ local function matchLoop()
         -- Compare with the last known 2D board (turnStartBoard)
         if not boardsMatch(turnStartBoard, board3D) then
             local legalMoves = generateLegalMoves(turnStartBoard, currentTurn)
-            local matchedMove = nil
+            local matchedMove1 = nil
+            local matchedMove2 = nil
+            
+            -- 1. Check for a single move
             for _, move in ipairs(legalMoves) do
                 local tempBoard = applyMoveToBoard(turnStartBoard, move)
                 if boardsMatch(tempBoard, board3D) then
-                    matchedMove = move
+                    matchedMove1 = move
                     break
                 end
             end
             
-            if matchedMove then
-                -- Apply the mirrored move to the 2D board
+            -- 2. Check for a two-move sequence (Player moved, then Opponent moved rapidly)
+            if not matchedMove1 then
+                for _, move1 in ipairs(legalMoves) do
+                    local tempBoard1 = applyMoveToBoard(turnStartBoard, move1)
+                    local nextTurn = (currentTurn == "White") and "Black" or "White"
+                    local nextLegalMoves = generateLegalMoves(tempBoard1, nextTurn)
+                    
+                    for _, move2 in ipairs(nextLegalMoves) do
+                        local tempBoard2 = applyMoveToBoard(tempBoard1, move2)
+                        if boardsMatch(tempBoard2, board3D) then
+                            matchedMove1 = move1
+                            matchedMove2 = move2
+                            break
+                        end
+                    end
+                    if matchedMove1 then break end
+                end
+            end
+            
+            if matchedMove1 then
+                -- Apply the mirrored move(s) to the 2D board
                 for r=1,8 do for c=1,8 do 
                     squares[r][c].Text = turnStartBoard[r][c]
                     squares[r][c].TextColor3 = getPieceTextColor(getPieceColor(turnStartBoard[r][c]))
                 end end
-                executeMove(matchedMove, currentTurn)
+                
+                executeMove(matchedMove1, currentTurn)
+                
+                if matchedMove2 then
+                    -- currentTurn was flipped by executeMove, so it's correct for move2
+                    executeMove(matchedMove2, currentTurn)
+                end
+                
                 turnStartBoard = copyBoard(squares)
                 clearSuggestionHighlight()
                 boardStableCount = 0
+                
                 -- After mirroring, if it's now the player's turn, suggest a move
                 if not isAutoMoveActive and currentTurn == playerColor and not gamePaused then
                     suggestMoveForHuman()
@@ -1602,6 +2078,10 @@ local function undoLastMove()
         squares[fr][rc].TextColor3=getPieceTextColor(getPieceColor(rp)) 
     end; 
     hasMoved=lm.previousHasMoved; 
+    possibleBooks=copyPossibleBooks(lm.previousPossibleBooks);
+    bookPly=lm.previousBookPly;
+    possible25Books=copyPossibleBooks(lm.previousPossible25Books);
+    book25Ply=lm.previousBook25Ply;
     currentTurn=getPieceColor(mp); 
     
     clearHighlights()
@@ -1691,6 +2171,14 @@ local function createChessGame(isEmpty)
     boardStableCount = 0
     currentPieceMap = {}
     positionHistory = {}
+    possibleBooks = copyPossibleBooks(openingBook[playerColor] or {})
+    bookPly = 1
+    if playerColor == "White" then
+        possible25Books = copyPossibleBooks(twentyFiveMovesBook.White)
+    else
+        possible25Books = copyPossibleBooks(twentyFiveMovesBook.Black)
+    end
+    book25Ply = 1
 	hasMoved = {k=false,K=false,r1=false,r8=false,R1=false,R8=false}
 	if chessBoard then chessBoard:Destroy() end
 	chessBoard=Instance.new("Frame"); chessBoard.Parent,chessBoard.BackgroundColor3,chessBoard.Size,chessBoard.Position,chessBoard.BorderSizePixel=frame,Color3.fromRGB(200,200,200),UDim2.new(0,200,0,200),UDim2.new(0,20,0,80),0
