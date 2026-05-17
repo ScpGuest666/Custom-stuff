@@ -1,6 +1,3 @@
--- PASTE YOUR CLOUDFLARE LINK HERE (Keep the quotes, no slash at the end)
-local POCO_URL = "https://pgxru-175-100-48-137.run.pinggy-free.link"
-
 -- Wait for player to load
 local PlayerService = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -205,7 +202,7 @@ secondFrameLabel.TextScaled = true
 local trainButton = Instance.new("TextButton")
 trainButton.Parent = secondFrame
 trainButton.Size = UDim2.new(1, -10, 0, 25)
-trainButton.Position = UDim2.new(0, 5, 0, 35)
+trainButton.Position = UDim2.new(0, 5, 0, 40)
 trainButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 trainButton.Text = "Train"
 trainButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -214,7 +211,7 @@ trainButton.TextScaled = true
 local switchButton = Instance.new("TextButton")
 switchButton.Parent = secondFrame
 switchButton.Size = UDim2.new(1, -10, 0, 25)
-switchButton.Position = UDim2.new(0, 5, 0, 65)
+switchButton.Position = UDim2.new(0, 5, 0, 75)
 switchButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 switchButton.Text = "Switch Sides"
 switchButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -223,7 +220,7 @@ switchButton.TextScaled = true
 local flipButton = Instance.new("TextButton")
 flipButton.Parent = secondFrame
 flipButton.Size = UDim2.new(1, -10, 0, 25)
-flipButton.Position = UDim2.new(0, 5, 0, 95)
+flipButton.Position = UDim2.new(0, 5, 0, 110)
 flipButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 flipButton.Text = "Flip Board"
 flipButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -232,7 +229,7 @@ flipButton.TextScaled = true
 local moveButton = Instance.new("TextButton")
 moveButton.Parent = secondFrame
 moveButton.Size = UDim2.new(1, -10, 0, 25)
-moveButton.Position = UDim2.new(0, 5, 0, 125)
+moveButton.Position = UDim2.new(0, 5, 0, 145)
 moveButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 moveButton.Text = "Auto Move"
 moveButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -241,7 +238,7 @@ moveButton.TextScaled = true
 local switchApiButton = Instance.new("TextButton")
 switchApiButton.Parent = secondFrame
 switchApiButton.Size = UDim2.new(1, -10, 0, 25)
-switchApiButton.Position = UDim2.new(0, 5, 0, 155)
+switchApiButton.Position = UDim2.new(0, 5, 0, 180)
 switchApiButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 switchApiButton.Text = "API: Saychess"
 switchApiButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -255,7 +252,7 @@ local MIN_STOCKFISH_DEPTH = 0 -- 0 means Local AI only (No API)
 local depthMinusBtn = Instance.new("TextButton")
 depthMinusBtn.Parent = secondFrame
 depthMinusBtn.Size = UDim2.new(0, 30, 0, 25)
-depthMinusBtn.Position = UDim2.new(0, 5, 0, 185)
+depthMinusBtn.Position = UDim2.new(0, 5, 0, 215)
 depthMinusBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 depthMinusBtn.Text = "-"
 depthMinusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -264,7 +261,7 @@ depthMinusBtn.TextScaled = true
 local depthTextBox = Instance.new("TextBox")
 depthTextBox.Parent = secondFrame
 depthTextBox.Size = UDim2.new(0, 70, 0, 25)
-depthTextBox.Position = UDim2.new(0, 40, 0, 185)
+depthTextBox.Position = UDim2.new(0, 40, 0, 215)
 depthTextBox.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
 depthTextBox.Text = "Depth: " .. stockfishDepth
 depthTextBox.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -274,7 +271,7 @@ depthTextBox.ClearTextOnFocus = false
 local depthPlusBtn = Instance.new("TextButton")
 depthPlusBtn.Parent = secondFrame
 depthPlusBtn.Size = UDim2.new(0, 30, 0, 25)
-depthPlusBtn.Position = UDim2.new(0, 115, 0, 185)
+depthPlusBtn.Position = UDim2.new(0, 115, 0, 215)
 depthPlusBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 depthPlusBtn.Text = "+"
 depthPlusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -309,81 +306,6 @@ depthTextBox.FocusLost:Connect(function()
         stockfishDepth = math.clamp(math.floor(num), MIN_STOCKFISH_DEPTH, MAX_STOCKFISH_DEPTH)
     end
     updateDepthDisplay()
-end)
-
--- Bot Selection Controls
-local bot1Api = "None"
-local bot2Api = "None"
-local whiteApi = "None"
-local blackApi = "None"
-
-local bot1Button = Instance.new("TextButton")
-bot1Button.Parent = secondFrame
-bot1Button.Size = UDim2.new(1, -10, 0, 25)
-bot1Button.Position = UDim2.new(0, 5, 0, 215)
-bot1Button.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-bot1Button.Text = "Bot 1: None"
-bot1Button.TextColor3 = Color3.fromRGB(255, 255, 255)
-bot1Button.TextScaled = true
-
-local bot2Button = Instance.new("TextButton")
-bot2Button.Parent = secondFrame
-bot2Button.Size = UDim2.new(1, -10, 0, 25)
-bot2Button.Position = UDim2.new(0, 5, 0, 245)
-bot2Button.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-bot2Button.Text = "Bot 2: None"
-bot2Button.TextColor3 = Color3.fromRGB(255, 255, 255)
-bot2Button.TextScaled = true
-
-local engineOptions = {"None", "Saychess", "Stockfish", "ChessAPI", "Opening Book", "25 moves", "Local API", "ShashChess (Poco)"}
-local function getNextEngine(current)
-    for i, v in ipairs(engineOptions) do
-        if v == current then return engineOptions[(i % #engineOptions) + 1] end
-    end
-    return "None"
-end
-
-bot1Button.MouseButton1Click:Connect(function()
-    bot1Api = getNextEngine(bot1Api)
-    bot1Button.Text = "Bot 1: " .. bot1Api
-end)
-
-bot2Button.MouseButton1Click:Connect(function()
-    bot2Api = getNextEngine(bot2Api)
-    bot2Button.Text = "Bot 2: " .. bot2Api
-end)
-
--- Test Poco Connection Button
-local testPocoBtn = Instance.new("TextButton")
-testPocoBtn.Parent = secondFrame
-testPocoBtn.Size = UDim2.new(1, -10, 0, 25)
-testPocoBtn.Position = UDim2.new(0, 5, 0, 275)
-testPocoBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-testPocoBtn.Text = "Test Poco Connection"
-testPocoBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-testPocoBtn.TextScaled = true
-
-testPocoBtn.MouseButton1Click:Connect(function()
-    testPocoBtn.Text = "Testing..."
-    local url = POCO_URL .. "/getmove?fen=rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR%20w%20KQkq%20-%200%201&depth=1"
-    
-    local success, res = pcall(function()
-        if req then return req({Url = url, Method = "GET"}).Body
-        elseif type(game.HttpGet) == "function" then return game:HttpGet(url) end
-    end)
-    
-    if success and res and res ~= "" then
-        testPocoBtn.Text = "Connected! ("..res..")"
-        testPocoBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
-    else
-        testPocoBtn.Text = "Failed! Check Link"
-        testPocoBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
-    end
-    
-    task.delay(3, function()
-        testPocoBtn.Text = "Test Poco Connection"
-        testPocoBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-    end)
 end)
 
 -- Button Layout Adjustment (main frame buttons)
@@ -946,10 +868,10 @@ local function uciToMove(uci)
 end
 
 local function getBestMoveFromAPI(fen, apiOverride)
-    local apiUsed = apiOverride or currentApi
-    if stockfishDepth <= 0 or apiUsed == "Local API" then return nil end
+    if stockfishDepth <= 0 or currentApi == "Local API" then return nil end
     
     local bestMoveStr = nil
+    local apiUsed = apiOverride or currentApi
     local depthUsed = stockfishDepth
 
     local function fetchGet(url)
@@ -978,20 +900,7 @@ local function getBestMoveFromAPI(fen, apiOverride)
         return nil
     end
 
-    if apiUsed == "ShashChess (Poco)" then
-        local completed = false
-        task.spawn(function()
-            local url = POCO_URL .. "/getmove?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(depthUsed)
-            local body = fetchGet(url)
-            if body and body ~= "" then
-                bestMoveStr = body
-            end
-            completed = true
-        end)
-        local t = 0
-        while not completed and t < 250 do t = t + 1 task.wait(0.1) end
-        
-    elseif apiUsed == "Stockfish" then
+    if apiUsed == "Stockfish" then
         local completed = false
         task.spawn(function()
             local body = fetchGet("https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(depthUsed))
@@ -1325,18 +1234,6 @@ local function suggestMoveForHuman()
     local pCount = countPieces(squares)
     local isEndgame = (pCount <= 12)
     
-    local fen = getFEN()
-    local saychessPromise = nil
-    
-    -- Secretly pre-fetch Saychess move if we are using a Book API
-    if not isEndgame and (currentApi == "Opening Book" or currentApi == "25 moves") then
-        saychessPromise = {done = false, move = nil}
-        task.spawn(function()
-            saychessPromise.move = getBestMoveFromAPI(fen, "Saychess")
-            saychessPromise.done = true
-        end)
-    end
-    
     if isEndgame then
         if pCount <= 7 then
             statusLabel.Text = "Thinking... (Lichess Syzygy)"
@@ -1396,6 +1293,7 @@ local function suggestMoveForHuman()
         end
 
         local success, err = pcall(function()
+            local fen = getFEN()
             local uciMove = nil
             
             if isEndgame then
@@ -1435,19 +1333,7 @@ local function suggestMoveForHuman()
                 end
                 
                 if not finalSuggestion and apiToCall ~= "Opening Book" and apiToCall ~= "25 moves" then
-                    if apiToCall == "Saychess" and saychessPromise then
-                        -- Wait for the secretly pre-fetched move
-                        local t = 0
-                        while not saychessPromise.done and t < 250 do
-                            t = t + 1
-                            task.wait(0.1)
-                        end
-                        uciMove = saychessPromise.move
-                        if uciMove then onLiveUpdate(uciMove) end
-                    else
-                        uciMove = getBestMoveFromAPI(fen, apiToCall)
-                        if uciMove then onLiveUpdate(uciMove) end
-                    end
+                    uciMove = getBestMoveFromAPI(fen, apiToCall)
                 end
             end
             
@@ -1615,23 +1501,6 @@ local function executeAIMove(color)
     local pCount = countPieces(squares)
     local isEndgame = (pCount <= 12)
     
-    local apiToCall = currentApi
-    if isTraining then
-        apiToCall = (color == "White") and whiteApi or blackApi
-    end
-    
-    local fen = getFEN()
-    local saychessPromise = nil
-    
-    -- Secretly pre-fetch Saychess move if we are using a Book API
-    if not isEndgame and (apiToCall == "Opening Book" or apiToCall == "25 moves") then
-        saychessPromise = {done = false, move = nil}
-        task.spawn(function()
-            saychessPromise.move = getBestMoveFromAPI(fen, "Saychess")
-            saychessPromise.done = true
-        end)
-    end
-    
     if isEndgame then
         if pCount <= 7 then
             statusLabel.Text = "Thinking... (Lichess Syzygy)"
@@ -1639,24 +1508,24 @@ local function executeAIMove(color)
             statusLabel.Text = "Thinking... (Lc0)"
         end
     else
-        if apiToCall == "Opening Book" then
+        if currentApi == "Opening Book" then
             if #possibleBooks > 0 then
                 statusLabel.Text = "Thinking... (Opening Book)"
             else
                 statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - Book Exhausted)"
             end
-        elseif apiToCall == "25 moves" then
+        elseif currentApi == "25 moves" then
             if #possible25Books > 0 then
                 statusLabel.Text = "Thinking... (25 Moves Book)"
             else
                 statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - 25 Moves Exhausted)"
             end
-        elseif apiToCall == "Saychess" and stockfishDepth >= 15 then
+        elseif currentApi == "Saychess" and stockfishDepth >= 15 then
             statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - Free version may not support D15)"
-        elseif apiToCall == "Local API" then
+        elseif currentApi == "Local API" then
             statusLabel.Text = "Thinking... (Local AI)"
         else
-            statusLabel.Text = "Thinking... (" .. apiToCall .. " D" .. stockfishDepth .. ")"
+            statusLabel.Text = "Thinking... (" .. currentApi .. " D" .. stockfishDepth .. ")"
         end
     end
     
@@ -1671,11 +1540,13 @@ local function executeAIMove(color)
     task.wait(0.05) 
     
     local success, err = pcall(function()
+        local fen = getFEN()
         local uciMove = nil
         
         if isEndgame then
             uciMove, _ = getEndgameSuggestion(fen, pCount)
         else
+            local apiToCall = currentApi
             if apiToCall == "Opening Book" then
                 if #possibleBooks > 0 then
                     local chosenBook = possibleBooks[math.random(1, #possibleBooks)]
@@ -1713,17 +1584,7 @@ local function executeAIMove(color)
             end
             
             if apiToCall ~= "Opening Book" and apiToCall ~= "25 moves" then
-                if apiToCall == "Saychess" and saychessPromise then
-                    -- Wait for the secretly pre-fetched move
-                    local t = 0
-                    while not saychessPromise.done and t < 250 do
-                        t = t + 1
-                        task.wait(0.1)
-                    end
-                    uciMove = saychessPromise.move
-                else
-                    uciMove = getBestMoveFromAPI(fen, apiToCall)
-                end
+                uciMove = getBestMoveFromAPI(fen, apiToCall)
             end
         end
         
@@ -1813,19 +1674,8 @@ end
 trainButton.MouseButton1Click:Connect(function()
     isTraining = not isTraining
     trainButton.Text = isTraining and "Stop Training" or "Train"
-    if isTraining then
-        local b1 = (bot1Api ~= "None") and bot1Api or currentApi
-        local b2 = (bot2Api ~= "None") and bot2Api or currentApi
-        if math.random() > 0.5 then
-            whiteApi = b1
-            blackApi = b2
-        else
-            whiteApi = b2
-            blackApi = b1
-        end
-        if not gamePaused then
-            task.spawn(trainingLoop)
-        end
+    if isTraining and not gamePaused then
+        task.spawn(trainingLoop)
     end
 end)
 
@@ -1879,11 +1729,6 @@ switchApiButton.MouseButton1Click:Connect(function()
         MAX_STOCKFISH_DEPTH = 15
         if stockfishDepth > 15 then stockfishDepth = 15; updateDepthDisplay() end
     elseif currentApi == "Local API" then
-        currentApi = "ShashChess (Poco)"
-        switchApiButton.Text = "API: ShashChess (Poco)"
-        MAX_STOCKFISH_DEPTH = 15
-        if stockfishDepth > 15 then stockfishDepth = 15; updateDepthDisplay() end
-    elseif currentApi == "ShashChess (Poco)" then
         currentApi = "Saychess"
         switchApiButton.Text = "API: Saychess"
         MAX_STOCKFISH_DEPTH = 15
