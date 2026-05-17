@@ -1,3 +1,6 @@
+-- PASTE YOUR CLOUDFLARE LINK HERE (Keep the quotes, no slash at the end)
+local POCO_URL = "https://pgxru-175-100-48-137.run.pinggy-free.link"
+
 -- Wait for player to load
 local PlayerService = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -900,7 +903,20 @@ local function getBestMoveFromAPI(fen, apiOverride)
         return nil
     end
 
-    if apiUsed == "Stockfish" then
+    if apiUsed == "ShashChess (Poco)" then
+        local completed = false
+        task.spawn(function()
+            local url = POCO_URL .. "/getmove?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(depthUsed)
+            local body = fetchGet(url)
+            if body and body ~= "" then
+                bestMoveStr = body:match("^%s*(%S+)") or body
+            end
+            completed = true
+        end)
+        local t = 0
+        while not completed and t < 250 do t = t + 1 task.wait(0.1) end
+        
+    elseif apiUsed == "Stockfish" then
         local completed = false
         task.spawn(function()
             local body = fetchGet("https://stockfish.online/api/s/v2.php?fen=" .. HttpService:UrlEncode(fen) .. "&depth=" .. tostring(depthUsed))
@@ -1234,6 +1250,18 @@ local function suggestMoveForHuman()
     local pCount = countPieces(squares)
     local isEndgame = (pCount <= 12)
     
+    local fen = getFEN()
+    local saychessPromise = nil
+    
+    -- Secretly pre-fetch Saychess move if we are using a Book API
+    if not isEndgame and (currentApi == "Opening Book" or currentApi == "25 moves") then
+        saychessPromise = {done = false, move = nil}
+        task.spawn(function()
+            saychessPromise.move = getBestMoveFromAPI(fen, "Saychess")
+            saychessPromise.done = true
+        end)
+    end
+    
     if isEndgame then
         if pCount <= 7 then
             statusLabel.Text = "Thinking... (Lichess Syzygy)"
@@ -1257,6 +1285,8 @@ local function suggestMoveForHuman()
             statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - Free version may not support D15)"
         elseif currentApi == "Local API" then
             statusLabel.Text = "Thinking... (Local AI)"
+        elseif currentApi == "ShashChess (Poco)" then
+            statusLabel.Text = "Thinking... (ShashChess D" .. stockfishDepth .. ")"
         else
             statusLabel.Text = "Thinking... (" .. currentApi .. " D" .. stockfishDepth .. ")"
         end
@@ -1293,7 +1323,6 @@ local function suggestMoveForHuman()
         end
 
         local success, err = pcall(function()
-            local fen = getFEN()
             local uciMove = nil
             
             if isEndgame then
@@ -1333,7 +1362,19 @@ local function suggestMoveForHuman()
                 end
                 
                 if not finalSuggestion and apiToCall ~= "Opening Book" and apiToCall ~= "25 moves" then
-                    uciMove = getBestMoveFromAPI(fen, apiToCall)
+                    if apiToCall == "Saychess" and saychessPromise then
+                        -- Wait for the secretly pre-fetched move
+                        local t = 0
+                        while not saychessPromise.done and t < 250 do
+                            t = t + 1
+                            task.wait(0.1)
+                        end
+                        uciMove = saychessPromise.move
+                        if uciMove then onLiveUpdate(uciMove) end
+                    else
+                        uciMove = getBestMoveFromAPI(fen, apiToCall)
+                        if uciMove then onLiveUpdate(uciMove) end
+                    end
                 end
             end
             
@@ -1501,6 +1542,18 @@ local function executeAIMove(color)
     local pCount = countPieces(squares)
     local isEndgame = (pCount <= 12)
     
+    local fen = getFEN()
+    local saychessPromise = nil
+    
+    -- Secretly pre-fetch Saychess move if we are using a Book API
+    if not isEndgame and (currentApi == "Opening Book" or currentApi == "25 moves") then
+        saychessPromise = {done = false, move = nil}
+        task.spawn(function()
+            saychessPromise.move = getBestMoveFromAPI(fen, "Saychess")
+            saychessPromise.done = true
+        end)
+    end
+    
     if isEndgame then
         if pCount <= 7 then
             statusLabel.Text = "Thinking... (Lichess Syzygy)"
@@ -1524,6 +1577,8 @@ local function executeAIMove(color)
             statusLabel.Text = "Thinking... (Saychess D" .. stockfishDepth .. " - Free version may not support D15)"
         elseif currentApi == "Local API" then
             statusLabel.Text = "Thinking... (Local AI)"
+        elseif currentApi == "ShashChess (Poco)" then
+            statusLabel.Text = "Thinking... (ShashChess D" .. stockfishDepth .. ")"
         else
             statusLabel.Text = "Thinking... (" .. currentApi .. " D" .. stockfishDepth .. ")"
         end
@@ -1540,7 +1595,6 @@ local function executeAIMove(color)
     task.wait(0.05) 
     
     local success, err = pcall(function()
-        local fen = getFEN()
         local uciMove = nil
         
         if isEndgame then
@@ -1584,7 +1638,17 @@ local function executeAIMove(color)
             end
             
             if apiToCall ~= "Opening Book" and apiToCall ~= "25 moves" then
-                uciMove = getBestMoveFromAPI(fen, apiToCall)
+                if apiToCall == "Saychess" and saychessPromise then
+                    -- Wait for the secretly pre-fetched move
+                    local t = 0
+                    while not saychessPromise.done and t < 250 do
+                        t = t + 1
+                        task.wait(0.1)
+                    end
+                    uciMove = saychessPromise.move
+                else
+                    uciMove = getBestMoveFromAPI(fen, apiToCall)
+                end
             end
         end
         
@@ -1729,6 +1793,11 @@ switchApiButton.MouseButton1Click:Connect(function()
         MAX_STOCKFISH_DEPTH = 15
         if stockfishDepth > 15 then stockfishDepth = 15; updateDepthDisplay() end
     elseif currentApi == "Local API" then
+        currentApi = "ShashChess (Poco)"
+        switchApiButton.Text = "API: ShashChess (Poco)"
+        MAX_STOCKFISH_DEPTH = 15
+        if stockfishDepth > 15 then stockfishDepth = 15; updateDepthDisplay() end
+    elseif currentApi == "ShashChess (Poco)" then
         currentApi = "Saychess"
         switchApiButton.Text = "API: Saychess"
         MAX_STOCKFISH_DEPTH = 15
