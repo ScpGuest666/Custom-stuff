@@ -1,5 +1,5 @@
 -- PASTE YOUR CLOUDFLARE LINK HERE (Keep the quotes, no slash at the end)
-local POCO_URL = "https://pgxru-175-100-48-137.run.pinggy-free.link"
+local POCO_URL = "https://00d5714adb5c53.lhr.life"
 
 -- Wait for player to load
 local PlayerService = game:GetService("Players")
