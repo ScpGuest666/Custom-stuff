@@ -1,0 +1,644 @@
+-- Wait for player to load
+local PlayerService = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local player = PlayerService.LocalPlayer
+if not player then
+    player = PlayerService.PlayerAdded:Wait()
+end
+
+-- Wait for player GUI to be ready
+player:WaitForChild("PlayerGui")
+
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = player.PlayerGui
+screenGui.ResetOnSpawn = false
+screenGui.Name = "8BallProGui"
+
+-- Create Frame
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+frame.Size = UDim2.new(0, 200, 0, 100)
+frame.Position = UDim2.new(0.3, 0, 0.5, -50)
+frame.Active = true
+frame.Draggable = true
+
+-- Create On Button
+local onButton = Instance.new("TextButton")
+onButton.Parent = frame
+onButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+onButton.Size = UDim2.new(0, 80, 0, 30)
+onButton.Position = UDim2.new(0, 10, 0, 20)
+onButton.Text = "On"
+onButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+onButton.TextScaled = true
+
+-- Create Off Button
+local offButton = Instance.new("TextButton")
+offButton.Parent = frame
+offButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+offButton.Size = UDim2.new(0, 80, 0, 30)
+offButton.Position = UDim2.new(0, 110, 0, 20)
+offButton.Text = "Off"
+offButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+offButton.TextScaled = true
+
+-- Create Destroy Button
+local destroyButton = Instance.new("TextButton")
+destroyButton.Parent = frame
+destroyButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+destroyButton.Size = UDim2.new(0, 160, 0, 30)
+destroyButton.Position = UDim2.new(0, 20, 0, 60)
+destroyButton.Text = "Destroy"
+destroyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+destroyButton.TextScaled = true
+
+-- Create Status Indicator
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = frame
+statusLabel.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+statusLabel.Size = UDim2.new(0, 200, 0, 30)
+statusLabel.Position = UDim2.new(0, 0, 0, -30)
+statusLabel.Text = "Status: Offline"
+statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+statusLabel.TextScaled = true
+
+-- Global Variables
+local activeConnections = {}
+local highlights = {}
+local trajectoryParts = {}
+local ghostBalls = {}
+local ghostLines = {}
+local cachedBalls = {}
+local cachedSticks = {}
+local isHighlighting = false
+local currentSessionId = 0
+local lastTableBuildTime = 0
+
+-- Virtual Table Variables
+local virtualTableFolder = nil
+local virtualTableCenter = Vector3.zero
+
+-- Helper function to identify if a part is a pool ball
+local function isBall(obj)
+    if not obj:IsA("BasePart") then return false end
+    if obj.Size.Magnitude > 5 then return false end
+    
+    local name = obj.Name:lower()
+    if name:find("ball") or name == "cue" or name == "white" then return true end
+    
+    local num = tonumber(obj.Name)
+    if num and num >= 1 and num <= 15 then return true end
+    if obj:IsA("Part") and obj.Shape == Enum.PartType.Ball then return true end
+    
+    return false
+end
+
+-- Helper function to identify the cue stick
+local function isCueStick(obj)
+    if not obj:IsA("BasePart") then return false end
+    if obj.Size.Magnitude <= 2.5 then return false end
+    
+    local name = obj.Name:lower()
+    local parentName = obj.Parent and obj.Parent.Name:lower() or ""
+    
+    local isNamedCue = (name:find("cue") or name:find("stick") or name:find("aim") or parentName:find("cue") or parentName:find("stick"))
+    if not isNamedCue then return false end
+    
+    local isNotBall = not (name:find("ball") or parentName:find("ball"))
+    if not isNotBall then return false end
+    
+    local parent = obj.Parent
+    while parent and parent ~= workspace do
+        if parent:FindFirstChildOfClass("Humanoid") then return false end
+        parent = parent.Parent
+    end
+    
+    return true
+end
+
+-- Helper function to determine ball type and assign a color
+local function getBallInfo(ball)
+    local name = ball.Name:lower()
+    local num = tonumber(ball.Name)
+    
+    if name:find("cue") or name == "white" or name == "0" then return Color3.fromRGB(255, 255, 255) end
+    if num then
+        if num == 8 then 
+            -- MODIFIED: Pulse between Red and Yellow for the 8-ball
+            local pulseAlpha = (math.sin(os.clock() * 6) + 1) / 2
+            return Color3.fromRGB(255, 0, 0):Lerp(Color3.fromRGB(255, 255, 0), pulseAlpha)
+        elseif num >= 1 and num <= 7 then return Color3.fromRGB(255, 50, 50)
+        elseif num >= 9 and num <= 15 then return Color3.fromRGB(255, 255, 50)
+        end
+    end
+    return Color3.fromRGB(0, 255, 255)
+end
+
+local function isCueBall(ball)
+    return getBallInfo(ball) == Color3.fromRGB(255, 255, 255)
+end
+
+-- Refresh cache (Optimized to prevent freezing)
+local function refreshCache()
+    local tempBalls = {}
+    local tempSticks = {}
+    local count = 0
+    
+    local descendants = workspace:GetDescendants()
+    for i = 1, #descendants do
+        local obj = descendants[i]
+        if isBall(obj) then 
+            table.insert(tempBalls, obj)
+        elseif isCueStick(obj) then 
+            table.insert(tempSticks, obj) 
+        end
+        
+        count = count + 1
+        if count >= 1500 then
+            count = 0
+            task.wait()
+        end
+    end
+    
+    cachedBalls = tempBalls
+    cachedSticks = tempSticks
+end
+
+-- Highlight management
+local function getOrCreateHighlight(part)
+    if highlights[part] then return highlights[part] end
+    local highlight = Instance.new("Highlight")
+    highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+    highlight.FillTransparency = 0.4
+    highlight.OutlineTransparency = 0.1
+    highlight.Parent = part
+    highlights[part] = highlight
+    return highlight
+end
+
+local function clearHighlights()
+    for _, highlight in pairs(highlights) do
+        if highlight then highlight:Destroy() end
+    end
+    table.clear(highlights)
+end
+
+-- Trajectory Line Management
+local function getTrajectoryPart(index)
+    if not trajectoryParts[index] then
+        local p = Instance.new("Part")
+        p.Anchored = true
+        p.CanCollide = false
+        p.Material = Enum.Material.SmoothPlastic
+        p.Parent = workspace
+        trajectoryParts[index] = p
+    end
+    return trajectoryParts[index]
+end
+
+local function hideTrajectories()
+    for _, p in pairs(trajectoryParts) do p.Transparency = 1 end
+end
+
+local function drawLine(index, startPos, endPos, color, tableY)
+    local p = getTrajectoryPart(index)
+    local flatStart = Vector3.new(startPos.X, tableY + 0.1, startPos.Z)
+    local flatEnd = Vector3.new(endPos.X, tableY + 0.1, endPos.Z)
+    
+    local dist = (flatEnd - flatStart).Magnitude
+    if dist < 0.01 then p.Transparency = 1 return end
+    
+    p.Size = Vector3.new(0.15, 0.15, dist)
+    p.CFrame = CFrame.lookAt(flatStart + (flatEnd - flatStart)/2, flatEnd)
+    p.Color = color
+    p.Transparency = 0.5
+end
+
+-- Ghost ball (flat disc) and direction line
+local function clearGhostVisuals()
+    for _, g in pairs(ghostBalls) do g:Destroy() end
+    for _, l in pairs(ghostLines) do l:Destroy() end
+    table.clear(ghostBalls)
+    table.clear(ghostLines)
+end
+
+local function drawGhostBall(position, color, tableY, radius)
+    local flatPos = Vector3.new(position.X, tableY + 0.05, position.Z)
+    local ballPart = Instance.new("Part")
+    ballPart.Shape = Enum.PartType.Cylinder
+    local diameter = radius and (radius * 2) or 0.7
+    ballPart.Size = Vector3.new(0.05, diameter, diameter)
+    ballPart.CFrame = CFrame.new(flatPos) * CFrame.Angles(0, 0, math.rad(90))
+    ballPart.Anchored = true
+    ballPart.CanCollide = false
+    ballPart.Color = color
+    ballPart.Material = Enum.Material.SmoothPlastic
+    ballPart.Transparency = 0.15
+    ballPart.Parent = workspace
+    table.insert(ghostBalls, ballPart)
+end
+
+local function drawGhostLine(startPos, direction, length, color, tableY)
+    local flatStart = Vector3.new(startPos.X, tableY + 0.1, startPos.Z)
+    local flatEnd = flatStart + direction * length
+    local dist = length
+    if dist < 0.01 then return end
+    local linePart = Instance.new("Part")
+    linePart.Anchored = true
+    linePart.CanCollide = false
+    linePart.Material = Enum.Material.SmoothPlastic
+    linePart.Size = Vector3.new(0.12, 0.12, dist)
+    linePart.CFrame = CFrame.lookAt(flatStart + (flatEnd - flatStart)/2, flatEnd)
+    linePart.Color = color
+    linePart.Transparency = 0.2
+    linePart.Parent = workspace
+    table.insert(ghostLines, linePart)
+end
+
+-- Mathematical Ray-Sphere Intersection for precise ball collision
+local function getBallIntersection(rayOrigin, rayDir, ballRadius, tableY, ignoreBall)
+    local closestDist = math.huge
+    local closestBall = nil
+    local flatOrigin = rayOrigin * Vector3.new(1, 0, 1)
+    
+    for _, ball in ipairs(cachedBalls) do
+        if ball ~= ignoreBall and ball.Parent and ball.Transparency < 0.1 then
+            if math.abs(ball.Position.Y - tableY) < 0.8 then
+                local flatBallPos = ball.Position * Vector3.new(1, 0, 1)
+                local L = flatBallPos - flatOrigin
+                local tca = L:Dot(rayDir)
+                if tca > 0 then
+                    local d2 = L:Dot(L) - tca * tca
+                    local radius2 = (ballRadius * 2) ^ 2
+                    if d2 <= radius2 then
+                        local thc = math.sqrt(radius2 - d2)
+                        local t0 = tca - thc
+                        if t0 > 0 and t0 < closestDist then
+                            closestDist = t0
+                            closestBall = ball
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return closestBall, closestDist
+end
+
+-- Build Virtual Table (Walls & Holes)
+local function buildVirtualTable(cf, sizeX, sizeZ)
+    if virtualTableFolder then virtualTableFolder:Destroy() end
+    
+    virtualTableFolder = Instance.new("Folder")
+    virtualTableFolder.Name = "VirtualPoolTable"
+    virtualTableFolder.Parent = workspace
+    
+    virtualTableCenter = cf.Position
+    
+    local function createPart(name, size, offset, isHole, color)
+        local p = Instance.new("Part")
+        if isHole then p.Shape = Enum.PartType.Cylinder end
+        p.Name = name
+        p.Size = size
+        if isHole then
+            p.CFrame = cf * CFrame.new(offset) * CFrame.Angles(0, 0, math.rad(90))
+        else
+            p.CFrame = cf * CFrame.new(offset)
+        end
+        p.Anchored = true
+        p.CanCollide = false
+        p.Color = color
+        p.Transparency = 0.8 -- Visible enough to verify, but faint enough not to annoy
+        p.Material = Enum.Material.SmoothPlastic
+        p.CastShadow = false
+        p.Parent = virtualTableFolder
+    end
+    
+    local wallHeight = 0.8
+    local wallThickness = 0.95
+    local platformColor = Color3.fromRGB(0, 255, 0)
+    local holeColor = Color3.fromRGB(255, 255, 255)
+    
+    local lengthReduction = 2.0
+    
+    -- Side walls
+    createPart("CustomWall", Vector3.new(wallThickness, wallHeight, sizeZ - lengthReduction), Vector3.new(sizeX/2, 0, 0), false, platformColor)
+    createPart("CustomWall", Vector3.new(wallThickness, wallHeight, sizeZ - lengthReduction), Vector3.new(-sizeX/2, 0, 0), false, platformColor)
+    
+    -- Front and back walls split for middle gap
+    local gap = 1.5
+    local totalWallLength = sizeX - lengthReduction
+    local segmentLength = (totalWallLength - gap) / 2
+    
+    if segmentLength > 0 then
+        local leftOffsetX = -(totalWallLength / 2) + (segmentLength / 2)
+        local rightOffsetX = (totalWallLength / 2) - (segmentLength / 2)
+        
+        createPart("CustomWall", Vector3.new(segmentLength, wallHeight, wallThickness), Vector3.new(leftOffsetX, 0, sizeZ/2), false, platformColor)
+        createPart("CustomWall", Vector3.new(segmentLength, wallHeight, wallThickness), Vector3.new(rightOffsetX, 0, sizeZ/2), false, platformColor)
+        createPart("CustomWall", Vector3.new(segmentLength, wallHeight, wallThickness), Vector3.new(leftOffsetX, 0, -sizeZ/2), false, platformColor)
+        createPart("CustomWall", Vector3.new(segmentLength, wallHeight, wallThickness), Vector3.new(rightOffsetX, 0, -sizeZ/2), false, platformColor)
+    else
+        createPart("CustomWall", Vector3.new(sizeX - lengthReduction, wallHeight, wallThickness), Vector3.new(0, 0, sizeZ/2), false, platformColor)
+        createPart("CustomWall", Vector3.new(sizeX - lengthReduction, wallHeight, wallThickness), Vector3.new(0, 0, -sizeZ/2), false, platformColor)
+    end
+    
+    -- Corner holes
+    local cornerHoleDiameter = 1.5
+    local cornerHoleSize = Vector3.new(wallHeight, cornerHoleDiameter, cornerHoleDiameter)
+    createPart("CustomHole", cornerHoleSize, Vector3.new(sizeX/2, 0, sizeZ/2), true, holeColor)
+    createPart("CustomHole", cornerHoleSize, Vector3.new(-sizeX/2, 0, sizeZ/2), true, holeColor)
+    createPart("CustomHole", cornerHoleSize, Vector3.new(sizeX/2, 0, -sizeZ/2), true, holeColor)
+    createPart("CustomHole", cornerHoleSize, Vector3.new(-sizeX/2, 0, -sizeZ/2), true, holeColor)
+    
+    -- Middle holes
+    local middleHoleDiameter = 1.0
+    local middleHoleSize = Vector3.new(wallHeight, middleHoleDiameter, middleHoleDiameter)
+    if sizeX > sizeZ then
+        createPart("CustomHole", middleHoleSize, Vector3.new(0, 0, (sizeZ/2) + 0.25), true, holeColor)
+        createPart("CustomHole", middleHoleSize, Vector3.new(0, 0, -(sizeZ/2) - 0.25), true, holeColor)
+    else
+        createPart("CustomHole", middleHoleSize, Vector3.new((sizeX/2) + 0.25, 0, 0), true, holeColor)
+        createPart("CustomHole", middleHoleSize, Vector3.new(-(sizeX/2) - 0.25, 0, 0), true, holeColor)
+    end
+end
+
+-- Ensure the virtual table is built ONLY under the active cue ball
+local function ensureVirtualTable(activeCueBall)
+    if not isHighlighting or not activeCueBall then return end
+    
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    
+    local ignoreList = {player.Character}
+    for _, b in ipairs(cachedBalls) do
+        table.insert(ignoreList, b)
+    end
+    rayParams.FilterDescendantsInstances = ignoreList
+    
+    -- Raycast straight down from the active cue ball
+    local hit = workspace:Raycast(activeCueBall.Position, Vector3.new(0, -5, 0), rayParams)
+    
+    if hit and hit.Instance then
+        local tablePart = hit.Instance
+        local sx, sz = tablePart.Size.X, tablePart.Size.Z
+        
+        -- STRICT SIZE FILTER: A standard pool table is usually between 8 and 25 studs.
+        -- If it's bigger than 40 (like the floor) or smaller than 4 (like a floor plank), IGNORE IT.
+        if sx > 40 or sz > 40 or sx < 4 or sz < 4 then
+            return 
+        end
+        
+        local cf = CFrame.new(tablePart.Position.X, hit.Position.Y, tablePart.Position.Z) * tablePart.CFrame.Rotation
+        
+        if not virtualTableFolder or (cf.Position - virtualTableCenter).Magnitude > 1 then
+            if tick() - lastTableBuildTime > 1 then
+                buildVirtualTable(cf, sx, sz)
+                lastTableBuildTime = tick()
+            end
+        end
+    end
+end
+
+-- Main Update Loop
+local function updateHighlights()
+    if not isHighlighting then return end
+    
+    local character = player.Character
+    local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return end
+    
+    local rootPos = rootPart.Position
+    local partsToHighlight = {}
+    
+    local activeCueBall = nil
+    local activeStick = nil
+    local minStickPlayerDist = math.huge
+    
+    for _, stick in ipairs(cachedSticks) do
+        if stick and stick.Parent then
+            local stickPlayerDist = (stick.Position - rootPos).Magnitude
+            if stickPlayerDist < minStickPlayerDist then
+                
+                local closestBall = nil
+                local minBallDist = 15
+                for _, ball in ipairs(cachedBalls) do
+                    if isCueBall(ball) and ball.Parent and ball.Transparency < 0.1 then
+                        local ballDist = (stick.Position - ball.Position).Magnitude
+                        if ballDist < minBallDist then
+                            minBallDist = ballDist
+                            closestBall = ball
+                        end
+                    end
+                end
+                
+                if closestBall then
+                    minStickPlayerDist = stickPlayerDist
+                    activeStick = stick
+                    activeCueBall = closestBall
+                end
+            end
+        end
+    end
+    
+    if activeStick then
+        partsToHighlight[activeStick] = true
+        local highlight = getOrCreateHighlight(activeStick)
+        highlight.FillColor = Color3.fromRGB(170, 0, 255)
+    end
+    
+    hideTrajectories()
+    clearGhostVisuals()
+    
+    -- Only attempt to build the table directly under the active cue ball
+    ensureVirtualTable(activeCueBall)
+    
+    if activeCueBall and activeStick and virtualTableFolder then
+        local tableY = virtualTableCenter.Y
+        local stickToBallDist = (activeCueBall.Position - activeStick.Position).Magnitude
+        
+        if stickToBallDist < 25 then
+            local aimDir = (activeCueBall.Position - activeStick.Position) * Vector3.new(1, 0, 1)
+            if aimDir.Magnitude > 0 then
+                aimDir = aimDir.Unit
+                local ballRadius = activeCueBall.Size.X / 2
+                
+                local rayParams = RaycastParams.new()
+                rayParams.FilterType = Enum.RaycastFilterType.Include
+                rayParams.FilterDescendantsInstances = {virtualTableFolder}
+                
+                local lineIndex = 1
+                local maxLinesAllowed = 30
+                
+                local function simulatePath(startPos, direction, isCue, ignoreBall, maxBounces, color)
+                    local currentPos = startPos
+                    local currentDir = direction
+                    
+                    for bounce = 1, maxBounces do
+                        if lineIndex > maxLinesAllowed then return end
+                        
+                        local hitBall, ballDist = getBallIntersection(currentPos, currentDir, ballRadius, tableY, ignoreBall)
+                        
+                        local rayOrigin = Vector3.new(currentPos.X, virtualTableCenter.Y, currentPos.Z)
+                        local wallHit = workspace:Raycast(rayOrigin, currentDir * 100, rayParams)
+                        
+                        local wallDist = math.huge
+                        local wallNormal = Vector3.zero
+                        local hitWallEnd = false
+                        
+                        if wallHit then
+                            local hitPosFlat = Vector3.new(wallHit.Position.X, 0, wallHit.Position.Z)
+                            local currentPosFlat = Vector3.new(currentPos.X, 0, currentPos.Z)
+                            wallDist = (hitPosFlat - currentPosFlat).Magnitude
+                            
+                            if wallHit.Instance.Name == "CustomWall" then
+                                local wallSize = wallHit.Instance.Size
+                                local isXWall = wallSize.X > wallSize.Z
+                                local localNormal = wallHit.Instance.CFrame:VectorToObjectSpace(wallHit.Normal)
+                                
+                                if isXWall and math.abs(localNormal.X) > 0.5 then
+                                    hitWallEnd = true
+                                elseif not isXWall and math.abs(localNormal.Z) > 0.5 then
+                                    hitWallEnd = true
+                                end
+                                
+                                if not hitWallEnd then
+                                    wallNormal = wallHit.Normal * Vector3.new(1, 0, 1)
+                                    if wallNormal.Magnitude > 0.001 then
+                                        wallNormal = wallNormal.Unit
+                                        local dot = currentDir:Dot(wallNormal)
+                                        if dot < -0.001 then
+                                            local adjustedDist = wallDist - (ballRadius / math.abs(dot))
+                                            if adjustedDist < 0 then adjustedDist = 0 end
+                                            wallDist = adjustedDist
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                        
+                        if hitBall and ballDist < wallDist then
+                            local impactPos = currentPos + currentDir * ballDist
+                            drawLine(lineIndex, currentPos, impactPos, color, tableY)
+                            lineIndex = lineIndex + 1
+                            
+                            drawGhostBall(impactPos, color, tableY, ballRadius)
+                            local collisionNormal = (hitBall.Position * Vector3.new(1,0,1) - impactPos * Vector3.new(1,0,1)).Unit
+                            drawGhostLine(impactPos, collisionNormal, 1.5, getBallInfo(hitBall), tableY)
+                            
+                            if isCue then
+                                simulatePath(hitBall.Position, collisionNormal, false, hitBall, 3, getBallInfo(hitBall))
+                                local tangent = currentDir - currentDir:Dot(collisionNormal) * collisionNormal
+                                if tangent.Magnitude > 0.01 then
+                                    simulatePath(impactPos + tangent.Unit * 0.05, tangent.Unit, false, hitBall, 1, Color3.fromRGB(150, 150, 255))
+                                end
+                            else
+                                simulatePath(hitBall.Position, collisionNormal, false, hitBall, 2, getBallInfo(hitBall))
+                            end
+                            break
+                            
+                        elseif wallHit then
+                            local impactPos = currentPos + currentDir * wallDist
+                            drawLine(lineIndex, currentPos, impactPos, color, tableY)
+                            lineIndex = lineIndex + 1
+                            
+                            if wallHit.Instance.Name == "CustomHole" or hitWallEnd then
+                                break
+                            elseif wallHit.Instance.Name == "CustomWall" then
+                                drawGhostBall(impactPos, color, tableY, ballRadius)
+                                
+                                local normal = wallNormal
+                                if normal.Magnitude < 0.001 then 
+                                    normal = -currentDir
+                                end
+                                local newDir = currentDir - 2 * currentDir:Dot(normal) * normal
+                                newDir = newDir.Unit
+                                
+                                currentDir = newDir
+                                currentPos = impactPos + newDir * 0.05
+                                ignoreBall = nil
+                            end
+                        else
+                            drawLine(lineIndex, currentPos, currentPos + currentDir * 100, color, tableY)
+                            lineIndex = lineIndex + 1
+                            break
+                        end
+                    end
+                end
+                
+                simulatePath(activeCueBall.Position, aimDir, true, activeCueBall, 3, Color3.fromRGB(255, 255, 255))
+            end
+        end
+    end
+    
+    for part, highlight in pairs(highlights) do
+        if not partsToHighlight[part] then
+            highlight:Destroy()
+            highlights[part] = nil
+        end
+    end
+end
+
+-- Function to set status to Online
+local function setStatusOnline()
+    if isHighlighting then return end
+    isHighlighting = true
+    
+    currentSessionId = currentSessionId + 1
+    local thisSession = currentSessionId
+    
+    statusLabel.Text = "Status: Online"
+    statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+    
+    task.spawn(function()
+        refreshCache()
+        while isHighlighting and currentSessionId == thisSession do
+            task.wait(2)
+            if isHighlighting and currentSessionId == thisSession then 
+                refreshCache() 
+            end
+        end
+    end)
+    
+    local renderConnection = RunService.RenderStepped:Connect(updateHighlights)
+    table.insert(activeConnections, renderConnection)
+end
+
+-- Function to set status to Offline
+local function setStatusOffline()
+    isHighlighting = false
+    currentSessionId = currentSessionId + 1
+    
+    statusLabel.Text = "Status: Offline"
+    statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+    
+    clearHighlights()
+    hideTrajectories()
+    clearGhostVisuals()
+    
+    if virtualTableFolder then
+        virtualTableFolder:Destroy()
+        virtualTableFolder = nil
+    end
+    
+    for _, connection in pairs(activeConnections) do
+        if connection and connection.Disconnect then connection:Disconnect() end
+    end
+    activeConnections = {}
+end
+
+-- Cleanup function
+local function cleanup()
+    setStatusOffline()
+    for _, p in pairs(trajectoryParts) do p:Destroy() end
+    clearGhostVisuals()
+    if virtualTableFolder then virtualTableFolder:Destroy() end
+    screenGui:Destroy()
+end
+
+-- Button Functions
+onButton.MouseButton1Click:Connect(setStatusOnline)
+offButton.MouseButton1Click:Connect(setStatusOffline)
+destroyButton.MouseButton1Click:Connect(cleanup)
