@@ -1,6 +1,13 @@
+-- [[ CONFIGURATION ]] --
+-- Adjust this number if the lines are too long or too short for "8-Ball X"
+-- Lower number = shorter lines. Higher number = longer lines.
+local POWER_SCALE = 28 
+local KISS_MULTIPLIER = 5.0
+
 -- Wait for player to load
 local PlayerService = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
 local player = PlayerService.LocalPlayer
 if not player then
     player = PlayerService.PlayerAdded:Wait()
@@ -74,11 +81,6 @@ local cachedBalls = {}
 local cachedSticks = {}
 local isHighlighting = false
 local currentSessionId = 0
-local lastTableBuildTime = 0
-
--- Virtual Table Variables
-local virtualTableFolder = nil
-local virtualTableCenter = Vector3.zero
 
 -- Helper function to identify if a part is a pool ball
 local function isBall(obj)
@@ -126,7 +128,6 @@ local function getBallInfo(ball)
     if name:find("cue") or name == "white" or name == "0" then return Color3.fromRGB(255, 255, 255) end
     if num then
         if num == 8 then 
-            -- MODIFIED: Pulse between Red and Yellow for the 8-ball
             local pulseAlpha = (math.sin(os.clock() * 6) + 1) / 2
             return Color3.fromRGB(255, 0, 0):Lerp(Color3.fromRGB(255, 255, 0), pulseAlpha)
         elseif num >= 1 and num <= 7 then return Color3.fromRGB(255, 50, 50)
@@ -138,6 +139,15 @@ end
 
 local function isCueBall(ball)
     return getBallInfo(ball) == Color3.fromRGB(255, 255, 255)
+end
+
+-- Anti-Smoke/Cloud Effects
+local function removeSmokeEffects()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ParticleEmitter") or obj:IsA("Smoke") or obj:IsA("Cloud") or obj:IsA("Fire") then
+            obj.Enabled = false
+        end
+    end
 end
 
 -- Refresh cache (Optimized to prevent freezing)
@@ -164,6 +174,33 @@ local function refreshCache()
     
     cachedBalls = tempBalls
     cachedSticks = tempSticks
+    
+    removeSmokeEffects()
+end
+
+-- Anti-Blur & Anti-Invisible Balls
+local function enforceVisuals()
+    for _, effect in ipairs(Lighting:GetChildren()) do
+        if effect:IsA("BlurEffect") or effect:IsA("DepthOfFieldEffect") then
+            effect.Enabled = false
+        end
+    end
+    if workspace.CurrentCamera then
+        for _, effect in ipairs(workspace.CurrentCamera:GetChildren()) do
+            if effect:IsA("BlurEffect") or effect:IsA("DepthOfFieldEffect") then
+                effect.Enabled = false
+            end
+        end
+    end
+    
+    for _, ball in ipairs(cachedBalls) do
+        if ball and ball.Parent then
+            if ball.Transparency > 0 then
+                ball.Transparency = 0
+                ball.LocalTransparencyModifier = 0
+            end
+        end
+    end
 end
 
 -- Highlight management
@@ -264,7 +301,7 @@ local function getBallIntersection(rayOrigin, rayDir, ballRadius, tableY, ignore
     local flatOrigin = rayOrigin * Vector3.new(1, 0, 1)
     
     for _, ball in ipairs(cachedBalls) do
-        if ball ~= ignoreBall and ball.Parent and ball.Transparency < 0.1 then
+        if ball ~= ignoreBall and ball.Parent then
             if math.abs(ball.Position.Y - tableY) < 0.8 then
                 local flatBallPos = ball.Position * Vector3.new(1, 0, 1)
                 local L = flatBallPos - flatOrigin
@@ -287,124 +324,11 @@ local function getBallIntersection(rayOrigin, rayDir, ballRadius, tableY, ignore
     return closestBall, closestDist
 end
 
--- Build Virtual Table (Walls & Holes)
-local function buildVirtualTable(cf, sizeX, sizeZ)
-    if virtualTableFolder then virtualTableFolder:Destroy() end
-    
-    virtualTableFolder = Instance.new("Folder")
-    virtualTableFolder.Name = "VirtualPoolTable"
-    virtualTableFolder.Parent = workspace
-    
-    virtualTableCenter = cf.Position
-    
-    local function createPart(name, size, offset, isHole, color)
-        local p = Instance.new("Part")
-        if isHole then p.Shape = Enum.PartType.Cylinder end
-        p.Name = name
-        p.Size = size
-        if isHole then
-            p.CFrame = cf * CFrame.new(offset) * CFrame.Angles(0, 0, math.rad(90))
-        else
-            p.CFrame = cf * CFrame.new(offset)
-        end
-        p.Anchored = true
-        p.CanCollide = false
-        p.Color = color
-        p.Transparency = 0.8 -- Visible enough to verify, but faint enough not to annoy
-        p.Material = Enum.Material.SmoothPlastic
-        p.CastShadow = false
-        p.Parent = virtualTableFolder
-    end
-    
-    local wallHeight = 0.8
-    local wallThickness = 0.95
-    local platformColor = Color3.fromRGB(0, 255, 0)
-    local holeColor = Color3.fromRGB(255, 255, 255)
-    
-    local lengthReduction = 2.0
-    
-    -- Side walls
-    createPart("CustomWall", Vector3.new(wallThickness, wallHeight, sizeZ - lengthReduction), Vector3.new(sizeX/2, 0, 0), false, platformColor)
-    createPart("CustomWall", Vector3.new(wallThickness, wallHeight, sizeZ - lengthReduction), Vector3.new(-sizeX/2, 0, 0), false, platformColor)
-    
-    -- Front and back walls split for middle gap
-    local gap = 1.5
-    local totalWallLength = sizeX - lengthReduction
-    local segmentLength = (totalWallLength - gap) / 2
-    
-    if segmentLength > 0 then
-        local leftOffsetX = -(totalWallLength / 2) + (segmentLength / 2)
-        local rightOffsetX = (totalWallLength / 2) - (segmentLength / 2)
-        
-        createPart("CustomWall", Vector3.new(segmentLength, wallHeight, wallThickness), Vector3.new(leftOffsetX, 0, sizeZ/2), false, platformColor)
-        createPart("CustomWall", Vector3.new(segmentLength, wallHeight, wallThickness), Vector3.new(rightOffsetX, 0, sizeZ/2), false, platformColor)
-        createPart("CustomWall", Vector3.new(segmentLength, wallHeight, wallThickness), Vector3.new(leftOffsetX, 0, -sizeZ/2), false, platformColor)
-        createPart("CustomWall", Vector3.new(segmentLength, wallHeight, wallThickness), Vector3.new(rightOffsetX, 0, -sizeZ/2), false, platformColor)
-    else
-        createPart("CustomWall", Vector3.new(sizeX - lengthReduction, wallHeight, wallThickness), Vector3.new(0, 0, sizeZ/2), false, platformColor)
-        createPart("CustomWall", Vector3.new(sizeX - lengthReduction, wallHeight, wallThickness), Vector3.new(0, 0, -sizeZ/2), false, platformColor)
-    end
-    
-    -- Corner holes
-    local cornerHoleDiameter = 1.5
-    local cornerHoleSize = Vector3.new(wallHeight, cornerHoleDiameter, cornerHoleDiameter)
-    createPart("CustomHole", cornerHoleSize, Vector3.new(sizeX/2, 0, sizeZ/2), true, holeColor)
-    createPart("CustomHole", cornerHoleSize, Vector3.new(-sizeX/2, 0, sizeZ/2), true, holeColor)
-    createPart("CustomHole", cornerHoleSize, Vector3.new(sizeX/2, 0, -sizeZ/2), true, holeColor)
-    createPart("CustomHole", cornerHoleSize, Vector3.new(-sizeX/2, 0, -sizeZ/2), true, holeColor)
-    
-    -- Middle holes
-    local middleHoleDiameter = 1.0
-    local middleHoleSize = Vector3.new(wallHeight, middleHoleDiameter, middleHoleDiameter)
-    if sizeX > sizeZ then
-        createPart("CustomHole", middleHoleSize, Vector3.new(0, 0, (sizeZ/2) + 0.25), true, holeColor)
-        createPart("CustomHole", middleHoleSize, Vector3.new(0, 0, -(sizeZ/2) - 0.25), true, holeColor)
-    else
-        createPart("CustomHole", middleHoleSize, Vector3.new((sizeX/2) + 0.25, 0, 0), true, holeColor)
-        createPart("CustomHole", middleHoleSize, Vector3.new(-(sizeX/2) - 0.25, 0, 0), true, holeColor)
-    end
-end
-
--- Ensure the virtual table is built ONLY under the active cue ball
-local function ensureVirtualTable(activeCueBall)
-    if not isHighlighting or not activeCueBall then return end
-    
-    local rayParams = RaycastParams.new()
-    rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    
-    local ignoreList = {player.Character}
-    for _, b in ipairs(cachedBalls) do
-        table.insert(ignoreList, b)
-    end
-    rayParams.FilterDescendantsInstances = ignoreList
-    
-    -- Raycast straight down from the active cue ball
-    local hit = workspace:Raycast(activeCueBall.Position, Vector3.new(0, -5, 0), rayParams)
-    
-    if hit and hit.Instance then
-        local tablePart = hit.Instance
-        local sx, sz = tablePart.Size.X, tablePart.Size.Z
-        
-        -- STRICT SIZE FILTER: A standard pool table is usually between 8 and 25 studs.
-        -- If it's bigger than 40 (like the floor) or smaller than 4 (like a floor plank), IGNORE IT.
-        if sx > 40 or sz > 40 or sx < 4 or sz < 4 then
-            return 
-        end
-        
-        local cf = CFrame.new(tablePart.Position.X, hit.Position.Y, tablePart.Position.Z) * tablePart.CFrame.Rotation
-        
-        if not virtualTableFolder or (cf.Position - virtualTableCenter).Magnitude > 1 then
-            if tick() - lastTableBuildTime > 1 then
-                buildVirtualTable(cf, sx, sz)
-                lastTableBuildTime = tick()
-            end
-        end
-    end
-end
-
 -- Main Update Loop
 local function updateHighlights()
     if not isHighlighting then return end
+    
+    enforceVisuals()
     
     local character = player.Character
     local rootPart = character and character:FindFirstChild("HumanoidRootPart")
@@ -425,7 +349,7 @@ local function updateHighlights()
                 local closestBall = nil
                 local minBallDist = 15
                 for _, ball in ipairs(cachedBalls) do
-                    if isCueBall(ball) and ball.Parent and ball.Transparency < 0.1 then
+                    if isCueBall(ball) and ball.Parent then
                         local ballDist = (stick.Position - ball.Position).Magnitude
                         if ballDist < minBallDist then
                             minBallDist = ballDist
@@ -452,125 +376,168 @@ local function updateHighlights()
     hideTrajectories()
     clearGhostVisuals()
     
-    -- Only attempt to build the table directly under the active cue ball
-    ensureVirtualTable(activeCueBall)
+    local currentStatusText = "Status: Online"
     
-    if activeCueBall and activeStick and virtualTableFolder then
-        local tableY = virtualTableCenter.Y
-        local stickToBallDist = (activeCueBall.Position - activeStick.Position).Magnitude
+    if activeCueBall and activeStick then
+        local tableY = activeCueBall.Position.Y
+        local ballRadius = activeCueBall.Size.X / 2
         
-        if stickToBallDist < 25 then
-            local aimDir = (activeCueBall.Position - activeStick.Position) * Vector3.new(1, 0, 1)
-            if aimDir.Magnitude > 0 then
-                aimDir = aimDir.Unit
-                local ballRadius = activeCueBall.Size.X / 2
+        local stickLength = math.max(activeStick.Size.X, activeStick.Size.Y, activeStick.Size.Z)
+        local restingDist = (stickLength / 2) + ballRadius
+        local currentDist = (activeCueBall.Position - activeStick.Position).Magnitude
+        local pullback = math.max(0, currentDist - restingDist)
+        
+        -- Calculate total distance using the POWER_SCALE variable
+        local totalDistance = 5 + (pullback * POWER_SCALE)
+        totalDistance = math.clamp(totalDistance, 2, 150) 
+        
+        local aimDir = (activeCueBall.Position - activeStick.Position) * Vector3.new(1, 0, 1)
+        if aimDir.Magnitude > 0 then
+            aimDir = aimDir.Unit
+            
+            local lineIndex = 1
+            local maxLinesAllowed = 30
+            local totalCueDistance = 0 
+            local kissPowerCalculated = false
+            
+            local function simulatePath(startPos, direction, isCue, ignoreBall, maxBounces, color, remainingDist)
+                local currentPos = startPos
+                local currentDir = direction
+                local currentDistLeft = remainingDist
                 
-                local rayParams = RaycastParams.new()
-                rayParams.FilterType = Enum.RaycastFilterType.Include
-                rayParams.FilterDescendantsInstances = {virtualTableFolder}
-                
-                local lineIndex = 1
-                local maxLinesAllowed = 30
-                
-                local function simulatePath(startPos, direction, isCue, ignoreBall, maxBounces, color)
-                    local currentPos = startPos
-                    local currentDir = direction
+                for bounce = 1, maxBounces do
+                    if lineIndex > maxLinesAllowed or currentDistLeft <= 0.1 then return end
                     
-                    for bounce = 1, maxBounces do
-                        if lineIndex > maxLinesAllowed then return end
+                    local hitBall, ballDist = getBallIntersection(currentPos, currentDir, ballRadius, tableY, ignoreBall)
+                    if hitBall and ballDist > currentDistLeft then
+                        hitBall = nil 
+                    end
+                    
+                    local wallHitPos, wallNormal, wallDist = nil, nil, math.huge
+                    local rayOrigin = Vector3.new(currentPos.X, tableY, currentPos.Z)
+                    
+                    local ignoreList = {player.Character, activeStick}
+                    for _, b in ipairs(cachedBalls) do table.insert(ignoreList, b) end
+                    
+                    local searchDist = hitBall and ballDist or currentDistLeft
+                    local currentRayOrigin = rayOrigin
+                    local safety = 0
+                    
+                    while searchDist > 0 and safety < 20 do
+                        safety = safety + 1
+                        local rayParams = RaycastParams.new()
+                        rayParams.FilterType = Enum.RaycastFilterType.Exclude
+                        rayParams.FilterDescendantsInstances = ignoreList
                         
-                        local hitBall, ballDist = getBallIntersection(currentPos, currentDir, ballRadius, tableY, ignoreBall)
-                        
-                        local rayOrigin = Vector3.new(currentPos.X, virtualTableCenter.Y, currentPos.Z)
-                        local wallHit = workspace:Raycast(rayOrigin, currentDir * 100, rayParams)
-                        
-                        local wallDist = math.huge
-                        local wallNormal = Vector3.zero
-                        local hitWallEnd = false
-                        
-                        if wallHit then
-                            local hitPosFlat = Vector3.new(wallHit.Position.X, 0, wallHit.Position.Z)
-                            local currentPosFlat = Vector3.new(currentPos.X, 0, currentPos.Z)
-                            wallDist = (hitPosFlat - currentPosFlat).Magnitude
-                            
-                            if wallHit.Instance.Name == "CustomWall" then
-                                local wallSize = wallHit.Instance.Size
-                                local isXWall = wallSize.X > wallSize.Z
-                                local localNormal = wallHit.Instance.CFrame:VectorToObjectSpace(wallHit.Normal)
-                                
-                                if isXWall and math.abs(localNormal.X) > 0.5 then
-                                    hitWallEnd = true
-                                elseif not isXWall and math.abs(localNormal.Z) > 0.5 then
-                                    hitWallEnd = true
+                        local result = workspace:Raycast(currentRayOrigin, currentDir * searchDist, rayParams)
+                        if result then
+                            local inst = result.Instance
+                            if inst.CanCollide and inst.Transparency < 0.9 then
+                                wallHitPos = result.Position
+                                wallNormal = result.Normal * Vector3.new(1, 0, 1)
+                                if wallNormal.Magnitude > 0.001 then
+                                    wallNormal = wallNormal.Unit
+                                else
+                                    wallNormal = -currentDir
                                 end
                                 
-                                if not hitWallEnd then
-                                    wallNormal = wallHit.Normal * Vector3.new(1, 0, 1)
-                                    if wallNormal.Magnitude > 0.001 then
-                                        wallNormal = wallNormal.Unit
-                                        local dot = currentDir:Dot(wallNormal)
-                                        if dot < -0.001 then
-                                            local adjustedDist = wallDist - (ballRadius / math.abs(dot))
-                                            if adjustedDist < 0 then adjustedDist = 0 end
-                                            wallDist = adjustedDist
-                                        end
-                                    end
+                                local rawDist = (Vector3.new(wallHitPos.X, tableY, wallHitPos.Z) - rayOrigin).Magnitude
+                                local dot = currentDir:Dot(wallNormal)
+                                local offset = ballRadius
+                                if dot < -0.001 then
+                                    offset = math.min(ballRadius / math.abs(dot), ballRadius * 10)
                                 end
-                            end
-                        end
-                        
-                        if hitBall and ballDist < wallDist then
-                            local impactPos = currentPos + currentDir * ballDist
-                            drawLine(lineIndex, currentPos, impactPos, color, tableY)
-                            lineIndex = lineIndex + 1
-                            
-                            drawGhostBall(impactPos, color, tableY, ballRadius)
-                            local collisionNormal = (hitBall.Position * Vector3.new(1,0,1) - impactPos * Vector3.new(1,0,1)).Unit
-                            drawGhostLine(impactPos, collisionNormal, 1.5, getBallInfo(hitBall), tableY)
-                            
-                            if isCue then
-                                simulatePath(hitBall.Position, collisionNormal, false, hitBall, 3, getBallInfo(hitBall))
-                                local tangent = currentDir - currentDir:Dot(collisionNormal) * collisionNormal
-                                if tangent.Magnitude > 0.01 then
-                                    simulatePath(impactPos + tangent.Unit * 0.05, tangent.Unit, false, hitBall, 1, Color3.fromRGB(150, 150, 255))
-                                end
-                            else
-                                simulatePath(hitBall.Position, collisionNormal, false, hitBall, 2, getBallInfo(hitBall))
-                            end
-                            break
-                            
-                        elseif wallHit then
-                            local impactPos = currentPos + currentDir * wallDist
-                            drawLine(lineIndex, currentPos, impactPos, color, tableY)
-                            lineIndex = lineIndex + 1
-                            
-                            if wallHit.Instance.Name == "CustomHole" or hitWallEnd then
+                                
+                                wallDist = math.max(0, rawDist - offset)
                                 break
-                            elseif wallHit.Instance.Name == "CustomWall" then
-                                drawGhostBall(impactPos, color, tableY, ballRadius)
-                                
-                                local normal = wallNormal
-                                if normal.Magnitude < 0.001 then 
-                                    normal = -currentDir
-                                end
-                                local newDir = currentDir - 2 * currentDir:Dot(normal) * normal
-                                newDir = newDir.Unit
-                                
-                                currentDir = newDir
-                                currentPos = impactPos + newDir * 0.05
-                                ignoreBall = nil
+                            else
+                                table.insert(ignoreList, inst)
                             end
                         else
-                            drawLine(lineIndex, currentPos, currentPos + currentDir * 100, color, tableY)
-                            lineIndex = lineIndex + 1
                             break
                         end
                     end
+                    
+                    if hitBall and ballDist <= wallDist then
+                        local impactPos = currentPos + currentDir * ballDist
+                        drawLine(lineIndex, currentPos, impactPos, color, tableY)
+                        lineIndex = lineIndex + 1
+                        
+                        drawGhostBall(impactPos, color, tableY, ballRadius)
+                        local collisionNormal = (hitBall.Position * Vector3.new(1,0,1) - impactPos * Vector3.new(1,0,1)).Unit
+                        drawGhostLine(impactPos, collisionNormal, 1.5, getBallInfo(hitBall), tableY)
+                        
+                        currentDistLeft = currentDistLeft - ballDist
+                        
+                        if isCue then
+                            if not kissPowerCalculated then
+                                totalCueDistance = totalCueDistance + ballDist
+                                local kissPower = math.clamp(math.ceil(totalCueDistance * KISS_MULTIPLIER), 1, 100)
+                                currentStatusText = "Online | Kiss: ~" .. kissPower .. "%"
+                                kissPowerCalculated = true
+                            end
+                            
+                            -- PHYSICS MATH: Calculate how power splits based on the angle of the hit
+                            local impactDot = math.clamp(currentDir:Dot(collisionNormal), 0, 1)
+                            
+                            -- Target ball gets power based on how direct the hit is
+                            local targetDist = currentDistLeft * impactDot * 0.85 
+                            -- Cue ball keeps the remaining power and deflects
+                            local cueDist = currentDistLeft * math.sqrt(1 - (impactDot * impactDot)) * 0.6 
+                            
+                            -- Target ball path
+                            simulatePath(hitBall.Position, collisionNormal, false, hitBall, 3, getBallInfo(hitBall), targetDist)
+                            
+                            -- Cue ball deflection
+                            local tangent = currentDir - currentDir:Dot(collisionNormal) * collisionNormal
+                            if tangent.Magnitude > 0.01 then
+                                simulatePath(impactPos + tangent.Unit * 0.05, tangent.Unit, false, hitBall, 1, Color3.fromRGB(150, 150, 255), cueDist)
+                            end
+                        else
+                            -- Target ball hitting another ball
+                            local impactDot = math.clamp(currentDir:Dot(collisionNormal), 0, 1)
+                            local targetDist = currentDistLeft * impactDot * 0.85
+                            simulatePath(hitBall.Position, collisionNormal, false, hitBall, 2, getBallInfo(hitBall), targetDist)
+                        end
+                        break
+                        
+                    elseif wallHitPos and wallDist < math.huge then
+                        local impactPos = currentPos + currentDir * wallDist
+                        drawLine(lineIndex, currentPos, impactPos, color, tableY)
+                        lineIndex = lineIndex + 1
+                        
+                        drawGhostBall(impactPos, color, tableY, ballRadius)
+                        
+                        currentDistLeft = currentDistLeft - wallDist
+                        
+                        if isCue and not kissPowerCalculated then
+                            totalCueDistance = totalCueDistance + wallDist
+                        end
+                        
+                        local dot = currentDir:Dot(wallNormal)
+                        local newDir = currentDir - 2 * dot * wallNormal
+                        newDir = newDir.Unit
+                        
+                        currentDir = newDir
+                        currentPos = impactPos + wallNormal * 0.02 + newDir * 0.05
+                        ignoreBall = nil
+                        
+                    else
+                        local endPos = currentPos + currentDir * currentDistLeft
+                        drawLine(lineIndex, currentPos, endPos, color, tableY)
+                        drawGhostBall(endPos, color, tableY, ballRadius) 
+                        lineIndex = lineIndex + 1
+                        break
+                    end
                 end
-                
-                simulatePath(activeCueBall.Position, aimDir, true, activeCueBall, 3, Color3.fromRGB(255, 255, 255))
             end
+            
+            simulatePath(activeCueBall.Position, aimDir, true, activeCueBall, 4, Color3.fromRGB(255, 255, 255), totalDistance)
         end
+    end
+    
+    if statusLabel.Text ~= currentStatusText then
+        statusLabel.Text = currentStatusText
     end
     
     for part, highlight in pairs(highlights) do
@@ -581,7 +548,6 @@ local function updateHighlights()
     end
 end
 
--- Function to set status to Online
 local function setStatusOnline()
     if isHighlighting then return end
     isHighlighting = true
@@ -606,7 +572,6 @@ local function setStatusOnline()
     table.insert(activeConnections, renderConnection)
 end
 
--- Function to set status to Offline
 local function setStatusOffline()
     isHighlighting = false
     currentSessionId = currentSessionId + 1
@@ -618,27 +583,19 @@ local function setStatusOffline()
     hideTrajectories()
     clearGhostVisuals()
     
-    if virtualTableFolder then
-        virtualTableFolder:Destroy()
-        virtualTableFolder = nil
-    end
-    
     for _, connection in pairs(activeConnections) do
         if connection and connection.Disconnect then connection:Disconnect() end
     end
     activeConnections = {}
 end
 
--- Cleanup function
 local function cleanup()
     setStatusOffline()
     for _, p in pairs(trajectoryParts) do p:Destroy() end
     clearGhostVisuals()
-    if virtualTableFolder then virtualTableFolder:Destroy() end
     screenGui:Destroy()
 end
 
--- Button Functions
 onButton.MouseButton1Click:Connect(setStatusOnline)
 offButton.MouseButton1Click:Connect(setStatusOffline)
 destroyButton.MouseButton1Click:Connect(cleanup)
