@@ -1,0 +1,411 @@
+-- Wait for player
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
+-- Determine the best parent for the GUI
+local guiParent
+if type(gethui) == "function" then
+    guiParent = gethui()
+else
+    local success = pcall(function() return game:GetService("CoreGui").Name end)
+    if success then
+        guiParent = game:GetService("CoreGui")
+    else
+        guiParent = player:WaitForChild("PlayerGui")
+    end
+end
+
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "WordGuesser_Pro_Auto"
+screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 2147483647
+screenGui.IgnoreGuiInset = true
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+screenGui.Parent = guiParent
+
+-- Main draggable frame
+local mainFrame = Instance.new("Frame")
+mainFrame.Parent = screenGui
+mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+mainFrame.Size = UDim2.new(0, 200, 0, 300)
+mainFrame.Position = UDim2.new(0.3, 0, 0.2, 0)
+mainFrame.Draggable = true
+mainFrame.Active = true
+
+-- Manual Input Box
+local inputBox = Instance.new("TextBox")
+inputBox.Parent = mainFrame
+inputBox.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+inputBox.Size = UDim2.new(0, 180, 0, 35)
+inputBox.Position = UDim2.new(0, 10, 0, 10)
+inputBox.Font = Enum.Font.GothamBold
+inputBox.PlaceholderText = "Type starting letters..."
+inputBox.Text = ""
+inputBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+inputBox.TextScaled = true
+inputBox.ClearTextOnFocus = false
+
+-- Auto-Detect Toggle Button
+local autoDetectBtn = Instance.new("TextButton")
+autoDetectBtn.Parent = mainFrame
+autoDetectBtn.Size = UDim2.new(0, 180, 0, 25)
+autoDetectBtn.Position = UDim2.new(0, 10, 0, 50)
+autoDetectBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+autoDetectBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+autoDetectBtn.Text = "Auto-Detect: ON"
+autoDetectBtn.Font = Enum.Font.GothamBold
+autoDetectBtn.TextScaled = true
+autoDetectBtn.BorderSizePixel = 0
+
+-- Scrollable Frame for Words
+local scrollFrame = Instance.new("ScrollingFrame")
+scrollFrame.Parent = mainFrame
+scrollFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+scrollFrame.Size = UDim2.new(0, 180, 0, 145)
+scrollFrame.Position = UDim2.new(0, 10, 0, 80)
+scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+scrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+scrollFrame.ScrollBarThickness = 4
+scrollFrame.BorderSizePixel = 0
+
+-- Word List Display (Inside ScrollFrame)
+local wordList = Instance.new("TextLabel")
+wordList.Parent = scrollFrame
+wordList.BackgroundTransparency = 1
+wordList.Size = UDim2.new(1, -6, 0, 0)
+wordList.AutomaticSize = Enum.AutomaticSize.Y
+wordList.Text = "Initializing...\n(Please wait)"
+wordList.TextColor3 = Color3.fromRGB(0, 255, 255)
+wordList.TextSize = 15
+wordList.Font = Enum.Font.GothamSemibold
+wordList.TextXAlignment = Enum.TextXAlignment.Left
+wordList.TextYAlignment = Enum.TextYAlignment.Top
+wordList.TextWrapped = true
+wordList.RichText = true
+
+-- Refresh Cache Button
+local refreshBtn = Instance.new("TextButton")
+refreshBtn.Parent = mainFrame
+refreshBtn.Size = UDim2.new(0, 180, 0, 25)
+refreshBtn.Position = UDim2.new(0, 10, 0, 235)
+refreshBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
+refreshBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+refreshBtn.Text = "Refresh Cache"
+refreshBtn.Font = Enum.Font.GothamBold
+refreshBtn.TextScaled = true
+refreshBtn.BorderSizePixel = 0
+
+-- Destroy Button
+local destroyBtn = Instance.new("TextButton")
+destroyBtn.Parent = mainFrame
+destroyBtn.Size = UDim2.new(0, 180, 0, 25)
+destroyBtn.Position = UDim2.new(0, 10, 0, 265)
+destroyBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
+destroyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+destroyBtn.Text = "Destroy UI"
+destroyBtn.Font = Enum.Font.GothamBold
+destroyBtn.TextScaled = true
+destroyBtn.BorderSizePixel = 0
+
+-------------------------------------------------------------------------------
+-- DICTIONARY, HARDNESS & CACHE LOGIC
+-------------------------------------------------------------------------------
+
+local DICTIONARY_URLS = {
+    "https://raw.githubusercontent.com/dwyl/english-words/refs/heads/master/words_dictionary.json",
+    "https://raw.githubusercontent.com/first20hours/google-10000-english/master/google-10000-english-usa-no-swears.txt"
+}
+
+local allWords = {}
+local customWordsSet = {}
+local uniqueWordsSet = {}
+
+-- Changed to V3 to force Delta to download the new dictionary URLs
+local fileSystemSupported = type(readfile) == "function" and type(writefile) == "function"
+local CACHE_DIR = "WordGuesser_Cache_V3"
+local ALL_WORDS_FILE = CACHE_DIR .. "/AllWords.txt"
+local CUSTOM_WORDS_FILE = CACHE_DIR .. "/CustomWords.txt"
+
+local letterHardness = {
+    X = 100, Z = 99, Q = 98, J = 97, V = 96, Y = 95, K = 94, W = 93, U = 92,
+    F = 80, H = 79, M = 78, P = 77, B = 76, G = 75, C = 74,
+    L = 60, D = 59, R = 58, T = 57, N = 56, S = 55,
+    A = 40, I = 39, O = 38, E = 37
+}
+
+local function getWordScore(word)
+    local lastChar = string.sub(word, -1)
+    local lastTwo = string.sub(word, -2)
+    
+    if lastTwo == "OX" then return 99.5
+    elseif lastChar == "X" then return 100
+    else return letterHardness[lastChar] or 0 end
+end
+
+local function downloadAndCache()
+    allWords = {}
+    customWordsSet = {}
+    uniqueWordsSet = {}
+    
+    -- 1. Fetch Custom GitHub JSON (Yellow Words)
+    wordList.Text = "Fetching Custom Words..."
+    local successJSON, responseJSON = pcall(function()
+        return game:HttpGet("https://raw.githubusercontent.com/ScpGuest666/Last-impossible-letters/refs/heads/main/Last%20letter%201")
+    end)
+    
+    if successJSON and responseJSON then
+        for word in responseJSON:gmatch('"([^"]+)"') do
+            local cleanWord = word:gsub("[%p%s%d]", "")
+            if string.len(cleanWord) >= 2 then
+                local upperWord = string.upper(cleanWord)
+                customWordsSet[upperWord] = true
+                uniqueWordsSet[upperWord] = true
+            end
+        end
+    end
+
+    -- 2. Fetch Standard Dictionaries from the Table
+    for i, url in ipairs(DICTIONARY_URLS) do
+        wordList.Text = "Fetching Dict " .. i .. "...\n(Merging lists)"
+        task.wait(0.1)
+        local successDict, responseDict = pcall(function() return game:HttpGet(url) end)
+        
+        if successDict and responseDict then
+            local count = 0
+            -- Smart extraction based on file type
+            if url:match("%.json$") then
+                for word in responseDict:gmatch('"([^"]+)"') do
+                    local cleanWord = word:gsub("[%p%s%d]", "")
+                    if string.len(cleanWord) >= 2 then uniqueWordsSet[string.upper(cleanWord)] = true end
+                    count = count + 1
+                    if count % 25000 == 0 then task.wait() end
+                end
+            else
+                for word in responseDict:gmatch("[^\r\n]+") do
+                    local cleanWord = word:gsub("[%p%s%d]", "")
+                    if string.len(cleanWord) >= 2 then uniqueWordsSet[string.upper(cleanWord)] = true end
+                    count = count + 1
+                    if count % 25000 == 0 then task.wait() end
+                end
+            end
+        end
+    end
+
+    -- 3. Convert & Sort
+    wordList.Text = "Sorting Words..."
+    task.wait(0.1)
+    for word, _ in pairs(uniqueWordsSet) do table.insert(allWords, word) end
+
+    table.sort(allWords, function(a, b)
+        local isCustomA = customWordsSet[a] or false
+        local isCustomB = customWordsSet[b] or false
+        if isCustomA ~= isCustomB then return isCustomA end
+        
+        local scoreA = getWordScore(a)
+        local scoreB = getWordScore(b)
+        if scoreA == scoreB then return string.len(a) < string.len(b) end
+        return scoreA > scoreB
+    end)
+    
+    -- 4. Save to Workspace Cache
+    if fileSystemSupported then
+        wordList.Text = "Saving to Workspace Cache..."
+        task.wait(0.1)
+        pcall(function()
+            if type(makefolder) == "function" and type(isfolder) == "function" then
+                if not isfolder(CACHE_DIR) then makefolder(CACHE_DIR) end
+            end
+            local customArray = {}
+            for w, _ in pairs(customWordsSet) do table.insert(customArray, w) end
+            writefile(CUSTOM_WORDS_FILE, table.concat(customArray, "\n"))
+            writefile(ALL_WORDS_FILE, table.concat(allWords, "\n"))
+        end)
+    end
+    
+    wordList.Text = "<font color=\"#00FF00\">Ready!</font>\nWaiting for game prompt..."
+end
+
+local function loadFromCache()
+    wordList.Text = "Loading from Workspace Cache...\n(Lightning Fast)"
+    task.wait(0.1)
+    local success = pcall(function()
+        local customData = readfile(CUSTOM_WORDS_FILE)
+        for w in customData:gmatch("[^\r\n]+") do customWordsSet[w] = true end
+        local allData = readfile(ALL_WORDS_FILE)
+        for w in allData:gmatch("[^\r\n]+") do table.insert(allWords, w) end
+    end)
+    
+    if success and #allWords > 0 then
+        wordList.Text = "<font color=\"#00FF00\">Ready!</font>\nWaiting for game prompt..."
+    else
+        downloadAndCache()
+    end
+end
+
+task.spawn(function()
+    if fileSystemSupported and type(isfile) == "function" and isfile(ALL_WORDS_FILE) and isfile(CUSTOM_WORDS_FILE) then
+        loadFromCache()
+    else
+        downloadAndCache()
+    end
+end)
+
+-------------------------------------------------------------------------------
+-- AUTO-DETECT LOGIC
+-------------------------------------------------------------------------------
+
+local autoDetectEnabled = true
+local lastDetectedPrompt = ""
+
+autoDetectBtn.MouseButton1Click:Connect(function()
+    autoDetectEnabled = not autoDetectEnabled
+    if autoDetectEnabled then
+        autoDetectBtn.Text = "Auto-Detect: ON"
+        autoDetectBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+    else
+        autoDetectBtn.Text = "Auto-Detect: OFF"
+        autoDetectBtn.BackgroundColor3 = Color3.fromRGB(150, 100, 0)
+        lastDetectedPrompt = "" -- Reset so it can re-detect if turned back on
+    end
+end)
+
+task.spawn(function()
+    while task.wait(0.5) do
+        if not autoDetectEnabled then continue end
+        
+        local detected = nil
+        local guis = {}
+        
+        -- Collect all UI elements (ScreenGuis and BillboardGuis)
+        for _, child in ipairs(player.PlayerGui:GetChildren()) do
+            if child:IsA("ScreenGui") or child:IsA("BillboardGui") then table.insert(guis, child) end
+        end
+        for _, desc in ipairs(workspace:GetDescendants()) do
+            if desc:IsA("BillboardGui") or desc:IsA("SurfaceGui") then table.insert(guis, desc) end
+        end
+        
+        for _, gui in ipairs(guis) do
+            local promptLabel = nil
+            
+            -- Find the text label asking for the word
+            for _, desc in ipairs(gui:GetDescendants()) do
+                if desc:IsA("TextLabel") and desc.Visible and desc.Text:lower():find("type an english word starting with") then
+                    promptLabel = desc
+                    break
+                end
+            end
+            
+            if promptLabel then
+                -- 1. Check if the letters are written inside the same text label
+                local inline = promptLabel.Text:match("starting with:%s*<[^>]+>%s*([A-Za-z]+)") 
+                            or promptLabel.Text:match("starting with:%s*([A-Za-z]+)")
+                if inline and #inline > 0 then
+                    detected = string.upper(inline)
+                    break
+                end
+                
+                -- 2. If not, scan the surrounding UI for the individual letter boxes (e.g. [Y] [E] [P])
+                local letters = {}
+                for _, sibling in ipairs(gui:GetDescendants()) do
+                    if sibling:IsA("TextLabel") and sibling.Visible and sibling ~= promptLabel then
+                        local t = sibling.Text:gsub("<[^>]+>", ""):gsub("[%s%p]", "")
+                        if #t > 0 and t:match("^%a+$") then
+                            -- Only grab labels that are 1 letter long, or fully uppercase words up to 5 letters
+                            if #t == 1 or (#t <= 5 and t == string.upper(t)) then
+                                table.insert(letters, {
+                                    text = string.upper(t), 
+                                    x = sibling.AbsolutePosition.X, 
+                                    layoutOrder = sibling.LayoutOrder
+                                })
+                            end
+                        end
+                    end
+                end
+                
+                -- Sort the letters from left to right based on their screen position
+                if #letters > 0 then
+                    table.sort(letters, function(a, b) 
+                        if math.abs(a.x - b.x) < 5 then return a.layoutOrder < b.layoutOrder end
+                        return a.x < b.x 
+                    end)
+                    local res = ""
+                    for _, l in ipairs(letters) do res = res .. l.text end
+                    detected = res
+                    break
+                end
+            end
+        end
+        
+        -- If we found a new prompt, automatically type it into the input box!
+        if detected and detected ~= lastDetectedPrompt then
+            lastDetectedPrompt = detected
+            inputBox.Text = detected
+        end
+    end
+end)
+
+-------------------------------------------------------------------------------
+-- TEXT BOX INPUT LOGIC
+-------------------------------------------------------------------------------
+
+local function findWords(prompt)
+    local results = {}
+    local promptLen = string.len(prompt)
+    
+    for i = 1, #allWords do
+        local word = allWords[i]
+        if string.sub(word, 1, promptLen) == prompt then
+            table.insert(results, word)
+            if #results >= 50 then break end
+        end
+    end
+    return results
+end
+
+inputBox:GetPropertyChangedSignal("Text"):Connect(function()
+    local text = string.upper(inputBox.Text:gsub("[%s%p]", ""))
+    
+    if text ~= "" then
+        local words = findWords(text)
+        
+        if #words > 0 then
+            local displayText = ""
+            for i, word in ipairs(words) do
+                local lowerWord = string.lower(word)
+                local displayWord
+                
+                if string.sub(word, -2) == "OX" then
+                    displayWord = string.sub(lowerWord, 1, -3) .. "OX"
+                else
+                    displayWord = string.sub(lowerWord, 1, -2) .. string.upper(string.sub(lowerWord, -1))
+                end
+                
+                if customWordsSet[word] then
+                    displayText = displayText .. i .. ". <font color=\"#FFFF00\">" .. displayWord .. "</font>\n"
+                else
+                    displayText = displayText .. i .. ". <font color=\"#FFFFFF\">" .. displayWord .. "</font>\n"
+                end
+            end
+            wordList.Text = " " .. displayText
+        else
+            wordList.Text = " <font color=\"#FFA500\">No words found starting with:\n " .. text .. "</font>"
+        end
+    else
+        wordList.Text = " <font color=\"#969696\">Waiting for game prompt...</font>"
+    end
+end)
+
+-------------------------------------------------------------------------------
+-- BUTTON CONNECTIONS
+-------------------------------------------------------------------------------
+
+refreshBtn.MouseButton1Click:Connect(function()
+    wordList.Text = "Refreshing Cache...\n(Please wait)"
+    task.spawn(function() downloadAndCache() end)
+end)
+
+destroyBtn.MouseButton1Click:Connect(function()
+    screenGui:Destroy()
+end)
