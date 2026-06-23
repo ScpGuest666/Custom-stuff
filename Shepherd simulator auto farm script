@@ -1,0 +1,381 @@
+-- Wait for player
+local Players = game:GetService("Players")
+local vim = game:GetService("VirtualInputManager")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
+-- Determine the best parent for the GUI
+local guiParent
+if type(gethui) == "function" then
+    guiParent = gethui()
+else
+    local success = pcall(function()
+        return game:GetService("CoreGui").Name
+    end)
+    if success then
+        guiParent = game:GetService("CoreGui")
+    else
+        guiParent = player:WaitForChild("PlayerGui")
+    end
+end
+
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "Gui_" .. math.random(10000, 99999)
+screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 2147483647
+screenGui.IgnoreGuiInset = true
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+screenGui.Parent = guiParent
+
+-- Main draggable frame
+local mainFrame = Instance.new("Frame")
+mainFrame.Parent = screenGui
+mainFrame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+mainFrame.Size = UDim2.new(0, 200, 0, 100)
+mainFrame.Position = UDim2.new(0.3, 0, 0.5, -50)
+mainFrame.Draggable = true
+mainFrame.Active = true
+
+-- Status label
+local status = Instance.new("TextLabel")
+status.Parent = mainFrame
+status.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+status.Size = UDim2.new(0, 200, 0, 30)
+status.Position = UDim2.new(0, 0, 0, -30)
+status.Text = "Status: Offline"
+status.TextColor3 = Color3.fromRGB(255, 0, 0)
+status.TextScaled = true
+status.Font = Enum.Font.SourceSansBold
+
+-- Helper to create a proper TextButton
+local function createButton(name, text, x, y, width, height)
+    local btn = Instance.new("TextButton")
+    btn.Name = name
+    btn.Parent = mainFrame
+    btn.Text = text
+    btn.Size = UDim2.new(0, width, 0, height)
+    btn.Position = UDim2.new(0, x, 0, y)
+    btn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextScaled = true
+    btn.AutoButtonColor = true
+    btn.BorderSizePixel = 0
+    return btn
+end
+
+-- Create buttons
+local onBtn = createButton("OnBtn", "On", 10, 20, 80, 30)
+local offBtn = createButton("OffBtn", "Off", 110, 20, 80, 30)
+local destroyBtn = createButton("DestroyBtn", "Destroy", 20, 60, 160, 30)
+
+-- Visual Pointer (Red Dot)
+local pointer = Instance.new("Frame")
+pointer.Name = "ClickPointer"
+pointer.Size = UDim2.new(0, 12, 0, 12)
+pointer.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+pointer.AnchorPoint = Vector2.new(0.5, 0.5)
+pointer.ZIndex = 2147483647
+pointer.Visible = false
+pointer.Parent = screenGui
+
+local uiCorner = Instance.new("UICorner")
+uiCorner.CornerRadius = UDim.new(1, 0)
+uiCorner.Parent = pointer
+
+-------------------------------------------------------------------------------
+-- CONFIGURATION & VARIABLES
+-------------------------------------------------------------------------------
+
+-- [[ ADJUST MOUSE POSITIONS FOR EACH INDIVIDUAL BUTTON HERE ]] --
+local buttonOffsets = {
+    ["Bring out"]    = { offsetX = 50, offsetY = 60 },
+    ["Graze"]        = { offsetX = 50, offsetY = 80 },
+    ["Stop Grazing"] = { offsetX = 50, offsetY = 60 },
+    ["Bring in"]     = { offsetX = 50, offsetY = 60 }
+}
+
+-- [[ ADJUST POINTER (RED DOT) POSITION RELATIVE TO MOUSE HERE ]] --
+local pointerOffsetX = -38 
+local pointerOffsetY = 0   
+
+local TOUCH_ID = 8823
+local isFarming = false
+local originalCFrame = nil
+local maxDistance = 40
+local mySheep = {}
+local farmCoroutine = nil
+
+-------------------------------------------------------------------------------
+-- HELPER FUNCTIONS
+-------------------------------------------------------------------------------
+local function isTrulyVisible(guiObject)
+    local current = guiObject
+    while current and current:IsA("GuiObject") do
+        if not current.Visible then return false end
+        if current:IsA("TextLabel") or current:IsA("TextButton") then
+            if current.TextTransparency >= 1 then return false end
+        end
+        current = current.Parent
+    end
+    return true
+end
+
+-- Scans PlayerGui for specific text
+local function findUIElementByText(targetText)
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if not playerGui then return nil end
+
+    targetText = string.lower(targetText)
+    
+    for _, desc in ipairs(playerGui:GetDescendants()) do
+        if desc:IsA("TextLabel") or desc:IsA("TextButton") then
+            if desc.Text then
+                local text = string.lower(desc.Text)
+                -- Use plain text search to avoid pattern matching errors
+                if string.find(text, targetText, 1, true) and isTrulyVisible(desc) then
+                    return desc
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- Simulates a click on a UI element using specific button offsets
+local function clickUIElement(element, buttonName)
+    if not element then return false end
+    
+    local absPos = element.AbsolutePosition
+    local absSize = element.AbsoluteSize
+
+    -- Fetch the specific offsets for this button, fallback to 50, 80 if not found
+    local offsets = buttonOffsets[buttonName] or { offsetX = 50, offsetY = 80 }
+    local bOffsetX = offsets.offsetX
+    local bOffsetY = offsets.offsetY
+
+    local x = absPos.X + (absSize.X / 2) + bOffsetX
+    local y = absPos.Y + (absSize.Y / 2) + bOffsetY
+
+    pointer.Position = UDim2.new(0, x + pointerOffsetX, 0, y + pointerOffsetY)
+    pointer.Visible = true
+
+    -- Click sequence
+    vim:SendTouchEvent(TOUCH_ID, 0, x, y) -- Began
+    task.wait(0.05)
+    vim:SendTouchEvent(TOUCH_ID, 1, x, y) -- Moved
+    task.wait(0.05)
+    vim:SendTouchEvent(TOUCH_ID, 2, x, y) -- Ended
+    
+    task.wait(0.1)
+    pointer.Visible = false
+    return true
+end
+
+-------------------------------------------------------------------------------
+-- MAIN FARMING CYCLE
+-------------------------------------------------------------------------------
+local function startFarmingCycle()
+    local character = player.Character
+    local hrp = character and character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    while isFarming do
+        ---------------------------------------------------------
+        -- PHASE 1: BRING OUT
+        ---------------------------------------------------------
+        status.Text = "Bringing Out..."
+        while isFarming do
+            local bringOutBtn = findUIElementByText("Bring out")
+            if bringOutBtn then
+                clickUIElement(bringOutBtn, "Bring out")
+                task.wait(1)
+            else
+                break -- Button is gone, move to next phase
+            end
+            task.wait(0.5)
+        end
+        if not isFarming then break end
+
+        ---------------------------------------------------------
+        -- PHASE 2: TELEPORT TO GRAZE AREA
+        ---------------------------------------------------------
+        status.Text = "Going to Graze Area..."
+        hrp.CFrame = CFrame.new(176.67967224121095, 10.65000057220459, 311.4925231933594)
+        task.wait(1.5) -- Wait for UI to load
+        if not isFarming then break end
+
+        ---------------------------------------------------------
+        -- PHASE 3: START GRAZING
+        ---------------------------------------------------------
+        status.Text = "Starting Graze..."
+        while isFarming do
+            local stopBtn = findUIElementByText("Stop Grazing")
+            if stopBtn then break end -- It changed to Stop Grazing, we are good
+            
+            local grazeBtn = findUIElementByText("Graze")
+            if grazeBtn then
+                clickUIElement(grazeBtn, "Graze")
+            end
+            task.wait(0.5)
+        end
+        if not isFarming then break end
+
+        ---------------------------------------------------------
+        -- PHASE 4: MAINTAIN GRAZE (Every 2 seconds)
+        ---------------------------------------------------------
+        status.Text = "Grazing..."
+        while isFarming do
+            -- Check if sheep are full
+            if findUIElementByText("Your sheep are full, take them back to the sheepfold!") then
+                break
+            end
+            
+            -- Click Stop Grazing
+            local stopBtn = findUIElementByText("Stop Grazing")
+            if stopBtn then clickUIElement(stopBtn, "Stop Grazing") end
+            task.wait(0.5)
+            
+            -- Click Graze
+            local grazeBtn = findUIElementByText("Graze")
+            if grazeBtn then clickUIElement(grazeBtn, "Graze") end
+            
+            -- Wait the remainder of the 2 seconds
+            task.wait(3) 
+        end
+        if not isFarming then break end
+
+        ---------------------------------------------------------
+        -- PHASE 5: FINISH GRAZE & RETURN
+        ---------------------------------------------------------
+        status.Text = "Returning..."
+        local finalStopBtn = findUIElementByText("Stop Grazing")
+        if finalStopBtn then clickUIElement(finalStopBtn, "Stop Grazing") end
+        task.wait(1)
+        
+        hrp.CFrame = originalCFrame
+        task.wait(1.5) -- Wait for UI to load
+        if not isFarming then break end
+
+        ---------------------------------------------------------
+        -- PHASE 6: BRING IN
+        ---------------------------------------------------------
+        status.Text = "Bringing In..."
+        while isFarming do
+            local bringInBtn = findUIElementByText("Bring in")
+            if bringInBtn then
+                clickUIElement(bringInBtn, "Bring in")
+                task.wait(1)
+            else
+                break -- Button is gone
+            end
+            task.wait(0.5)
+        end
+        if not isFarming then break end
+
+        ---------------------------------------------------------
+        -- PHASE 7: FARM SHEEP (4 MINUTES)
+        ---------------------------------------------------------
+        local farmDuration = 4 * 60 -- 4 minutes in seconds
+        local endTime = os.time() + farmDuration
+        
+        while isFarming and os.time() < endTime do
+            -- Update Status with Countdown
+            local remaining = endTime - os.time()
+            local mins = math.floor(remaining / 60)
+            local secs = remaining % 60
+            status.Text = string.format("%02d:%02d", mins, secs)
+
+            -- Teleport to whitelisted sheep
+            local hasTeleported = false
+            for sheepModel, targetSheepPart in pairs(mySheep) do
+                if not isFarming or os.time() >= endTime then break end
+                
+                if targetSheepPart and targetSheepPart.Parent then
+                    hrp.CFrame = targetSheepPart.CFrame + Vector3.new(0, 3, 0)
+                    hasTeleported = true
+                    task.wait(0.3)
+                else
+                    mySheep[sheepModel] = nil -- Remove if deleted
+                end
+            end
+            
+            -- If no sheep were found/teleported to, wait a bit to prevent lag
+            if not hasTeleported then
+                if (hrp.Position - originalCFrame.Position).Magnitude > 5 then
+                    hrp.CFrame = originalCFrame
+                end
+                task.wait(0.5)
+            end
+        end
+    end
+end
+
+-------------------------------------------------------------------------------
+-- BUTTON CONNECTIONS
+-------------------------------------------------------------------------------
+local function setOnline()
+    if isFarming then return end
+    
+    local character = player.Character
+    local hrp = character and character:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        originalCFrame = hrp.CFrame
+    end
+    
+    -- Whitelist Sheep
+    mySheep = {}
+    for _, desc in pairs(workspace:GetDescendants()) do
+        if desc:IsA("BillboardGui") then
+            local sheepModel = desc:FindFirstAncestorOfClass("Model")
+            if sheepModel and not mySheep[sheepModel] then
+                local part = sheepModel.PrimaryPart or sheepModel:FindFirstChildWhichIsA("BasePart")
+                if part and part.Parent then
+                    local dist = (part.Position - originalCFrame.Position).Magnitude
+                    if dist <= maxDistance then
+                        mySheep[sheepModel] = part
+                    end
+                end
+            end
+        end
+    end
+    
+    isFarming = true
+    status.TextColor3 = Color3.fromRGB(0, 255, 0)
+    
+    -- Start the cycle
+    farmCoroutine = task.spawn(startFarmingCycle)
+end
+
+local function setOffline()
+    isFarming = false
+    status.Text = "Status: Offline"
+    status.TextColor3 = Color3.fromRGB(255, 0, 0)
+    pointer.Visible = false
+    
+    if farmCoroutine then
+        task.cancel(farmCoroutine)
+        farmCoroutine = nil
+    end
+    
+    -- SAFETY CHECK: If we are grazing, gather the sheep before teleporting back!
+    local stopBtn = findUIElementByText("Stop Grazing")
+    if stopBtn then
+        clickUIElement(stopBtn, "Stop Grazing")
+        task.wait(1) -- Wait a second for the game to gather them
+    end
+    
+    local character = player.Character
+    local hrp = character and character:FindFirstChild("HumanoidRootPart")
+    if originalCFrame and hrp then
+        hrp.CFrame = originalCFrame
+    end
+end
+
+onBtn.MouseButton1Click:Connect(setOnline)
+offBtn.MouseButton1Click:Connect(setOffline)
+destroyBtn.MouseButton1Click:Connect(function()
+    setOffline()
+    screenGui:Destroy()
+end)
