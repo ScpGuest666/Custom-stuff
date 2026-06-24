@@ -330,7 +330,7 @@ local function startFarmingCycle()
             end
             
             -- 7. Wait before next cycle
-            task.wait(0.5) 
+            task.wait(2) 
         end
         if not isFarming then break end
 
@@ -356,7 +356,7 @@ local function startFarmingCycle()
         if not isFarming then break end
         
         hrp.CFrame = originalCFrame
-        task.wait(0.5) -- Wait for UI to load
+        task.wait(1.5) -- Wait for UI to load
         if not isFarming then break end
 
         ---------------------------------------------------------
@@ -408,6 +408,14 @@ local function startFarmingCycle()
                 end
                 task.wait(0.5)
             end
+        end
+        
+        -- =========================================================
+        -- NEW FIX: TELEPORT BACK TO ORIGINAL SPOT AFTER TIMER ENDS
+        -- =========================================================
+        if isFarming and hrp and originalCFrame then
+            hrp.CFrame = originalCFrame
+            task.wait(0.5) -- Give the game a moment to load the area before restarting Phase 1
         end
     end
 end
