@@ -311,9 +311,9 @@ local function startFarmingCycle()
             -- 3. Wait a moment for the game to update the text UI (clears old lingering messages)
             task.wait(1) 
 
-            -- 4. FAILSAFE: If grazing takes longer than 1 minute, assume full/UFO
+            -- 4. FAILSAFE: If grazing takes longer than 1 minute, assume full
             if os.time() - grazeStartTime >= maxGrazeTime then
-                currentFarmDuration = 1 * 60
+                currentFarmDuration = 4 * 60 -- Assume full, set to 4 minutes
                 break
             end
 
@@ -325,7 +325,7 @@ local function startFarmingCycle()
 
             -- 6. KEYWORD DETECTION: Only needs the words "unidentified" and "flying" to exist
             if findUIElementByKeywords({"unidentified", "flying"}) then
-                currentFarmDuration = 1 * 60
+                currentFarmDuration = 2 * 60 -- UFO sets it to 2 minutes
                 break
             end
             
@@ -395,7 +395,7 @@ local function startFarmingCycle()
                 if targetSheepPart and targetSheepPart.Parent then
                     hrp.CFrame = targetSheepPart.CFrame + Vector3.new(0, 3, 0)
                     hasTeleported = true
-                    task.wait(0.1) -- INCREASED SPEED: 3x faster (was 0.3)
+                    task.wait() -- AS FAST AS POSSIBLE (~0.015 seconds)
                 else
                     mySheep[sheepModel] = nil -- Remove if deleted
                 end
@@ -459,13 +459,56 @@ local function setOffline()
         farmCoroutine = nil
     end
     
-    -- SAFETY CHECK: If we are grazing, gather the sheep before teleporting back!
+    -- STRICT CHECK: Check if the Stop Grazing button is grayed out
     local stopBtn = findUIElementByText("stop grazing")
     if stopBtn then
-        clickUIElement(stopBtn, "Stop Grazing")
-        task.wait(1) -- Wait a second for the game to gather them
+        local function isElementGray(element)
+            if not element or not element:IsA("GuiObject") then return false end
+            local gray = false
+            
+            -- Check if the game disabled it via properties
+            pcall(function() if element.Interactable == false then gray = true end end)
+            pcall(function() if element.Active == false then gray = true end end)
+            
+            -- Check if it's visually grayed out via transparency
+            if element.BackgroundTransparency > 0.4 then gray = true end
+            if (element:IsA("TextLabel") or element:IsA("TextButton")) and element.TextTransparency > 0.4 then 
+                gray = true 
+            end
+            
+            -- Check if the color is literally gray (R, G, B are very close to each other)
+            if element.BackgroundTransparency < 1 then
+                local c = element.BackgroundColor3
+                local maxDiff = math.max(math.abs(c.R - c.G), math.abs(c.G - c.B), math.abs(c.R - c.B))
+                if maxDiff < 0.1 and c.R > 0.1 and c.R < 0.9 then
+                    gray = true
+                end
+            end
+            
+            return gray
+        end
+
+        local isGray = isElementGray(stopBtn)
+        
+        -- If the text label has a transparent background, the actual button might be the parent
+        if stopBtn.BackgroundTransparency == 1 and stopBtn.Parent and stopBtn.Parent:IsA("GuiObject") then
+            if isElementGray(stopBtn.Parent) then
+                isGray = true
+            end
+        end
+
+        if isGray then
+            -- DO NOT teleport back. DO NOT click it.
+            -- Leave the player exactly here so they can manually click it when it un-grays.
+            return
+        else
+            -- Normal state: click it and wait a second for the game to gather them
+            clickUIElement(stopBtn, "Stop Grazing")
+            task.wait(1) 
+        end
     end
     
+    -- Teleport back (Only runs if the button wasn't gray)
     local character = player.Character
     local hrp = character and character:FindFirstChild("HumanoidRootPart")
     if originalCFrame and hrp then
