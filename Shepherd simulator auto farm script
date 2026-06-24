@@ -235,10 +235,34 @@ local function startFarmingCycle()
             if bringOutBtn then
                 clickUIElement(bringOutBtn, "Bring out")
                 task.wait(1)
+                
+                -- If it successfully clicked and disappeared, break to next phase
+                if not findUIElementByText("bring out") then
+                    break
+                end
             else
-                break -- Button is gone, move to next phase
+                -- If button is not found, check if they are already out (Bring in or Graze is visible)
+                if findUIElementByText("bring in") or findUIElementByText("graze", "stop") then
+                    break
+                end
+                
+                -- Teleport to a random sheep to force the UI to appear
+                local sheepList = {}
+                for _, part in pairs(mySheep) do
+                    if part and part.Parent then
+                        table.insert(sheepList, part)
+                    end
+                end
+                
+                if #sheepList > 0 then
+                    local randomSheep = sheepList[math.random(1, #sheepList)]
+                    hrp.CFrame = randomSheep.CFrame + Vector3.new(0, 3, 0)
+                else
+                    hrp.CFrame = originalCFrame
+                end
+                
+                task.wait(0.5)
             end
-            task.wait(0.5)
         end
         if not isFarming then break end
 
@@ -294,7 +318,6 @@ local function startFarmingCycle()
             end
 
             -- 5. INSTANT DETECTION: Triggers the moment "are full" appears on screen
-            -- (Changed from "your sheep" to prevent false triggers from other messages like "Take your sheep...")
             if findUIElementByText("are full") then
                 currentFarmDuration = 4 * 60
                 break
@@ -372,7 +395,7 @@ local function startFarmingCycle()
                 if targetSheepPart and targetSheepPart.Parent then
                     hrp.CFrame = targetSheepPart.CFrame + Vector3.new(0, 3, 0)
                     hasTeleported = true
-                    task.wait(0.3)
+                    task.wait(0.1) -- INCREASED SPEED: 3x faster (was 0.3)
                 else
                     mySheep[sheepModel] = nil -- Remove if deleted
                 end
