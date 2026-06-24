@@ -330,7 +330,7 @@ local function startFarmingCycle()
             end
             
             -- 7. Wait before next cycle
-            task.wait(2) 
+            task.wait(0.5) 
         end
         if not isFarming then break end
 
@@ -356,7 +356,7 @@ local function startFarmingCycle()
         if not isFarming then break end
         
         hrp.CFrame = originalCFrame
-        task.wait(1.5) -- Wait for UI to load
+        task.wait(0.5) -- Wait for UI to load
         if not isFarming then break end
 
         ---------------------------------------------------------
