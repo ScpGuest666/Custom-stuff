@@ -289,7 +289,7 @@ local function startFarmingCycle()
         ---------------------------------------------------------
         status.Text = "Grazing..."
         local grazeStartTime = os.time()
-        local maxGrazeTime = 1 * 60 
+        local maxGrazeTime = 1 * 30 
 
         while isFarming do
             local stopBtn = findUIElementByText("stop grazing")
