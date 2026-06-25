@@ -105,6 +105,7 @@ local isFarming = false
 local originalCFrame = nil
 local maxDistance = 40
 local mySheep = {}
+local activeFakeLimbs = {} -- Stores the persistent fake limbs
 local farmCoroutine = nil
 
 -------------------------------------------------------------------------------
@@ -122,16 +123,14 @@ local function isTrulyVisible(guiObject)
     return true
 end
 
--- Strips RichText tags, newlines, and extra spaces to make text readable
 local function cleanText(str)
     if type(str) ~= "string" then return "" end
-    str = string.gsub(str, "<[^>]+>", "") -- Remove rich text tags
-    str = string.lower(str) -- Convert to lowercase
-    str = string.gsub(str, "%s+", " ") -- Replace newlines/multiple spaces with a single space
+    str = string.gsub(str, "<[^>]+>", "") 
+    str = string.lower(str) 
+    str = string.gsub(str, "%s+", " ") 
     return str
 end
 
--- Finds UI by checking if ALL provided keywords exist in the text (ignores typos/cut-offs)
 local function findUIElementByKeywords(keywords)
     local playerGui = player:FindFirstChild("PlayerGui")
     if not playerGui then return nil end
@@ -158,7 +157,6 @@ local function findUIElementByKeywords(keywords)
     return nil
 end
 
--- Finds UI by exact substring, with an optional word to exclude (e.g., find "Graze" but exclude "Stop")
 local function findUIElementByText(targetText, excludeText)
     local playerGui = player:FindFirstChild("PlayerGui")
     if not playerGui then return nil end
@@ -187,7 +185,6 @@ local function findUIElementByText(targetText, excludeText)
     return nil
 end
 
--- Simulates a click on a UI element using specific button offsets
 local function clickUIElement(element, buttonName)
     if not element then return false end
     
@@ -204,11 +201,11 @@ local function clickUIElement(element, buttonName)
     pointer.Position = UDim2.new(0, x + pointerOffsetX, 0, y + pointerOffsetY)
     pointer.Visible = true
 
-    vim:SendTouchEvent(TOUCH_ID, 0, x, y) -- Began
+    vim:SendTouchEvent(TOUCH_ID, 0, x, y) 
     task.wait(0.05)
-    vim:SendTouchEvent(TOUCH_ID, 1, x, y) -- Moved
+    vim:SendTouchEvent(TOUCH_ID, 1, x, y) 
     task.wait(0.05)
-    vim:SendTouchEvent(TOUCH_ID, 2, x, y) -- Ended
+    vim:SendTouchEvent(TOUCH_ID, 2, x, y) 
     
     task.wait(0.1)
     pointer.Visible = false
@@ -224,7 +221,7 @@ local function startFarmingCycle()
     if not hrp then return end
 
     while isFarming do
-        local currentFarmDuration = 4 * 60 -- Default to 4 minutes
+        local currentFarmDuration = 4 * 60 
 
         ---------------------------------------------------------
         -- PHASE 1: BRING OUT
@@ -236,17 +233,14 @@ local function startFarmingCycle()
                 clickUIElement(bringOutBtn, "Bring out")
                 task.wait(1)
                 
-                -- If it successfully clicked and disappeared, break to next phase
                 if not findUIElementByText("bring out") then
                     break
                 end
             else
-                -- If button is not found, check if they are already out (Bring in or Graze is visible)
                 if findUIElementByText("bring in") or findUIElementByText("graze", "stop") then
                     break
                 end
                 
-                -- Teleport to a random sheep to force the UI to appear
                 local sheepList = {}
                 for _, part in pairs(mySheep) do
                     if part and part.Parent then
@@ -271,7 +265,7 @@ local function startFarmingCycle()
         ---------------------------------------------------------
         status.Text = "Going to Graze Area..."
         hrp.CFrame = CFrame.new(176.67967224121095, 10.65000057220459, 311.4925231933594)
-        task.wait(1.5) -- Wait for UI to load
+        task.wait(1.5) 
         if not isFarming then break end
 
         ---------------------------------------------------------
@@ -280,9 +274,8 @@ local function startFarmingCycle()
         status.Text = "Starting Graze..."
         while isFarming do
             local stopBtn = findUIElementByText("stop grazing")
-            if stopBtn then break end -- It changed to Stop Grazing, we are good
+            if stopBtn then break end 
             
-            -- Look for "graze" but make sure it doesn't accidentally click "stop grazing"
             local grazeBtn = findUIElementByText("graze", "stop")
             if grazeBtn then
                 clickUIElement(grazeBtn, "Graze")
@@ -296,54 +289,45 @@ local function startFarmingCycle()
         ---------------------------------------------------------
         status.Text = "Grazing..."
         local grazeStartTime = os.time()
-        local maxGrazeTime = 1 * 60 -- 1 minute failsafe timer
+        local maxGrazeTime = 1 * 60 
 
         while isFarming do
-            -- 1. Click Stop Grazing
             local stopBtn = findUIElementByText("stop grazing")
             if stopBtn then clickUIElement(stopBtn, "Stop Grazing") end
             task.wait(0.5)
             
-            -- 2. Click Graze
             local grazeBtn = findUIElementByText("graze", "stop")
             if grazeBtn then clickUIElement(grazeBtn, "Graze") end
             
-            -- 3. Wait a moment for the game to update the text UI (clears old lingering messages)
             task.wait(1) 
 
-            -- 4. FAILSAFE: If grazing takes longer than 1 minute, assume full
             if os.time() - grazeStartTime >= maxGrazeTime then
-                currentFarmDuration = 4 * 60 -- Assume full, set to 4 minutes
+                currentFarmDuration = 4 * 60 
                 break
             end
 
-            -- 5. INSTANT DETECTION: Triggers the moment "are full" appears on screen
             if findUIElementByText("are full") then
                 currentFarmDuration = 4 * 60
                 break
             end
 
-            -- 6. KEYWORD DETECTION: Only needs the words "unidentified" and "flying" to exist
             if findUIElementByKeywords({"unidentified", "flying"}) then
-                currentFarmDuration = 2 * 60 -- UFO sets it to 2 minutes
+                currentFarmDuration = 2 * 60 
                 break
             end
             
-            -- 7. Wait before next cycle
             task.wait(2) 
         end
         if not isFarming then break end
 
         ---------------------------------------------------------
-        -- PHASE 5: FINISH GRAZE & RETURN (DOG LURE WAIT)
+        -- PHASE 5: FINISH GRAZE & RETURN
         ---------------------------------------------------------
         status.Text = "Returning..."
-        -- Loop to handle cases where the "Stop Grazing" button is grayed out or disappears 
-        -- We know we have successfully stopped grazing when the "Graze" button reappears.
         while isFarming do
             local grazeBtn = findUIElementByText("graze", "stop")
             if grazeBtn then
-                break -- Successfully stopped grazing!
+                break 
             end
             
             local finalStopBtn = findUIElementByText("stop grazing")
@@ -356,7 +340,7 @@ local function startFarmingCycle()
         if not isFarming then break end
         
         hrp.CFrame = originalCFrame
-        task.wait(1.5) -- Wait for UI to load
+        task.wait(1.5) 
         if not isFarming then break end
 
         ---------------------------------------------------------
@@ -369,16 +353,17 @@ local function startFarmingCycle()
                 clickUIElement(bringInBtn, "Bring in")
                 task.wait(1)
             else
-                break -- Button is gone
+                break 
             end
             task.wait(0.5)
         end
         if not isFarming then break end
 
         ---------------------------------------------------------
-        -- PHASE 7: FARM SHEEP (DYNAMIC DURATION)
+        -- PHASE 7: FARM SHEEP (REMOTE TOUCH / NO TP)
         ---------------------------------------------------------
         local endTime = os.time() + currentFarmDuration
+        local toggleWiggle = false
         
         while isFarming and os.time() < endTime do
             -- Update Status with Countdown
@@ -387,35 +372,87 @@ local function startFarmingCycle()
             local secs = remaining % 60
             status.Text = string.format("%02d:%02d", mins, secs)
 
-            -- Teleport to whitelisted sheep
-            local hasTeleported = false
-            for sheepModel, targetSheepPart in pairs(mySheep) do
-                if not isFarming or os.time() >= endTime then break end
-                
-                if targetSheepPart and targetSheepPart.Parent then
-                    hrp.CFrame = targetSheepPart.CFrame + Vector3.new(0, 3, 0)
-                    hasTeleported = true
-                    task.wait() -- AS FAST AS POSSIBLE (~0.015 seconds)
-                else
-                    mySheep[sheepModel] = nil -- Remove if deleted
+            local char = player.Character
+            local currentHrp = char and char:FindFirstChild("HumanoidRootPart")
+
+            if currentHrp then
+                -- Wiggle offset forces the physics engine to register continuous touches
+                toggleWiggle = not toggleWiggle
+                local wiggleOffset = toggleWiggle and Vector3.new(0, 0.1, 0) or Vector3.new(0, -0.1, 0)
+
+                for sheepModel, _ in pairs(mySheep) do
+                    if not isFarming or os.time() >= endTime then break end
+                    
+                    if sheepModel and sheepModel.Parent then
+                        
+                        -- 1. PROXIMITY PROMPT SUPPORT
+                        for _, desc in ipairs(sheepModel:GetDescendants()) do
+                            if desc:IsA("ProximityPrompt") then
+                                if fireproximityprompt then
+                                    fireproximityprompt(desc)
+                                else
+                                    desc:InputHoldBegin()
+                                    task.wait(desc.HoldDuration + 0.05)
+                                    desc:InputHoldEnd()
+                                end
+                            end
+                        end
+
+                        -- 2. FIRETOUCHINTEREST ON ALL PARTS
+                        for _, desc in ipairs(sheepModel:GetDescendants()) do
+                            if desc:IsA("BasePart") then
+                                if firetouchinterest then
+                                    firetouchinterest(currentHrp, desc, 0)
+                                    firetouchinterest(currentHrp, desc, 1)
+                                end
+                            end
+                        end
+
+                        -- 3. FAKE LIMB SIMULATION (PERSISTENT)
+                        -- Create the fake limb if it doesn't exist yet (or if player died and it was destroyed)
+                        if not activeFakeLimbs[sheepModel] or not activeFakeLimbs[sheepModel].Parent then
+                            local fakeLimb = Instance.new("Part")
+                            fakeLimb.Name = "Right Arm"
+                            fakeLimb.CanCollide = false
+                            fakeLimb.Transparency = 1
+                            fakeLimb.Massless = true
+                            fakeLimb.Parent = char
+                            activeFakeLimbs[sheepModel] = fakeLimb
+                        end
+                        
+                        -- Update the fake limb's position to stay on the sheep
+                        local sheepCFrame, sheepSize = sheepModel:GetBoundingBox()
+                        local limb = activeFakeLimbs[sheepModel]
+                        if limb and limb.Parent then
+                            limb.Size = sheepSize + Vector3.new(2, 2, 2)
+                            limb.CFrame = sheepCFrame + wiggleOffset
+                        end
+
+                    else
+                        -- Cleanup ONLY if the sheep was completely deleted from the game
+                        if activeFakeLimbs[sheepModel] then
+                            activeFakeLimbs[sheepModel]:Destroy()
+                            activeFakeLimbs[sheepModel] = nil
+                        end
+                        mySheep[sheepModel] = nil 
+                    end
                 end
-            end
-            
-            -- If no sheep were found/teleported to, wait a bit to prevent lag
-            if not hasTeleported then
-                if (hrp.Position - originalCFrame.Position).Magnitude > 5 then
-                    hrp.CFrame = originalCFrame
-                end
-                task.wait(0.5)
+                task.wait(0.5) 
+            else
+                task.wait(1) -- Wait for character to respawn
             end
         end
-        
+
         -- =========================================================
-        -- NEW FIX: TELEPORT BACK TO ORIGINAL SPOT AFTER TIMER ENDS
+        -- TELEPORT BACK TO ORIGINAL SPOT AFTER TIMER ENDS
         -- =========================================================
-        if isFarming and hrp and originalCFrame then
-            hrp.CFrame = originalCFrame
-            task.wait(0.5) -- Give the game a moment to load the area before restarting Phase 1
+        if isFarming and originalCFrame then
+            local char = player.Character
+            local finalHrp = char and char:FindFirstChild("HumanoidRootPart")
+            if finalHrp then
+                finalHrp.CFrame = originalCFrame
+                task.wait(0.5) 
+            end
         end
     end
 end
@@ -452,7 +489,6 @@ local function setOnline()
     isFarming = true
     status.TextColor3 = Color3.fromRGB(0, 255, 0)
     
-    -- Start the cycle
     farmCoroutine = task.spawn(startFarmingCycle)
 end
 
@@ -467,24 +503,26 @@ local function setOffline()
         farmCoroutine = nil
     end
     
-    -- STRICT CHECK: Check if the Stop Grazing button is grayed out
+    -- Cleanup any active fake limbs immediately when turned off
+    for _, limb in pairs(activeFakeLimbs) do
+        if limb then limb:Destroy() end
+    end
+    table.clear(activeFakeLimbs)
+    
     local stopBtn = findUIElementByText("stop grazing")
     if stopBtn then
         local function isElementGray(element)
             if not element or not element:IsA("GuiObject") then return false end
             local gray = false
             
-            -- Check if the game disabled it via properties
             pcall(function() if element.Interactable == false then gray = true end end)
             pcall(function() if element.Active == false then gray = true end end)
             
-            -- Check if it's visually grayed out via transparency
             if element.BackgroundTransparency > 0.4 then gray = true end
             if (element:IsA("TextLabel") or element:IsA("TextButton")) and element.TextTransparency > 0.4 then 
                 gray = true 
             end
             
-            -- Check if the color is literally gray (R, G, B are very close to each other)
             if element.BackgroundTransparency < 1 then
                 local c = element.BackgroundColor3
                 local maxDiff = math.max(math.abs(c.R - c.G), math.abs(c.G - c.B), math.abs(c.R - c.B))
@@ -498,7 +536,6 @@ local function setOffline()
 
         local isGray = isElementGray(stopBtn)
         
-        -- If the text label has a transparent background, the actual button might be the parent
         if stopBtn.BackgroundTransparency == 1 and stopBtn.Parent and stopBtn.Parent:IsA("GuiObject") then
             if isElementGray(stopBtn.Parent) then
                 isGray = true
@@ -506,17 +543,13 @@ local function setOffline()
         end
 
         if isGray then
-            -- DO NOT teleport back. DO NOT click it.
-            -- Leave the player exactly here so they can manually click it when it un-grays.
             return
         else
-            -- Normal state: click it and wait a second for the game to gather them
             clickUIElement(stopBtn, "Stop Grazing")
             task.wait(1) 
         end
     end
     
-    -- Teleport back (Only runs if the button wasn't gray)
     local character = player.Character
     local hrp = character and character:FindFirstChild("HumanoidRootPart")
     if originalCFrame and hrp then
