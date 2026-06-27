@@ -105,7 +105,7 @@ local isFarming = false
 local originalCFrame = nil
 local maxDistance = 40
 local mySheep = {}
-local singleFakeLimb = nil -- Stores the single persistent fake limb
+local activeFakeLimbs = {} -- Stores the persistent fake limbs
 local farmCoroutine = nil
 
 -------------------------------------------------------------------------------
@@ -210,29 +210,6 @@ local function clickUIElement(element, buttonName)
     task.wait(0.1)
     pointer.Visible = false
     return true
-end
-
-local function isElementGray(element)
-    if not element or not element:IsA("GuiObject") then return false end
-    local gray = false
-    
-    pcall(function() if element.Interactable == false then gray = true end end)
-    pcall(function() if element.Active == false then gray = true end end)
-    
-    if element.BackgroundTransparency > 0.4 then gray = true end
-    if (element:IsA("TextLabel") or element:IsA("TextButton")) and element.TextTransparency > 0.4 then 
-        gray = true 
-    end
-    
-    if element.BackgroundTransparency < 1 then
-        local c = element.BackgroundColor3
-        local maxDiff = math.max(math.abs(c.R - c.G), math.abs(c.G - c.B), math.abs(c.R - c.B))
-        if maxDiff < 0.1 and c.R > 0.1 and c.R < 0.9 then
-            gray = true
-        end
-    end
-    
-    return gray
 end
 
 -------------------------------------------------------------------------------
@@ -408,27 +385,7 @@ local function startFarmingCycle()
                     
                     if sheepModel and sheepModel.Parent then
                         
-                        -- 1. FAKE LIMB SIMULATION (SINGLE, FAST TELEPORT)
-                        -- Create the fake limb if it doesn't exist yet (or if player died and it was destroyed)
-                        if not singleFakeLimb or not singleFakeLimb.Parent then
-                            if char then
-                                singleFakeLimb = Instance.new("Part")
-                                singleFakeLimb.Name = "Right Arm"
-                                singleFakeLimb.CanCollide = false
-                                singleFakeLimb.Transparency = 1
-                                singleFakeLimb.Massless = true
-                                singleFakeLimb.Parent = char
-                            end
-                        end
-                        
-                        -- Update the single fake limb's position to instantly jump to this sheep
-                        if singleFakeLimb and singleFakeLimb.Parent then
-                            local sheepCFrame, sheepSize = sheepModel:GetBoundingBox()
-                            singleFakeLimb.Size = sheepSize + Vector3.new(2, 2, 2)
-                            singleFakeLimb.CFrame = sheepCFrame + wiggleOffset
-                        end
-
-                        -- 2. PROXIMITY PROMPT SUPPORT
+                        -- 1. PROXIMITY PROMPT SUPPORT
                         for _, desc in ipairs(sheepModel:GetDescendants()) do
                             if desc:IsA("ProximityPrompt") then
                                 if fireproximityprompt then
@@ -441,23 +398,42 @@ local function startFarmingCycle()
                             end
                         end
 
-                        -- 3. FIRETOUCHINTEREST ON ALL PARTS
+                        -- 2. FIRETOUCHINTEREST ON ALL PARTS
                         for _, desc in ipairs(sheepModel:GetDescendants()) do
                             if desc:IsA("BasePart") then
                                 if firetouchinterest then
                                     firetouchinterest(currentHrp, desc, 0)
                                     firetouchinterest(currentHrp, desc, 1)
-                                    
-                                    if singleFakeLimb then
-                                        firetouchinterest(singleFakeLimb, desc, 0)
-                                        firetouchinterest(singleFakeLimb, desc, 1)
-                                    end
                                 end
                             end
                         end
 
+                        -- 3. FAKE LIMB SIMULATION (PERSISTENT)
+                        -- Create the fake limb if it doesn't exist yet (or if player died and it was destroyed)
+                        if not activeFakeLimbs[sheepModel] or not activeFakeLimbs[sheepModel].Parent then
+                            local fakeLimb = Instance.new("Part")
+                            fakeLimb.Name = "Right Arm"
+                            fakeLimb.CanCollide = false
+                            fakeLimb.Transparency = 1
+                            fakeLimb.Massless = true
+                            fakeLimb.Parent = char
+                            activeFakeLimbs[sheepModel] = fakeLimb
+                        end
+                        
+                        -- Update the fake limb's position to stay on the sheep
+                        local sheepCFrame, sheepSize = sheepModel:GetBoundingBox()
+                        local limb = activeFakeLimbs[sheepModel]
+                        if limb and limb.Parent then
+                            limb.Size = sheepSize + Vector3.new(2, 2, 2)
+                            limb.CFrame = sheepCFrame + wiggleOffset
+                        end
+
                     else
                         -- Cleanup ONLY if the sheep was completely deleted from the game
+                        if activeFakeLimbs[sheepModel] then
+                            activeFakeLimbs[sheepModel]:Destroy()
+                            activeFakeLimbs[sheepModel] = nil
+                        end
                         mySheep[sheepModel] = nil 
                     end
                 end
@@ -491,17 +467,6 @@ local function setOnline()
     local hrp = character and character:FindFirstChild("HumanoidRootPart")
     if hrp then
         originalCFrame = hrp.CFrame
-    end
-    
-    -- Spawn the single fake limb the moment the script is on
-    if singleFakeLimb then singleFakeLimb:Destroy() end
-    if character then
-        singleFakeLimb = Instance.new("Part")
-        singleFakeLimb.Name = "Right Arm"
-        singleFakeLimb.CanCollide = false
-        singleFakeLimb.Transparency = 1
-        singleFakeLimb.Massless = true
-        singleFakeLimb.Parent = character
     end
     
     -- Whitelist Sheep
@@ -538,42 +503,51 @@ local function setOffline()
         farmCoroutine = nil
     end
     
-    -- Cleanup the single fake limb immediately when turned off
-    if singleFakeLimb then
-        singleFakeLimb:Destroy()
-        singleFakeLimb = nil
+    -- Cleanup any active fake limbs immediately when turned off
+    for _, limb in pairs(activeFakeLimbs) do
+        if limb then limb:Destroy() end
     end
+    table.clear(activeFakeLimbs)
     
-    -- Handle Grazing Phase Stop & Teleport Back
     local stopBtn = findUIElementByText("stop grazing")
     if stopBtn then
-        status.Text = "Stopping Graze..."
-        status.TextColor3 = Color3.fromRGB(255, 165, 0) -- Orange for waiting
-        
-        while true do
-            stopBtn = findUIElementByText("stop grazing")
-            if not stopBtn then break end -- Button disappeared, grazing stopped
+        local function isElementGray(element)
+            if not element or not element:IsA("GuiObject") then return false end
+            local gray = false
             
-            local isGray = isElementGray(stopBtn)
+            pcall(function() if element.Interactable == false then gray = true end end)
+            pcall(function() if element.Active == false then gray = true end end)
             
-            if stopBtn.BackgroundTransparency == 1 and stopBtn.Parent and stopBtn.Parent:IsA("GuiObject") then
-                if isElementGray(stopBtn.Parent) then
-                    isGray = true
+            if element.BackgroundTransparency > 0.4 then gray = true end
+            if (element:IsA("TextLabel") or element:IsA("TextButton")) and element.TextTransparency > 0.4 then 
+                gray = true 
+            end
+            
+            if element.BackgroundTransparency < 1 then
+                local c = element.BackgroundColor3
+                local maxDiff = math.max(math.abs(c.R - c.G), math.abs(c.G - c.B), math.abs(c.R - c.B))
+                if maxDiff < 0.1 and c.R > 0.1 and c.R < 0.9 then
+                    gray = true
                 end
             end
-
-            if not isGray then
-                clickUIElement(stopBtn, "Stop Grazing")
-                task.wait(1) 
-                if not findUIElementByText("stop grazing") then
-                    break
-                end
-            end
-            task.wait(0.5) -- Wait for the button to turn green if it's gray
+            
+            return gray
         end
+
+        local isGray = isElementGray(stopBtn)
         
-        status.Text = "Status: Offline"
-        status.TextColor3 = Color3.fromRGB(255, 0, 0)
+        if stopBtn.BackgroundTransparency == 1 and stopBtn.Parent and stopBtn.Parent:IsA("GuiObject") then
+            if isElementGray(stopBtn.Parent) then
+                isGray = true
+            end
+        end
+
+        if isGray then
+            return
+        else
+            clickUIElement(stopBtn, "Stop Grazing")
+            task.wait(1) 
+        end
     end
     
     local character = player.Character
