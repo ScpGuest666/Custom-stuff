@@ -87,8 +87,6 @@ uiCorner.Parent = pointer
 -------------------------------------------------------------------------------
 -- CONFIGURATION & VARIABLES
 -------------------------------------------------------------------------------
-
--- [[ ADJUST MOUSE POSITIONS FOR EACH INDIVIDUAL BUTTON HERE ]] --
 local buttonOffsets = {
     ["Bring out"]    = { offsetX = 50, offsetY = 60 },
     ["Graze"]        = { offsetX = 50, offsetY = 80 },
@@ -96,7 +94,6 @@ local buttonOffsets = {
     ["Bring in"]     = { offsetX = 50, offsetY = 60 }
 }
 
--- [[ ADJUST POINTER (RED DOT) POSITION RELATIVE TO MOUSE HERE ]] --
 local pointerOffsetX = -38 
 local pointerOffsetY = 0   
 
@@ -105,8 +102,64 @@ local isFarming = false
 local originalCFrame = nil
 local maxDistance = 40
 local mySheep = {}
-local activeFakeLimb = nil -- Stores the single persistent fake limb
+local activeFakeLimb = nil 
 local farmCoroutine = nil
+
+-- UFO Tracking State (Lock-On System)
+local ufoState = {
+    threatLevel = 0, -- 0: Safe, 1: Locked & Descending/Hovering, 2: Ascending (Strike Confirmed)
+    lockedUFO = nil  -- Stores the specific UFO targeting Pasture 6
+}
+local ufoData = {}
+local trackedUFOs = {}
+local activeUFOsCache = {} 
+local foundPasture = nil
+local ufoAddedConn = nil
+local ufoRemovedConn = nil
+local antiLagApplied = false
+
+-------------------------------------------------------------------------------
+-- EXTREME ANTI-LAG FUNCTION
+-------------------------------------------------------------------------------
+local function applyAntiLag()
+    if antiLagApplied then return end
+    antiLagApplied = true
+    
+    local Lighting = game:GetService("Lighting")
+    local Terrain = workspace:FindFirstChildOfClass("Terrain")
+    
+    Lighting.GlobalShadows = false
+    Lighting.FogEnd = 9e9
+    Lighting.ShadowSoftness = 0
+    pcall(function() Lighting.Technology = Enum.Technology.Compatibility end)
+    
+    for _, obj in ipairs(Lighting:GetChildren()) do
+        if obj:IsA("PostEffect") or obj:IsA("Atmosphere") or obj:IsA("Clouds") or obj:IsA("DepthOfFieldEffect") then
+            obj:Destroy()
+        end
+    end
+    
+    if Terrain then
+        Terrain.WaterWaveSize = 0
+        Terrain.WaterWaveSpeed = 0
+        Terrain.WaterReflectance = 0
+        Terrain.WaterTransparency = 0
+        Terrain.Decoration = false
+    end
+    
+    task.spawn(function()
+        for _, desc in ipairs(workspace:GetDescendants()) do
+            if desc:IsA("BasePart") then
+                desc.Material = Enum.Material.SmoothPlastic
+                desc.Reflectance = 0
+                desc.CastShadow = false
+            elseif desc:IsA("ParticleEmitter") or desc:IsA("Trail") or desc:IsA("Beam") or desc:IsA("Fire") or desc:IsA("Smoke") or desc:IsA("Sparkles") then
+                desc.Enabled = false
+            end
+            if _ % 500 == 0 then task.wait() end
+        end
+    end)
+end
 
 -------------------------------------------------------------------------------
 -- ADVANCED TEXT DETECTION ENGINE
@@ -131,32 +184,6 @@ local function cleanText(str)
     return str
 end
 
-local function findUIElementByKeywords(keywords)
-    local playerGui = player:FindFirstChild("PlayerGui")
-    if not playerGui then return nil end
-
-    for _, desc in ipairs(playerGui:GetDescendants()) do
-        if desc:IsA("TextLabel") or desc:IsA("TextButton") then
-            if desc.Text and desc.Text ~= "" then
-                local text = cleanText(desc.Text)
-                local allMatch = true
-                
-                for _, kw in ipairs(keywords) do
-                    if not string.find(text, string.lower(kw), 1, true) then
-                        allMatch = false
-                        break
-                    end
-                end
-                
-                if allMatch and isTrulyVisible(desc) then
-                    return desc
-                end
-            end
-        end
-    end
-    return nil
-end
-
 local function findUIElementByText(targetText, excludeText)
     local playerGui = player:FindFirstChild("PlayerGui")
     if not playerGui then return nil end
@@ -168,13 +195,11 @@ local function findUIElementByText(targetText, excludeText)
         if desc:IsA("TextLabel") or desc:IsA("TextButton") then
             if desc.Text and desc.Text ~= "" then
                 local text = cleanText(desc.Text)
-                
                 if string.find(text, targetText, 1, true) then
                     local isExcluded = false
                     if excludeText and string.find(text, excludeText, 1, true) then
                         isExcluded = true
                     end
-                    
                     if not isExcluded and isTrulyVisible(desc) then
                         return desc
                     end
@@ -213,12 +238,106 @@ local function clickUIElement(element, buttonName)
 end
 
 -------------------------------------------------------------------------------
+-- UFO LOCK-ON ENGINE (ZERO FLICKER, ZERO LAG)
+-------------------------------------------------------------------------------
+RunService.Heartbeat:Connect(function(dt)
+    if not isFarming then return end
+
+    if not foundPasture then
+        for _, desc in ipairs(workspace:GetDescendants()) do
+            if desc.Name == "Pasture_6" then
+                if desc:IsA("BasePart") then
+                    foundPasture = desc
+                    break
+                elseif desc:IsA("Model") or desc:IsA("Folder") then
+                    foundPasture = desc:FindFirstChildWhichIsA("BasePart")
+                    if foundPasture then break end
+                end
+            end
+        end
+    end
+
+    if not foundPasture then return end
+
+    local pasturePos = foundPasture.Position
+    local pastureTopY = pasturePos.Y + (foundPasture.Size.Y / 2) + 15 
+
+    -- 1. Check if our locked UFO was destroyed/despawned
+    if ufoState.lockedUFO and not ufoState.lockedUFO.Parent then
+        ufoState.lockedUFO = nil
+        ufoState.threatLevel = 0
+    end
+
+    -- 2. If we don't have a locked UFO, scan the sky directly above Pasture 6
+    if not ufoState.lockedUFO then
+        local searchRadius = (math.max(foundPasture.Size.X, foundPasture.Size.Z) / 2) * 1.2 
+        
+        for ufoPart, _ in pairs(activeUFOsCache) do
+            if ufoPart and ufoPart.Parent then
+                local distXZ = math.sqrt((ufoPart.Position.X - pasturePos.X)^2 + (ufoPart.Position.Z - pasturePos.Z)^2)
+                if distXZ <= searchRadius then
+                    ufoState.lockedUFO = ufoPart
+                    break 
+                end
+            else
+                activeUFOsCache[ufoPart] = nil
+            end
+        end
+    end
+
+    -- 3. Process the Locked UFO
+    if ufoState.lockedUFO then
+        local ufoPart = ufoState.lockedUFO
+        local currentPos = ufoPart.Position
+        local data = ufoData[ufoPart]
+        
+        if not data then
+            data = { lastPos = currentPos, velocity = Vector3.new(0,0,0) }
+            ufoData[ufoPart] = data
+        else
+            data.velocity = (currentPos - data.lastPos) / dt
+            data.lastPos = currentPos
+        end
+
+        -- Threat Level Logic
+        if currentPos.Y > pastureTopY and data.velocity.Y > 0.5 then
+            ufoState.threatLevel = 2 -- Strike Confirmed! Ascending!
+        else
+            ufoState.threatLevel = 1 -- Locked & Descending/Hovering
+        end
+
+        -- Apply ESP Highlight
+        if not trackedUFOs[ufoPart] then
+            local ufoESP = Instance.new("Highlight")
+            ufoESP.Name = "UFO_ESP"
+            ufoESP.FillColor = Color3.fromRGB(170, 0, 255)
+            ufoESP.OutlineColor = Color3.fromRGB(255, 255, 255)
+            ufoESP.FillTransparency = 0.5
+            ufoESP.OutlineTransparency = 0
+            ufoESP.Parent = ufoPart
+            trackedUFOs[ufoPart] = ufoESP
+        end
+    end
+
+    -- 4. Cleanup ESPs for any UFOs that are NOT our locked target
+    for ufo, esp in pairs(trackedUFOs) do
+        if ufo ~= ufoState.lockedUFO then
+            if esp then esp:Destroy() end
+            trackedUFOs[ufo] = nil
+            ufoData[ufo] = nil
+        end
+    end
+end)
+
+-------------------------------------------------------------------------------
 -- MAIN FARMING CYCLE
 -------------------------------------------------------------------------------
 local function startFarmingCycle()
     local character = player.Character
     local hrp = character and character:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
+
+    local grazeAreaCFrame = CFrame.new(176.67967224121095, 10.65000057220459, 311.4925231933594)
 
     while isFarming do
         local currentFarmDuration = 4 * 60 
@@ -261,69 +380,138 @@ local function startFarmingCycle()
         if not isFarming then break end
 
         ---------------------------------------------------------
-        -- PHASE 2: TELEPORT TO GRAZE AREA
+        -- PHASE 2: TELEPORT TO GRAZE AREA & VERIFY UI
         ---------------------------------------------------------
         status.Text = "Going to Graze Area..."
-        hrp.CFrame = CFrame.new(176.67967224121095, 10.65000057220459, 311.4925231933594)
-        task.wait(1.5) 
-        if not isFarming then break end
-
-        ---------------------------------------------------------
-        -- PHASE 3: START GRAZING
-        ---------------------------------------------------------
-        status.Text = "Starting Graze..."
-        while isFarming do
-            local stopBtn = findUIElementByText("stop grazing")
-            if stopBtn then break end 
+        
+        local uiAppeared = false
+        while isFarming and not uiAppeared do
+            hrp.CFrame = grazeAreaCFrame
+            task.wait(1.5)
+            
+            if not isFarming then break end
             
             local grazeBtn = findUIElementByText("graze", "stop")
-            if grazeBtn then
-                clickUIElement(grazeBtn, "Graze")
+            local stopBtn = findUIElementByText("stop grazing")
+            
+            if grazeBtn or stopBtn then
+                uiAppeared = true
+            else
+                status.Text = "UI Missing! Retrying..."
+                hrp.CFrame = originalCFrame
+                task.wait(1.5)
             end
-            task.wait(0.5)
         end
         if not isFarming then break end
 
         ---------------------------------------------------------
-        -- PHASE 4: MAINTAIN GRAZE
+        -- PHASE 3 & 4: DYNAMIC GRAZING & UFO EVASION
         ---------------------------------------------------------
-        status.Text = "Grazing..."
-        local grazeStartTime = os.time()
-        local maxGrazeTime = 1 * 30 
+        local elapsedGrazeTime = 0
+        local maxGrazeTime = 30 
+        local isAtGrazeArea = true
 
-        while isFarming do
-            local stopBtn = findUIElementByText("stop grazing")
-            if stopBtn then clickUIElement(stopBtn, "Stop Grazing") end
-            task.wait(0.5)
+        while isFarming and elapsedGrazeTime < maxGrazeTime do
             
-            local grazeBtn = findUIElementByText("graze", "stop")
-            if grazeBtn then clickUIElement(grazeBtn, "Graze") end
-            
-            task.wait(1) 
+            if ufoState.threatLevel > 0 then
+                
+                -- 1. Bail out immediately (Stop Grazing)
+                local stopBtn = findUIElementByText("stop grazing")
+                if stopBtn then 
+                    clickUIElement(stopBtn, "Stop Grazing") 
+                end
 
-            if os.time() - grazeStartTime >= maxGrazeTime then
-                currentFarmDuration = 4 * 60 
-                break
-            end
+                -- 2. Teleport character back to sheepfold to physically evade
+                if isAtGrazeArea then
+                    status.Text = "Evading! Teleporting to Sheepfold..."
+                    hrp.CFrame = originalCFrame
+                    isAtGrazeArea = false
+                    task.wait(0.5)
+                end
 
-            if findUIElementByText("are full") then
-                currentFarmDuration = 4 * 60
-                break
-            end
+                -- 3. If it strikes (ascends in our pasture), abort grazing entirely
+                if ufoState.threatLevel == 2 then
+                    status.Text = "UFO Strike! Aborting Graze..."
+                    currentFarmDuration = 2 * 60 -- Adjust wool collection timer since graze was cut short
+                    task.wait(1)
+                    break -- Breaks out of the grazing loop, moving straight to Phase 5
+                else
+                    status.Text = "UFO Threat! Waiting at Sheepfold..."
+                    task.wait(0.5)
+                end
+                
+            else
+                -- NO THREAT (SAFE TO GRAZE)
+                
+                -- If we were evading and the threat cleared, return to graze area
+                if not isAtGrazeArea then
+                    status.Text = "Threat Cleared! Returning to Graze Area..."
+                    local returnUiAppeared = false
+                    
+                    while isFarming and not returnUiAppeared and ufoState.threatLevel == 0 do
+                        hrp.CFrame = grazeAreaCFrame
+                        task.wait(1.5)
+                        
+                        if not isFarming or ufoState.threatLevel > 0 then break end
+                        
+                        local grazeBtn = findUIElementByText("graze", "stop")
+                        local stopBtn2 = findUIElementByText("stop grazing")
+                        
+                        if grazeBtn or stopBtn2 then
+                            returnUiAppeared = true
+                        else
+                            status.Text = "UI Missing! Retrying..."
+                            hrp.CFrame = originalCFrame
+                            task.wait(1.5)
+                        end
+                    end
+                    
+                    if ufoState.threatLevel > 0 then continue end -- Threat returned while we were trying to go back
+                    isAtGrazeArea = true
+                end
 
-            if findUIElementByKeywords({"unidentified", "flying"}) then
-                currentFarmDuration = 2 * 60 
-                break
+                status.Text = string.format("Grazing... (%d/%d)", math.floor(elapsedGrazeTime), maxGrazeTime)
+                
+                -- 1. Wait exactly 1 second before pressing Stop Grazing
+                task.wait(1)
+                elapsedGrazeTime = elapsedGrazeTime + 1
+                
+                -- Re-check threat just in case a UFO appeared during that 1 second wait
+                if not isFarming or ufoState.threatLevel > 0 then continue end
+                
+                -- 2. Press Stop Grazing
+                local stopBtn = findUIElementByText("stop grazing")
+                if stopBtn then 
+                    clickUIElement(stopBtn, "Stop Grazing") 
+                end
+                
+                -- 3. Lightning Fast Reaction: Wait for Graze button to appear and click it instantly
+                local pollTime = 0
+                while isFarming and ufoState.threatLevel == 0 do
+                    local grazeBtn = findUIElementByText("graze", "stop")
+                    if grazeBtn then 
+                        clickUIElement(grazeBtn, "Graze") 
+                        break 
+                    end
+                    task.wait(0.03) -- 30ms polling rate for near-instant reaction
+                    pollTime = pollTime + 0.03
+                    if pollTime > 2 then break end -- 2-second safety timeout to prevent infinite loops
+                end
+                
+                elapsedGrazeTime = elapsedGrazeTime + pollTime
+
+                if findUIElementByText("are full") then
+                    currentFarmDuration = 4 * 60
+                    break
+                end
             end
-            
-            task.wait(2) 
         end
         if not isFarming then break end
 
         ---------------------------------------------------------
-        -- PHASE 5: FINISH GRAZE & RETURN
+        -- PHASE 5: FINISH GRAZE & RETURN TO SHEEPFOLD
         ---------------------------------------------------------
-        status.Text = "Returning..."
+        status.Text = "Returning to Sheepfold..."
         while isFarming do
             local grazeBtn = findUIElementByText("graze", "stop")
             if grazeBtn then
@@ -339,8 +527,28 @@ local function startFarmingCycle()
         
         if not isFarming then break end
         
-        hrp.CFrame = originalCFrame
-        task.wait(1.5) 
+        -- Teleport back to the original sheepfold position & VERIFY UI
+        local sheepfoldUiAppeared = false
+        while isFarming and not sheepfoldUiAppeared do
+            hrp.CFrame = originalCFrame
+            task.wait(1.5)
+            
+            if not isFarming then break end
+            
+            local bringInBtn = findUIElementByText("bring in")
+            local grazeBtn = findUIElementByText("graze", "stop")
+            local stopBtn = findUIElementByText("stop grazing")
+            
+            -- We want "Bring in" to be visible, and "Graze"/"Stop Grazing" to NOT be visible
+            if bringInBtn and not grazeBtn and not stopBtn then
+                sheepfoldUiAppeared = true
+            else
+                status.Text = "UI Missing! Retrying Sheepfold..."
+                -- Teleport back to grazing area to reset the zone trigger
+                hrp.CFrame = grazeAreaCFrame
+                task.wait(1.5)
+            end
+        end
         if not isFarming then break end
 
         ---------------------------------------------------------
@@ -360,13 +568,12 @@ local function startFarmingCycle()
         if not isFarming then break end
 
         ---------------------------------------------------------
-        -- PHASE 7: FARM SHEEP (REMOTE TOUCH / NO TP)
+        -- PHASE 7: FARM SHEEP (WOOL COLLECTION)
         ---------------------------------------------------------
         local endTime = os.time() + currentFarmDuration
         local toggleWiggle = false
         
         while isFarming and os.time() < endTime do
-            -- Update Status with Countdown
             local remaining = endTime - os.time()
             local mins = math.floor(remaining / 60)
             local secs = remaining % 60
@@ -376,7 +583,6 @@ local function startFarmingCycle()
             local currentHrp = char and char:FindFirstChild("HumanoidRootPart")
 
             if currentHrp then
-                -- Wiggle offset forces the physics engine to register continuous touches
                 toggleWiggle = not toggleWiggle
                 local wiggleOffset = toggleWiggle and Vector3.new(0, 0.1, 0) or Vector3.new(0, -0.1, 0)
 
@@ -384,8 +590,6 @@ local function startFarmingCycle()
                     if not isFarming or os.time() >= endTime then break end
                     
                     if sheepModel and sheepModel.Parent then
-                        
-                        -- 1. PROXIMITY PROMPT SUPPORT
                         for _, desc in ipairs(sheepModel:GetDescendants()) do
                             if desc:IsA("ProximityPrompt") then
                                 if fireproximityprompt then
@@ -398,7 +602,6 @@ local function startFarmingCycle()
                             end
                         end
 
-                        -- 2. FIRETOUCHINTEREST ON ALL PARTS
                         for _, desc in ipairs(sheepModel:GetDescendants()) do
                             if desc:IsA("BasePart") then
                                 if firetouchinterest then
@@ -408,8 +611,6 @@ local function startFarmingCycle()
                             end
                         end
 
-                        -- 3. FAKE LIMB SIMULATION (SINGLE PERSISTENT PART)
-                        -- Ensure the fake limb exists (in case player died and it was destroyed)
                         if not activeFakeLimb or not activeFakeLimb.Parent then
                             activeFakeLimb = Instance.new("Part")
                             activeFakeLimb.Name = "Right Arm"
@@ -419,27 +620,21 @@ local function startFarmingCycle()
                             activeFakeLimb.Parent = char
                         end
                         
-                        -- Update the single fake limb's position to teleport to this sheep instantly
                         local sheepCFrame, sheepSize = sheepModel:GetBoundingBox()
                         if activeFakeLimb and activeFakeLimb.Parent then
                             activeFakeLimb.Size = sheepSize + Vector3.new(2, 2, 2)
                             activeFakeLimb.CFrame = sheepCFrame + wiggleOffset
                         end
-
                     else
-                        -- Cleanup ONLY if the sheep was completely deleted from the game
                         mySheep[sheepModel] = nil 
                     end
                 end
                 task.wait(0.5) 
             else
-                task.wait(1) -- Wait for character to respawn
+                task.wait(1) 
             end
         end
 
-        -- =========================================================
-        -- TELEPORT BACK TO ORIGINAL SPOT AFTER TIMER ENDS
-        -- =========================================================
         if isFarming and originalCFrame then
             local char = player.Character
             local finalHrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -457,13 +652,15 @@ end
 local function setOnline()
     if isFarming then return end
     
+    -- Apply Anti-Lag immediately
+    applyAntiLag()
+    
     local character = player.Character
     local hrp = character and character:FindFirstChild("HumanoidRootPart")
     if hrp then
         originalCFrame = hrp.CFrame
     end
     
-    -- Create the single fake limb the moment the script is on
     if not activeFakeLimb or not activeFakeLimb.Parent then
         activeFakeLimb = Instance.new("Part")
         activeFakeLimb.Name = "Right Arm"
@@ -474,6 +671,38 @@ local function setOnline()
             activeFakeLimb.Parent = character
         end
     end
+    
+    -- Setup UFO Event Listeners (Zero-Lag Cache System)
+    activeUFOsCache = {}
+    
+    local function checkAndCacheUFO(desc)
+        if desc.Name == "FlyingSaucer" then
+            task.spawn(function()
+                task.wait(0.5) -- Wait for model to load its parts
+                local ufoPart = desc:IsA("BasePart") and desc or desc:FindFirstChildWhichIsA("BasePart")
+                if ufoPart then
+                    activeUFOsCache[ufoPart] = true
+                end
+            end)
+        elseif desc.Parent and desc.Parent.Name == "FlyingSaucer" and desc:IsA("BasePart") then
+            activeUFOsCache[desc] = true
+        end
+    end
+
+    for _, desc in ipairs(workspace:GetDescendants()) do
+        checkAndCacheUFO(desc)
+    end
+
+    ufoAddedConn = workspace.DescendantAdded:Connect(checkAndCacheUFO)
+    ufoRemovedConn = workspace.DescendantRemoving:Connect(function(desc)
+        if desc.Name == "FlyingSaucer" then
+            for part, _ in pairs(activeUFOsCache) do
+                if part == desc or part:IsDescendantOf(desc) then
+                    activeUFOsCache[part] = nil
+                end
+            end
+        end
+    end)
     
     -- Whitelist Sheep
     mySheep = {}
@@ -509,7 +738,20 @@ local function setOffline()
         farmCoroutine = nil
     end
     
-    -- Cleanup the single fake limb immediately when turned off
+    -- Disconnect UFO Listeners
+    if ufoAddedConn then ufoAddedConn:Disconnect(); ufoAddedConn = nil end
+    if ufoRemovedConn then ufoRemovedConn:Disconnect(); ufoRemovedConn = nil end
+    
+    -- Reset UFO states
+    ufoState.threatLevel = 0
+    ufoState.lockedUFO = nil
+    for ufo, esp in pairs(trackedUFOs) do
+        if esp then esp:Destroy() end
+    end
+    trackedUFOs = {}
+    ufoData = {}
+    activeUFOsCache = {}
+    
     if activeFakeLimb then
         activeFakeLimb:Destroy()
         activeFakeLimb = nil
