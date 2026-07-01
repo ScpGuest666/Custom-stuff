@@ -238,7 +238,56 @@ local function clickUIElement(element, buttonName)
 end
 
 -------------------------------------------------------------------------------
--- UFO LOCK-ON ENGINE (ZERO FLICKER, ZERO LAG)
+-- WOOL COLLECTION HELPER FUNCTION
+-------------------------------------------------------------------------------
+local toggleWiggle = false
+local function doWoolCollection(char, currentHrp)
+    if not currentHrp then return end
+    toggleWiggle = not toggleWiggle
+    local wiggleOffset = toggleWiggle and Vector3.new(0, 0.1, 0) or Vector3.new(0, -0.1, 0)
+
+    for sheepModel, _ in pairs(mySheep) do
+        if sheepModel and sheepModel.Parent then
+            for _, desc in ipairs(sheepModel:GetDescendants()) do
+                if desc:IsA("ProximityPrompt") then
+                    if fireproximityprompt then
+                        fireproximityprompt(desc)
+                    else
+                        desc:InputHoldBegin()
+                        task.wait(desc.HoldDuration + 0.05)
+                        desc:InputHoldEnd()
+                    end
+                end
+                if desc:IsA("BasePart") then
+                    if firetouchinterest then
+                        firetouchinterest(currentHrp, desc, 0)
+                        firetouchinterest(currentHrp, desc, 1)
+                    end
+                end
+            end
+
+            if not activeFakeLimb or not activeFakeLimb.Parent then
+                activeFakeLimb = Instance.new("Part")
+                activeFakeLimb.Name = "Right Arm"
+                activeFakeLimb.CanCollide = false
+                activeFakeLimb.Transparency = 1
+                activeFakeLimb.Massless = true
+                activeFakeLimb.Parent = char
+            end
+            
+            local sheepCFrame, sheepSize = sheepModel:GetBoundingBox()
+            if activeFakeLimb and activeFakeLimb.Parent then
+                activeFakeLimb.Size = sheepSize + Vector3.new(2, 2, 2)
+                activeFakeLimb.CFrame = sheepCFrame + wiggleOffset
+            end
+        else
+            mySheep[sheepModel] = nil 
+        end
+    end
+end
+
+-------------------------------------------------------------------------------
+-- UFO LOCK-ON ENGINE (STRICT RADIUS, ZERO FLICKER)
 -------------------------------------------------------------------------------
 RunService.Heartbeat:Connect(function(dt)
     if not isFarming then return end
@@ -270,7 +319,8 @@ RunService.Heartbeat:Connect(function(dt)
 
     -- 2. If we don't have a locked UFO, scan the sky directly above Pasture 6
     if not ufoState.lockedUFO then
-        local searchRadius = (math.max(foundPasture.Size.X, foundPasture.Size.Z) / 2) * 1.2 
+        -- STRICT RADIUS: Only 60% of the smallest width. Completely ignores Pasture 5.
+        local searchRadius = (math.min(foundPasture.Size.X, foundPasture.Size.Z) / 2) * 0.6 
         
         for ufoPart, _ in pairs(activeUFOsCache) do
             if ufoPart and ufoPart.Parent then
@@ -405,7 +455,7 @@ local function startFarmingCycle()
         if not isFarming then break end
 
         ---------------------------------------------------------
-        -- PHASE 3 & 4: DYNAMIC GRAZING & UFO EVASION
+        -- PHASE 3 & 4: DYNAMIC GRAZING & ACTIVE EVASION
         ---------------------------------------------------------
         local elapsedGrazeTime = 0
         local maxGrazeTime = 30 
@@ -426,28 +476,37 @@ local function startFarmingCycle()
                     status.Text = "Evading! Teleporting to Sheepfold..."
                     hrp.CFrame = originalCFrame
                     isAtGrazeArea = false
-                    task.wait(0.5)
+                    task.wait(1.5) -- Wait for teleport and UI update
                 end
 
-                -- 3. If it strikes (ascends in our pasture), abort grazing entirely
-                if ufoState.threatLevel == 2 then
-                    status.Text = "UFO Strike! Aborting Graze..."
-                    currentFarmDuration = 2 * 60 -- Adjust wool collection timer since graze was cut short
+                -- 3. Bring In Sheep to protect them
+                local bringInBtn = findUIElementByText("bring in")
+                if bringInBtn then
+                    clickUIElement(bringInBtn, "Bring in")
                     task.wait(1)
-                    break -- Breaks out of the grazing loop, moving straight to Phase 5
-                else
-                    status.Text = "UFO Threat! Waiting at Sheepfold..."
-                    task.wait(0.5)
                 end
+
+                -- 4. Actively Collect Wool while waiting for UFO to leave
+                status.Text = "UFO Threat! Collecting Wool..."
+                doWoolCollection(player.Character, hrp)
+                task.wait(0.5)
                 
             else
                 -- NO THREAT (SAFE TO GRAZE)
                 
                 -- If we were evading and the threat cleared, return to graze area
                 if not isAtGrazeArea then
-                    status.Text = "Threat Cleared! Returning to Graze Area..."
-                    local returnUiAppeared = false
+                    status.Text = "Threat Cleared! Bringing Out..."
                     
+                    -- Bring sheep back out
+                    local bringOutBtn = findUIElementByText("bring out")
+                    if bringOutBtn then
+                        clickUIElement(bringOutBtn, "Bring out")
+                        task.wait(1)
+                    end
+
+                    -- Teleport to Graze Area
+                    local returnUiAppeared = false
                     while isFarming and not returnUiAppeared and ufoState.threatLevel == 0 do
                         hrp.CFrame = grazeAreaCFrame
                         task.wait(1.5)
@@ -463,6 +522,13 @@ local function startFarmingCycle()
                             status.Text = "UI Missing! Retrying..."
                             hrp.CFrame = originalCFrame
                             task.wait(1.5)
+                            
+                            -- Ensure sheep are brought out if we had to retry
+                            local retryBringOut = findUIElementByText("bring out")
+                            if retryBringOut then
+                                clickUIElement(retryBringOut, "Bring out")
+                                task.wait(1)
+                            end
                         end
                     end
                     
@@ -571,7 +637,6 @@ local function startFarmingCycle()
         -- PHASE 7: FARM SHEEP (WOOL COLLECTION)
         ---------------------------------------------------------
         local endTime = os.time() + currentFarmDuration
-        local toggleWiggle = false
         
         while isFarming and os.time() < endTime do
             local remaining = endTime - os.time()
@@ -583,52 +648,7 @@ local function startFarmingCycle()
             local currentHrp = char and char:FindFirstChild("HumanoidRootPart")
 
             if currentHrp then
-                toggleWiggle = not toggleWiggle
-                local wiggleOffset = toggleWiggle and Vector3.new(0, 0.1, 0) or Vector3.new(0, -0.1, 0)
-
-                for sheepModel, _ in pairs(mySheep) do
-                    if not isFarming or os.time() >= endTime then break end
-                    
-                    if sheepModel and sheepModel.Parent then
-                        for _, desc in ipairs(sheepModel:GetDescendants()) do
-                            if desc:IsA("ProximityPrompt") then
-                                if fireproximityprompt then
-                                    fireproximityprompt(desc)
-                                else
-                                    desc:InputHoldBegin()
-                                    task.wait(desc.HoldDuration + 0.05)
-                                    desc:InputHoldEnd()
-                                end
-                            end
-                        end
-
-                        for _, desc in ipairs(sheepModel:GetDescendants()) do
-                            if desc:IsA("BasePart") then
-                                if firetouchinterest then
-                                    firetouchinterest(currentHrp, desc, 0)
-                                    firetouchinterest(currentHrp, desc, 1)
-                                end
-                            end
-                        end
-
-                        if not activeFakeLimb or not activeFakeLimb.Parent then
-                            activeFakeLimb = Instance.new("Part")
-                            activeFakeLimb.Name = "Right Arm"
-                            activeFakeLimb.CanCollide = false
-                            activeFakeLimb.Transparency = 1
-                            activeFakeLimb.Massless = true
-                            activeFakeLimb.Parent = char
-                        end
-                        
-                        local sheepCFrame, sheepSize = sheepModel:GetBoundingBox()
-                        if activeFakeLimb and activeFakeLimb.Parent then
-                            activeFakeLimb.Size = sheepSize + Vector3.new(2, 2, 2)
-                            activeFakeLimb.CFrame = sheepCFrame + wiggleOffset
-                        end
-                    else
-                        mySheep[sheepModel] = nil 
-                    end
-                end
+                doWoolCollection(char, currentHrp)
                 task.wait(0.5) 
             else
                 task.wait(1) 
