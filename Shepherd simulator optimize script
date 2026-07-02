@@ -105,15 +105,15 @@ local mySheep = {}
 local activeFakeLimb = nil 
 local farmCoroutine = nil
 
--- UFO Tracking State (Lock-On System)
+-- UFO Tracking State
 local ufoState = {
-    threatLevel = 0, -- 0: Safe, 1: Locked & Descending/Hovering, 2: Ascending (Strike Confirmed)
-    lockedUFO = nil  -- Stores the specific UFO targeting Pasture 6
+    threatLevel = 0 -- 0: Safe, 1: Incoming (Outside), 2: Inside Zone, 3: Strike (Ascending)
 }
 local ufoData = {}
 local trackedUFOs = {}
 local activeUFOsCache = {} 
 local foundPasture = nil
+local zoneVisualizer = nil 
 local ufoAddedConn = nil
 local ufoRemovedConn = nil
 local antiLagApplied = false
@@ -182,6 +182,30 @@ local function cleanText(str)
     str = string.lower(str) 
     str = string.gsub(str, "%s+", " ") 
     return str
+end
+
+local function findUIElementByKeywords(keywords)
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if not playerGui then return nil end
+
+    for _, desc in ipairs(playerGui:GetDescendants()) do
+        if desc:IsA("TextLabel") or desc:IsA("TextButton") then
+            if desc.Text and desc.Text ~= "" then
+                local text = cleanText(desc.Text)
+                local allMatch = true
+                for _, kw in ipairs(keywords) do
+                    if not string.find(text, string.lower(kw), 1, true) then
+                        allMatch = false
+                        break
+                    end
+                end
+                if allMatch and isTrulyVisible(desc) then
+                    return desc
+                end
+            end
+        end
+    end
+    return nil
 end
 
 local function findUIElementByText(targetText, excludeText)
@@ -287,8 +311,24 @@ local function doWoolCollection(char, currentHrp)
 end
 
 -------------------------------------------------------------------------------
--- UFO LOCK-ON ENGINE (STRICT RADIUS, ZERO FLICKER)
+-- 3D TRAJECTORY PREDICTION ENGINE (RECTANGLE/BLOCK ZONE)
 -------------------------------------------------------------------------------
+local function isHeadingTowards(ufoPos, ufoVel, targetPos, targetRadius)
+    local ux, uz = ufoPos.X, ufoPos.Z
+    local vx, vz = ufoVel.X, ufoVel.Z
+    local tx, tz = targetPos.X, targetPos.Z
+    
+    local speedXZ = math.sqrt(vx^2 + vz^2)
+    if speedXZ < 0.5 then return false end 
+    
+    local wx, wz = tx - ux, tz - uz
+    local dot = (vx * wx) + (vz * wz)
+    if dot <= 0 then return false end 
+    
+    local dist = math.abs(vz * tx - vx * tz + vx * uz - vz * ux) / speedXZ
+    return dist <= targetRadius
+end
+
 RunService.Heartbeat:Connect(function(dt)
     if not isFarming then return end
 
@@ -304,79 +344,98 @@ RunService.Heartbeat:Connect(function(dt)
                 end
             end
         end
+        
+        -- Create the 50% visible RECTANGLE zone once the pasture is found
+        if foundPasture and not zoneVisualizer then
+            zoneVisualizer = Instance.new("Part")
+            zoneVisualizer.Name = "UFO_Detection_Zone"
+            zoneVisualizer.Shape = Enum.PartType.Block 
+            zoneVisualizer.Size = Vector3.new(foundPasture.Size.X, 3000, foundPasture.Size.Z) 
+            zoneVisualizer.CFrame = foundPasture.CFrame 
+            zoneVisualizer.Anchored = true
+            zoneVisualizer.CanCollide = false
+            zoneVisualizer.CastShadow = false
+            zoneVisualizer.Transparency = 0.5 
+            zoneVisualizer.Color = Color3.fromRGB(255, 85, 0) 
+            zoneVisualizer.Material = Enum.Material.SmoothPlastic
+            zoneVisualizer.Parent = workspace
+        end
     end
 
     if not foundPasture then return end
 
     local pasturePos = foundPasture.Position
     local pastureTopY = pasturePos.Y + (foundPasture.Size.Y / 2) + 15 
+    local incomingRadius = math.max(foundPasture.Size.X, foundPasture.Size.Z) + 100
 
-    -- 1. Check if our locked UFO was destroyed/despawned
-    if ufoState.lockedUFO and not ufoState.lockedUFO.Parent then
-        ufoState.lockedUFO = nil
-        ufoState.threatLevel = 0
-    end
+    local highestThreat = 0
 
-    -- 2. If we don't have a locked UFO, scan the sky directly above Pasture 6
-    if not ufoState.lockedUFO then
-        -- STRICT RADIUS: Only 60% of the smallest width. Completely ignores Pasture 5.
-        local searchRadius = (math.min(foundPasture.Size.X, foundPasture.Size.Z) / 2) * 0.6 
-        
-        for ufoPart, _ in pairs(activeUFOsCache) do
-            if ufoPart and ufoPart.Parent then
-                local distXZ = math.sqrt((ufoPart.Position.X - pasturePos.X)^2 + (ufoPart.Position.Z - pasturePos.Z)^2)
-                if distXZ <= searchRadius then
-                    ufoState.lockedUFO = ufoPart
-                    break 
+    for ufoPart, _ in pairs(activeUFOsCache) do
+        if ufoPart and ufoPart.Parent then
+            local currentPos = ufoPart.Position
+            local data = ufoData[ufoPart]
+            
+            if not data then
+                data = { lastPos = currentPos, velocity = Vector3.new(0,0,0) }
+                ufoData[ufoPart] = data
+            else
+                data.velocity = (currentPos - data.lastPos) / dt
+                data.lastPos = currentPos
+            end
+
+            -- EXACT RECTANGLE DETECTION (PointToObjectSpace)
+            local localPos = foundPasture.CFrame:PointToObjectSpace(currentPos)
+            local isInside = math.abs(localPos.X) <= (foundPasture.Size.X / 2) and math.abs(localPos.Z) <= (foundPasture.Size.Z / 2)
+            
+            local threat = 0
+
+            if isInside then
+                if currentPos.Y > pastureTopY and data.velocity.Y > 0.5 then
+                    threat = 3 -- Strike Confirmed! Ascending!
+                else
+                    threat = 2 -- Inside zone, descending/hovering
                 end
             else
-                activeUFOsCache[ufoPart] = nil
+                -- Trajectory Prediction: Check if it's outside but heading towards us
+                if isHeadingTowards(currentPos, data.velocity, pasturePos, incomingRadius) then
+                    threat = 1 -- Incoming!
+                end
+            end
+
+            if threat > highestThreat then
+                highestThreat = threat
+            end
+
+            -- Apply ESP Highlight
+            if threat > 0 then
+                if not trackedUFOs[ufoPart] then
+                    local ufoESP = Instance.new("Highlight")
+                    ufoESP.Name = "UFO_ESP"
+                    ufoESP.FillColor = Color3.fromRGB(170, 0, 255)
+                    ufoESP.OutlineColor = Color3.fromRGB(255, 255, 255)
+                    ufoESP.FillTransparency = 0.5
+                    ufoESP.OutlineTransparency = 0
+                    ufoESP.Parent = ufoPart
+                    trackedUFOs[ufoPart] = ufoESP
+                end
+            else
+                if trackedUFOs[ufoPart] then
+                    trackedUFOs[ufoPart]:Destroy()
+                    trackedUFOs[ufoPart] = nil
+                end
+            end
+        else
+            -- Cleanup if destroyed
+            activeUFOsCache[ufoPart] = nil
+            ufoData[ufoPart] = nil
+            if trackedUFOs[ufoPart] then
+                trackedUFOs[ufoPart]:Destroy()
+                trackedUFOs[ufoPart] = nil
             end
         end
     end
-
-    -- 3. Process the Locked UFO
-    if ufoState.lockedUFO then
-        local ufoPart = ufoState.lockedUFO
-        local currentPos = ufoPart.Position
-        local data = ufoData[ufoPart]
-        
-        if not data then
-            data = { lastPos = currentPos, velocity = Vector3.new(0,0,0) }
-            ufoData[ufoPart] = data
-        else
-            data.velocity = (currentPos - data.lastPos) / dt
-            data.lastPos = currentPos
-        end
-
-        -- Threat Level Logic
-        if currentPos.Y > pastureTopY and data.velocity.Y > 0.5 then
-            ufoState.threatLevel = 2 -- Strike Confirmed! Ascending!
-        else
-            ufoState.threatLevel = 1 -- Locked & Descending/Hovering
-        end
-
-        -- Apply ESP Highlight
-        if not trackedUFOs[ufoPart] then
-            local ufoESP = Instance.new("Highlight")
-            ufoESP.Name = "UFO_ESP"
-            ufoESP.FillColor = Color3.fromRGB(170, 0, 255)
-            ufoESP.OutlineColor = Color3.fromRGB(255, 255, 255)
-            ufoESP.FillTransparency = 0.5
-            ufoESP.OutlineTransparency = 0
-            ufoESP.Parent = ufoPart
-            trackedUFOs[ufoPart] = ufoESP
-        end
-    end
-
-    -- 4. Cleanup ESPs for any UFOs that are NOT our locked target
-    for ufo, esp in pairs(trackedUFOs) do
-        if ufo ~= ufoState.lockedUFO then
-            if esp then esp:Destroy() end
-            trackedUFOs[ufo] = nil
-            ufoData[ufo] = nil
-        end
-    end
+    
+    ufoState.threatLevel = highestThreat
 end)
 
 -------------------------------------------------------------------------------
@@ -463,7 +522,11 @@ local function startFarmingCycle()
 
         while isFarming and elapsedGrazeTime < maxGrazeTime do
             
-            if ufoState.threatLevel > 0 then
+            -- Check for UFO via 3D Tracker OR the UI Message
+            local ufoMessage = findUIElementByKeywords({"unidentified", "flying"})
+            local isThreatened = (ufoState.threatLevel >= 2) or ufoMessage
+            
+            if isThreatened then
                 
                 -- 1. Bail out immediately (Stop Grazing)
                 local stopBtn = findUIElementByText("stop grazing")
@@ -473,7 +536,7 @@ local function startFarmingCycle()
 
                 -- 2. Teleport character back to sheepfold to physically evade
                 if isAtGrazeArea then
-                    status.Text = "Evading! Teleporting to Sheepfold..."
+                    status.Text = "UFO Inside! Evading to Sheepfold..."
                     hrp.CFrame = originalCFrame
                     isAtGrazeArea = false
                     task.wait(1.5) -- Wait for teleport and UI update
@@ -487,9 +550,16 @@ local function startFarmingCycle()
                 end
 
                 -- 4. Actively Collect Wool while waiting for UFO to leave
-                status.Text = "UFO Threat! Collecting Wool..."
-                doWoolCollection(player.Character, hrp)
-                task.wait(0.5)
+                if ufoState.threatLevel == 3 then
+                    status.Text = "UFO Strike! Aborting Graze..."
+                    currentFarmDuration = 2 * 60 -- Adjust wool collection timer since graze was cut short
+                    task.wait(1)
+                    break -- Breaks out of the grazing loop, moving straight to Phase 5
+                else
+                    status.Text = "UFO Inside! Collecting Wool..."
+                    doWoolCollection(player.Character, hrp)
+                    task.wait(0.5)
+                end
                 
             else
                 -- NO THREAT (SAFE TO GRAZE)
@@ -507,11 +577,14 @@ local function startFarmingCycle()
 
                     -- Teleport to Graze Area
                     local returnUiAppeared = false
-                    while isFarming and not returnUiAppeared and ufoState.threatLevel == 0 do
+                    while isFarming and not returnUiAppeared do
+                        -- Re-check threat during transit
+                        if ufoState.threatLevel >= 2 or findUIElementByKeywords({"unidentified", "flying"}) then
+                            break
+                        end
+
                         hrp.CFrame = grazeAreaCFrame
                         task.wait(1.5)
-                        
-                        if not isFarming or ufoState.threatLevel > 0 then break end
                         
                         local grazeBtn = findUIElementByText("graze", "stop")
                         local stopBtn2 = findUIElementByText("stop grazing")
@@ -532,18 +605,45 @@ local function startFarmingCycle()
                         end
                     end
                     
-                    if ufoState.threatLevel > 0 then continue end -- Threat returned while we were trying to go back
+                    if not returnUiAppeared then continue end -- Threat returned while we were trying to go back
                     isAtGrazeArea = true
                 end
 
-                status.Text = string.format("Grazing... (%d/%d)", math.floor(elapsedGrazeTime), maxGrazeTime)
+                -- NEW FAILSAFE: Check if UI randomly disappeared while grazing
+                local currentGrazeBtn = findUIElementByText("graze", "stop")
+                local currentStopBtn = findUIElementByText("stop grazing")
                 
-                -- 1. Wait exactly 2 seconds before pressing Stop Grazing
-                task.wait(2)
-                elapsedGrazeTime = elapsedGrazeTime + 2
+                if not currentGrazeBtn and not currentStopBtn then
+                    status.Text = "UI Missing! Resetting Zone..."
+                    hrp.CFrame = originalCFrame
+                    task.wait(1.5)
+                    hrp.CFrame = grazeAreaCFrame
+                    task.wait(1.5)
+                    continue -- Restart loop to re-evaluate
+                end
+
+                -- 1. Wait exactly 2 seconds before pressing Stop Grazing (Interruptible if UFO enters)
+                local waitTime = 0
+                while waitTime < 2 and isFarming do
+                    -- Check threat dynamically
+                    if ufoState.threatLevel >= 2 or findUIElementByKeywords({"unidentified", "flying"}) then
+                        break
+                    end
+
+                    -- Update UI smoothly (1, 2, 3...)
+                    if ufoState.threatLevel == 1 then
+                        status.Text = string.format("UFO Incoming! Grazing... (%d/%d)", math.floor(elapsedGrazeTime + waitTime), maxGrazeTime)
+                    else
+                        status.Text = string.format("Grazing... (%d/%d)", math.floor(elapsedGrazeTime + waitTime), maxGrazeTime)
+                    end
+
+                    task.wait(0.1)
+                    waitTime = waitTime + 0.1
+                end
+                elapsedGrazeTime = elapsedGrazeTime + waitTime
                 
-                -- Re-check threat just in case a UFO appeared during that 2 second wait
-                if not isFarming or ufoState.threatLevel > 0 then continue end
+                -- Re-check threat just in case a UFO entered during that 2 second wait
+                if not isFarming or ufoState.threatLevel >= 2 or findUIElementByKeywords({"unidentified", "flying"}) then continue end
                 
                 -- 2. Press Stop Grazing
                 local stopBtn = findUIElementByText("stop grazing")
@@ -553,12 +653,23 @@ local function startFarmingCycle()
                 
                 -- 3. Lightning Fast Reaction: Wait for Graze button to appear and click it instantly
                 local pollTime = 0
-                while isFarming and ufoState.threatLevel == 0 do
+                while isFarming do
+                    if ufoState.threatLevel >= 2 or findUIElementByKeywords({"unidentified", "flying"}) then
+                        break
+                    end
+
                     local grazeBtn = findUIElementByText("graze", "stop")
                     if grazeBtn then 
                         clickUIElement(grazeBtn, "Graze") 
                         break 
                     end
+                    
+                    -- Failsafe: If UI completely vanished after clicking Stop Grazing
+                    local checkStop = findUIElementByText("stop grazing")
+                    if not grazeBtn and not checkStop and pollTime > 1 then
+                        break -- Break out of polling if UI is dead, the outer loop will catch it and reset
+                    end
+
                     task.wait(0.03) -- 30ms polling rate for near-instant reaction
                     pollTime = pollTime + 0.03
                     if pollTime > 2 then break end -- 2-second safety timeout to prevent infinite loops
@@ -575,10 +686,12 @@ local function startFarmingCycle()
         if not isFarming then break end
 
         ---------------------------------------------------------
-        -- PHASE 5: FINISH GRAZE (STRICT SYNC)
+        -- PHASE 5: FINISH GRAZE (STRICT SYNC & RETRY)
         ---------------------------------------------------------
         status.Text = "Finishing Graze..."
         local successfullyStopped = false
+        local retryCount = 0
+        
         while isFarming and not successfullyStopped do
             local finalStopBtn = findUIElementByText("stop grazing")
             if finalStopBtn then 
@@ -586,14 +699,24 @@ local function startFarmingCycle()
                 task.wait(1) -- Wait for server to process the click
             end
             
-            -- Verify that Stop Grazing is gone and Graze is present
+            -- Verify that Stop Grazing is gone
             local checkStop = findUIElementByText("stop grazing")
-            local checkGraze = findUIElementByText("graze", "stop")
             
-            if checkGraze and not checkStop then
+            if not checkStop then
                 status.Text = "Graze Stopped. Syncing..."
                 task.wait(2) -- CRUCIAL: Wait 2 seconds to let the server teleport sheep to the player before we leave
                 successfullyStopped = true
+            else
+                retryCount = retryCount + 1
+                if retryCount >= 3 then
+                    -- UI is stuck, force a zone reset
+                    status.Text = "UI Stuck! Resetting Zone..."
+                    hrp.CFrame = originalCFrame
+                    task.wait(1.5)
+                    hrp.CFrame = grazeAreaCFrame
+                    task.wait(1.5)
+                    retryCount = 0
+                end
             end
             task.wait(0.5)
         end
@@ -807,15 +930,20 @@ local function setOffline()
     if ufoAddedConn then ufoAddedConn:Disconnect(); ufoAddedConn = nil end
     if ufoRemovedConn then ufoRemovedConn:Disconnect(); ufoRemovedConn = nil end
     
-    -- Reset UFO states
+    -- Reset UFO states & Visualizer
     ufoState.threatLevel = 0
-    ufoState.lockedUFO = nil
     for ufo, esp in pairs(trackedUFOs) do
         if esp then esp:Destroy() end
     end
     trackedUFOs = {}
     ufoData = {}
     activeUFOsCache = {}
+    
+    foundPasture = nil
+    if zoneVisualizer then
+        zoneVisualizer:Destroy()
+        zoneVisualizer = nil
+    end
     
     if activeFakeLimb then
         activeFakeLimb:Destroy()
