@@ -118,6 +118,10 @@ local ufoAddedConn = nil
 local ufoRemovedConn = nil
 local antiLagApplied = false
 
+-- Failsafe variables for stuck buttons
+local lastClickX = 0
+local lastClickY = 0
+
 -------------------------------------------------------------------------------
 -- EXTREME ANTI-LAG FUNCTION
 -------------------------------------------------------------------------------
@@ -247,17 +251,25 @@ local function clickUIElement(element, buttonName)
     local x = absPos.X + (absSize.X / 2) + bOffsetX
     local y = absPos.Y + (absSize.Y / 2) + bOffsetY
 
+    lastClickX = x
+    lastClickY = y
+
     pointer.Position = UDim2.new(0, x + pointerOffsetX, 0, y + pointerOffsetY)
     pointer.Visible = true
 
-    vim:SendTouchEvent(TOUCH_ID, 0, x, y) 
-    task.wait(0.05)
-    vim:SendTouchEvent(TOUCH_ID, 1, x, y) 
-    task.wait(0.05)
-    vim:SendTouchEvent(TOUCH_ID, 2, x, y) 
+    task.spawn(function()
+        pcall(function()
+            vim:SendTouchEvent(TOUCH_ID, 0, x, y) 
+            task.wait(0.05)
+            vim:SendTouchEvent(TOUCH_ID, 1, x, y) 
+            task.wait(0.05)
+            vim:SendTouchEvent(TOUCH_ID, 2, x, y) 
+        end)
+        task.wait(0.1)
+        pointer.Visible = false
+    end)
     
-    task.wait(0.1)
-    pointer.Visible = false
+    task.wait(0.2) 
     return true
 end
 
@@ -345,7 +357,6 @@ RunService.Heartbeat:Connect(function(dt)
             end
         end
         
-        -- Create the 50% visible RECTANGLE zone once the pasture is found
         if foundPasture and not zoneVisualizer then
             zoneVisualizer = Instance.new("Part")
             zoneVisualizer.Name = "UFO_Detection_Zone"
@@ -366,7 +377,7 @@ RunService.Heartbeat:Connect(function(dt)
 
     local pasturePos = foundPasture.Position
     local pastureTopY = pasturePos.Y + (foundPasture.Size.Y / 2) + 15 
-    local incomingRadius = math.max(foundPasture.Size.X, foundPasture.Size.Z) + 100
+    local incomingRadius = math.max(foundPasture.Size.X, foundPasture.Size.Z)
 
     local highestThreat = 0
 
@@ -383,7 +394,6 @@ RunService.Heartbeat:Connect(function(dt)
                 data.lastPos = currentPos
             end
 
-            -- EXACT RECTANGLE DETECTION (PointToObjectSpace)
             local localPos = foundPasture.CFrame:PointToObjectSpace(currentPos)
             local isInside = math.abs(localPos.X) <= (foundPasture.Size.X / 2) and math.abs(localPos.Z) <= (foundPasture.Size.Z / 2)
             
@@ -396,7 +406,6 @@ RunService.Heartbeat:Connect(function(dt)
                     threat = 2 -- Inside zone, descending/hovering
                 end
             else
-                -- Trajectory Prediction: Check if it's outside but heading towards us
                 if isHeadingTowards(currentPos, data.velocity, pasturePos, incomingRadius) then
                     threat = 1 -- Incoming!
                 end
@@ -406,7 +415,6 @@ RunService.Heartbeat:Connect(function(dt)
                 highestThreat = threat
             end
 
-            -- Apply ESP Highlight
             if threat > 0 then
                 if not trackedUFOs[ufoPart] then
                     local ufoESP = Instance.new("Highlight")
@@ -425,7 +433,6 @@ RunService.Heartbeat:Connect(function(dt)
                 end
             end
         else
-            -- Cleanup if destroyed
             activeUFOsCache[ufoPart] = nil
             ufoData[ufoPart] = nil
             if trackedUFOs[ufoPart] then
@@ -522,16 +529,13 @@ local function startFarmingCycle()
 
         while isFarming and elapsedGrazeTime < maxGrazeTime do
             
-            -- Check for UFO via 3D Tracker OR the UI Message
-            local ufoMessage = findUIElementByKeywords({"unidentified", "flying"})
-            local isThreatened = (ufoState.threatLevel >= 2) or ufoMessage
-            
-            if isThreatened then
+            if ufoState.threatLevel >= 2 then
                 
                 -- 1. Bail out immediately (Stop Grazing)
                 local stopBtn = findUIElementByText("stop grazing")
                 if stopBtn then 
                     clickUIElement(stopBtn, "Stop Grazing") 
+                    task.wait(1) -- Give it a moment to register
                 end
 
                 -- 2. Teleport character back to sheepfold to physically evade
@@ -550,16 +554,9 @@ local function startFarmingCycle()
                 end
 
                 -- 4. Actively Collect Wool while waiting for UFO to leave
-                if ufoState.threatLevel == 3 then
-                    status.Text = "UFO Strike! Aborting Graze..."
-                    currentFarmDuration = 2 * 60 -- Adjust wool collection timer since graze was cut short
-                    task.wait(1)
-                    break -- Breaks out of the grazing loop, moving straight to Phase 5
-                else
-                    status.Text = "UFO Inside! Collecting Wool..."
-                    doWoolCollection(player.Character, hrp)
-                    task.wait(0.5)
-                end
+                status.Text = "UFO Inside! Collecting Wool..."
+                doWoolCollection(player.Character, hrp)
+                task.wait(0.5)
                 
             else
                 -- NO THREAT (SAFE TO GRAZE)
@@ -579,7 +576,7 @@ local function startFarmingCycle()
                     local returnUiAppeared = false
                     while isFarming and not returnUiAppeared do
                         -- Re-check threat during transit
-                        if ufoState.threatLevel >= 2 or findUIElementByKeywords({"unidentified", "flying"}) then
+                        if ufoState.threatLevel >= 2 then
                             break
                         end
 
@@ -626,7 +623,7 @@ local function startFarmingCycle()
                 local waitTime = 0
                 while waitTime < 2 and isFarming do
                     -- Check threat dynamically
-                    if ufoState.threatLevel >= 2 or findUIElementByKeywords({"unidentified", "flying"}) then
+                    if ufoState.threatLevel >= 2 then
                         break
                     end
 
@@ -643,7 +640,7 @@ local function startFarmingCycle()
                 elapsedGrazeTime = elapsedGrazeTime + waitTime
                 
                 -- Re-check threat just in case a UFO entered during that 2 second wait
-                if not isFarming or ufoState.threatLevel >= 2 or findUIElementByKeywords({"unidentified", "flying"}) then continue end
+                if not isFarming or ufoState.threatLevel >= 2 then continue end
                 
                 -- 2. Press Stop Grazing
                 local stopBtn = findUIElementByText("stop grazing")
@@ -654,7 +651,7 @@ local function startFarmingCycle()
                 -- 3. Lightning Fast Reaction: Wait for Graze button to appear and click it instantly
                 local pollTime = 0
                 while isFarming do
-                    if ufoState.threatLevel >= 2 or findUIElementByKeywords({"unidentified", "flying"}) then
+                    if ufoState.threatLevel >= 2 then
                         break
                     end
 
@@ -686,68 +683,50 @@ local function startFarmingCycle()
         if not isFarming then break end
 
         ---------------------------------------------------------
-        -- PHASE 5: FINISH GRAZE (STRICT SYNC & RETRY)
+        -- PHASE 5 & 6: SMART RETURN TO SHEEPFOLD & BRING IN
         ---------------------------------------------------------
-        status.Text = "Finishing Graze..."
-        local successfullyStopped = false
-        local retryCount = 0
+        status.Text = "Finishing Graze & Returning..."
         
-        while isFarming and not successfullyStopped do
-            local finalStopBtn = findUIElementByText("stop grazing")
-            if finalStopBtn then 
-                clickUIElement(finalStopBtn, "Stop Grazing") 
-                task.wait(1) -- Wait for server to process the click
-            end
-            
-            -- Verify that Stop Grazing is gone
-            local checkStop = findUIElementByText("stop grazing")
-            
-            if not checkStop then
-                status.Text = "Graze Stopped. Syncing..."
-                task.wait(2) -- CRUCIAL: Wait 2 seconds to let the server teleport sheep to the player before we leave
-                successfullyStopped = true
-            else
-                retryCount = retryCount + 1
-                if retryCount >= 3 then
-                    -- UI is stuck, force a zone reset
-                    status.Text = "UI Stuck! Resetting Zone..."
-                    hrp.CFrame = originalCFrame
-                    task.wait(1.5)
-                    hrp.CFrame = grazeAreaCFrame
-                    task.wait(1.5)
-                    retryCount = 0
-                end
-            end
-            task.wait(0.5)
-        end
-        
-        if not isFarming then break end
-
-        ---------------------------------------------------------
-        -- PHASE 5.5: RETURN TO SHEEPFOLD & VERIFY UI
-        ---------------------------------------------------------
-        status.Text = "Returning to Sheepfold..."
-        local sheepfoldUiAppeared = false
-        
-        while isFarming and not sheepfoldUiAppeared do
-            hrp.CFrame = originalCFrame
-            task.wait(1.5)
-            
-            if not isFarming then break end
-            
+        while isFarming do
+            local stopBtn = findUIElementByText("stop grazing")
+            local grazeBtn = findUIElementByText("graze", "stop")
             local bringInBtn = findUIElementByText("bring in")
             local bringOutBtn = findUIElementByText("bring out")
-            local grazeBtn = findUIElementByText("graze", "stop")
-            local stopBtn = findUIElementByText("stop grazing")
-            
-            if grazeBtn or stopBtn then
-                -- UI is bugged, still showing grazing buttons
-                status.Text = "UI Bugged! Retrying Zone..."
-                hrp.CFrame = grazeAreaCFrame
-                task.wait(1.5)
+
+            if stopBtn then
+                status.Text = "Stopping Graze..."
+                -- Ensure we are at the grazing area to click it
+                if (hrp.Position - grazeAreaCFrame.Position).Magnitude > 50 then
+                    hrp.CFrame = grazeAreaCFrame
+                    task.wait(1.5)
+                else
+                    clickUIElement(stopBtn, "Stop Grazing")
+                    task.wait(1.5)
+                end
+                
+            elseif grazeBtn then
+                status.Text = "Returning to Sheepfold..."
+                -- Sheep are at graze area, but not grazing. Go to sheepfold to bring them in.
+                if (hrp.Position - originalCFrame.Position).Magnitude > 50 then
+                    hrp.CFrame = originalCFrame
+                    task.wait(1.5)
+                else
+                    -- UI bug: at sheepfold but showing graze. Reset zone.
+                    hrp.CFrame = grazeAreaCFrame
+                    task.wait(1.5)
+                end
+                
             elseif bringInBtn then
-                -- Perfect, ready to bring in
-                sheepfoldUiAppeared = true
+                status.Text = "Bringing In..."
+                -- Perfect, we are at the sheepfold and ready to bring in.
+                if (hrp.Position - originalCFrame.Position).Magnitude > 50 then
+                    hrp.CFrame = originalCFrame
+                    task.wait(1.5)
+                else
+                    clickUIElement(bringInBtn, "Bring in")
+                    task.wait(1.5)
+                end
+                
             elseif bringOutBtn then
                 -- UI says Bring Out. Did the sheep follow us, or were they left behind?
                 local sheepAreNear = false
@@ -759,45 +738,30 @@ local function startFarmingCycle()
                 end
                 
                 if sheepAreNear then
-                    -- Sheep are here, they were already brought in somehow
-                    sheepfoldUiAppeared = true 
+                    break -- Successfully brought in and sheep are here!
                 else
-                    -- Sheep are missing! They got left behind at the grazing area.
                     status.Text = "Sheep Left Behind! Recovering..."
                     hrp.CFrame = grazeAreaCFrame
                     task.wait(1.5)
-                    
-                    -- Try to stop grazing again just in case
                     local recoverStop = findUIElementByText("stop grazing")
                     if recoverStop then 
                         clickUIElement(recoverStop, "Stop Grazing") 
                         task.wait(1.5)
                     end
                 end
+                
             else
-                status.Text = "UI Missing! Retrying Sheepfold..."
-                hrp.CFrame = grazeAreaCFrame
-                task.wait(1.5)
-            end
-        end
-        if not isFarming then break end
-
-        ---------------------------------------------------------
-        -- PHASE 6: BRING IN
-        ---------------------------------------------------------
-        status.Text = "Bringing In..."
-        while isFarming do
-            local bringInBtn = findUIElementByText("bring in")
-            if bringInBtn then
-                clickUIElement(bringInBtn, "Bring in")
-                task.wait(1)
-            else
-                local bringOutBtn = findUIElementByText("bring out")
-                if bringOutBtn then
-                    break -- Successfully brought in
+                -- No buttons found. Try moving to sheepfold to sync UI.
+                status.Text = "Syncing UI..."
+                if (hrp.Position - originalCFrame.Position).Magnitude > 50 then
+                    hrp.CFrame = originalCFrame
+                    task.wait(1.5)
+                else
+                    -- If at sheepfold and no buttons, reset zone
+                    hrp.CFrame = grazeAreaCFrame
+                    task.wait(1.5)
                 end
             end
-            task.wait(0.5)
         end
         if not isFarming then break end
 
@@ -925,6 +889,11 @@ local function setOffline()
         task.cancel(farmCoroutine)
         farmCoroutine = nil
     end
+    
+    -- Failsafe: Release any stuck touches
+    pcall(function()
+        vim:SendTouchEvent(TOUCH_ID, 2, lastClickX, lastClickY)
+    end)
     
     -- Disconnect UFO Listeners
     if ufoAddedConn then ufoAddedConn:Disconnect(); ufoAddedConn = nil end
