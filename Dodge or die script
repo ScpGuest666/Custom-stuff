@@ -1,0 +1,618 @@
+-- Wait for player
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
+-- Configuration
+local DODGE_SPEED = 45         
+local JUMP_UP_SPEED = 85       
+local JUMP_DOWN_SPEED = -110   
+local THREAT_DISTANCE = 14     
+local BANANA_DISTANCE = 8      
+local WALL_CHECK_DIST = 18     
+
+-- Determine the best parent for the GUI
+local guiParent
+if type(gethui) == "function" then
+    guiParent = gethui()
+else
+    local success = pcall(function() return game:GetService("CoreGui").Name end)
+    if success then
+        guiParent = game:GetService("CoreGui")
+    else
+        guiParent = player:WaitForChild("PlayerGui")
+    end
+end
+
+-- CLEANUP: Prevent multiple UIs from stacking
+for _, child in ipairs(guiParent:GetChildren()) do
+    if child.Name == "DodgeOrDieESP_GUI" or child.Name == "DodgeESP_Folder" then
+        child:Destroy()
+    end
+end
+
+-- Create a dedicated folder for ESP objects
+local espFolder = Instance.new("Folder")
+espFolder.Name = "DodgeESP_Folder"
+espFolder.Parent = guiParent
+
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "DodgeOrDieESP_GUI"
+screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 2147483647
+screenGui.IgnoreGuiInset = true
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+screenGui.Parent = guiParent
+
+-- Main draggable frame
+local mainFrame = Instance.new("Frame")
+mainFrame.Parent = screenGui
+mainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+mainFrame.Size = UDim2.new(0, 200, 0, 100)
+mainFrame.Position = UDim2.new(0.3, 0, 0.5, -50)
+mainFrame.Draggable = true
+mainFrame.Active = true
+
+-- Status label
+local status = Instance.new("TextLabel")
+status.Parent = mainFrame
+status.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+status.Size = UDim2.new(0, 200, 0, 30)
+status.Position = UDim2.new(0, 0, 0, -30)
+status.Text = "Status: Offline"
+status.TextColor3 = Color3.fromRGB(255, 0, 0)
+status.TextScaled = true
+
+-- Helper to create a proper TextButton
+local function createButton(name, text, x, y, width, height)
+    local btn = Instance.new("TextButton")
+    btn.Name = name
+    btn.Parent = mainFrame
+    btn.Text = text
+    btn.Size = UDim2.new(0, width, 0, height)
+    btn.Position = UDim2.new(0, x, 0, y)
+    btn.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextScaled = true
+    btn.AutoButtonColor = true
+    btn.BorderSizePixel = 0
+    return btn
+end
+
+-- Create buttons
+local onBtn = createButton("OnBtn", "On", 10, 20, 80, 30)
+local offBtn = createButton("OffBtn", "Off", 110, 20, 80, 30)
+local destroyBtn = createButton("DestroyBtn", "Destroy", 20, 60, 160, 30)
+
+-------------------------------------------------------------------------------
+-- FIX INVISIBLE WALLS (CanQuery Issue)
+-------------------------------------------------------------------------------
+local function fixWall(obj)
+    pcall(function()
+        if obj:IsA("BasePart") then
+            local name = string.lower(obj.Name)
+            if string.find(name, "wall") or name == "wall" then
+                obj.CanQuery = true
+            end
+        end
+    end)
+end
+
+for _, obj in ipairs(workspace:GetDescendants()) do
+    fixWall(obj)
+end
+local wallFixConn = workspace.DescendantAdded:Connect(fixWall)
+
+-------------------------------------------------------------------------------
+-- STRICT HAZARD DETECTION SYSTEM
+-------------------------------------------------------------------------------
+local activeHazards = {}
+local hazardData = {} 
+local espObjects = {}
+local mainLoopConnection = nil
+
+local jumpState = "None"
+local jumpTimer = 0
+local lastJumpTime = 0 
+
+local function getHazardType(obj)
+    if not obj:IsA("BasePart") then return nil end
+    if obj.Name == "HumanoidRootPart" then return nil end
+    
+    local model = obj:FindFirstAncestorOfClass("Model")
+    if model and model:FindFirstChildOfClass("Humanoid") then return nil end
+    if obj:FindFirstAncestorWhichIsA("Tool") then return nil end
+    
+    local name = string.lower(obj.Name)
+    
+    -- 1. Banana Check
+    if string.find(name, "banana") or string.find(name, "peel") or name == "bananamodel" then 
+        return "Banana" 
+    end
+    if obj:IsA("MeshPart") and obj.MeshId and string.find(string.lower(obj.MeshId), "banana") then 
+        return "Banana" 
+    end
+    
+    -- 2. Strict Ball Check
+    local isBall = false
+    
+    -- If it's physically a sphere
+    if obj:IsA("Part") and obj.Shape == Enum.PartType.Ball then
+        isBall = true
+    -- Or if it explicitly has "ball" in the name
+    elseif string.find(name, "ball") then
+        isBall = true
+    end
+    
+    if isBall then
+        local size = obj.Size
+        local maxDim = math.max(size.X, size.Y, size.Z)
+        local minDim = math.min(size.X, size.Y, size.Z)
+        
+        -- Filter out massive objects (like skyboxes or map boundaries named "ball")
+        if maxDim > 20 then return nil end
+        
+        -- Filter out flat objects (like the lobby pads in your screenshots)
+        -- A real ball has roughly equal dimensions. A flat pad has a huge maxDim compared to minDim.
+        if maxDim / (minDim + 0.001) > 4 then return nil end
+        
+        -- Check for Golden Ball
+        local c = obj.Color
+        if c.R > 0.6 and c.G > 0.5 and c.B < 0.4 then
+            return "GoldenBall"
+        end
+        
+        return "Ball"
+    end
+
+    -- FIX: Return nil by default so random lobby parts are ignored!
+    return nil
+end
+
+local function onDescendantAdded(obj)
+    pcall(function()
+        local hType = getHazardType(obj)
+        if hType then
+            activeHazards[obj] = hType
+            hazardData[obj] = { lastPos = obj.Position, velocity = Vector3.zero, lastVel = Vector3.zero }
+        end
+    end)
+end
+
+local function onDescendantRemoving(obj)
+    if activeHazards[obj] then
+        activeHazards[obj] = nil
+        hazardData[obj] = nil
+        if espObjects[obj] then
+            espObjects[obj].billboard:Destroy()
+            espObjects[obj].highlight:Destroy()
+            espObjects[obj] = nil
+        end
+    end
+end
+
+task.spawn(function()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        onDescendantAdded(obj)
+    end
+end)
+
+local addedConn = workspace.DescendantAdded:Connect(onDescendantAdded)
+local removingConn = workspace.DescendantRemoving:Connect(onDescendantRemoving)
+
+-------------------------------------------------------------------------------
+-- ESP VISUALIZER
+-------------------------------------------------------------------------------
+local function createESP(hazard, hType, isExtreme)
+    local esp = {}
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "HazardESP"
+    billboard.Adornee = hazard
+    billboard.Size = UDim2.new(3.5, 0, 3.5, 0) 
+    billboard.AlwaysOnTop = true
+    
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, 0, 1, 0)
+    
+    local espColor = hazard.Color
+    if hType == "Banana" then espColor = Color3.new(1, 1, 0) end
+    if isExtreme then espColor = Color3.new(1, 0, 0) end 
+    
+    frame.BackgroundColor3 = espColor
+    frame.BackgroundTransparency = 0.2
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = frame
+    
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.new(1, 1, 1)
+    stroke.Thickness = 2
+    stroke.Parent = frame
+    
+    frame.Parent = billboard
+    billboard.Parent = espFolder
+    esp.billboard = billboard
+    esp.frame = frame
+    
+    local hl = Instance.new("Highlight")
+    hl.Adornee = hazard
+    hl.FillColor = espColor
+    hl.OutlineColor = Color3.new(1, 1, 1)
+    hl.FillTransparency = 0.5
+    hl.Parent = espFolder
+    esp.highlight = hl
+    
+    return esp
+end
+
+-------------------------------------------------------------------------------
+-- AUTO-DODGE & ENDGAME PREDICTION MATH
+-------------------------------------------------------------------------------
+local function getHRP()
+    local char = player.Character
+    if char then
+        return char:FindFirstChild("HumanoidRootPart"), char:FindFirstChild("Humanoid")
+    end
+    return nil, nil
+end
+
+local function applyPush(hrp, direction, useForceY, yVelocity)
+    local attachment = hrp:FindFirstChild("AutoDodgeAttachment")
+    local linVel = hrp:FindFirstChild("AutoDodgeVelocity")
+    
+    if not attachment then
+        attachment = Instance.new("Attachment")
+        attachment.Name = "AutoDodgeAttachment"
+        attachment.Parent = hrp
+    end
+    if not linVel then
+        linVel = Instance.new("LinearVelocity")
+        linVel.Name = "AutoDodgeVelocity"
+        linVel.Attachment0 = attachment
+        linVel.ForceLimitMode = Enum.ForceLimitMode.PerAxis
+        linVel.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+        linVel.RelativeTo = Enum.ActuatorRelativeTo.World
+        linVel.Parent = hrp
+    end
+    
+    if useForceY then
+        linVel.MaxAxesForce = Vector3.new(500000, 500000, 500000) 
+    else
+        linVel.MaxAxesForce = Vector3.new(500000, 0, 500000) 
+    end
+    
+    if direction == Vector3.zero and not useForceY then
+        linVel.Enabled = false
+    else
+        local flatDir = Vector3.new(direction.X, 0, direction.Z).Unit
+        if flatDir.Magnitude ~= flatDir.Magnitude then flatDir = Vector3.zero end 
+        
+        local targetVel = flatDir * DODGE_SPEED
+        
+        if useForceY then
+            targetVel = Vector3.new(targetVel.X, yVelocity, targetVel.Z)
+        else
+            targetVel = Vector3.new(targetVel.X, 0, targetVel.Z)
+        end
+        
+        linVel.VectorVelocity = targetVel
+        linVel.Enabled = true
+    end
+end
+
+local dodgeDirections = {}
+for i = 1, 24 do
+    local angle = (i / 24) * math.pi * 2
+    table.insert(dodgeDirections, Vector3.new(math.cos(angle), 0, math.sin(angle)))
+end
+
+local function getBestDodgeDirection(hrpPos, threats)
+    local bestDir = Vector3.zero
+    local lowestDanger = math.huge
+    
+    local hrpPos2D = Vector3.new(hrpPos.X, 0, hrpPos.Z)
+    
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    local ignoreList = {player.Character, espFolder}
+    for _, t in ipairs(threats) do table.insert(ignoreList, t.instance) end
+    raycastParams.FilterDescendantsInstances = ignoreList
+    
+    for _, dir in ipairs(dodgeDirections) do
+        local availableDist = WALL_CHECK_DIST
+        local right = Vector3.new(0, 1, 0):Cross(dir).Unit
+        
+        -- 360-DEGREE WIDE RAYCAST
+        local hits = {}
+        table.insert(hits, workspace:Raycast(hrpPos, dir * WALL_CHECK_DIST, raycastParams))
+        table.insert(hits, workspace:Raycast(hrpPos + right * 1.5, dir * WALL_CHECK_DIST, raycastParams))
+        table.insert(hits, workspace:Raycast(hrpPos - right * 1.5, dir * WALL_CHECK_DIST, raycastParams))
+        
+        for _, hit in ipairs(hits) do
+            if hit then
+                local dist = (hit.Position - hrpPos).Magnitude
+                if dist < availableDist then availableDist = dist end
+            end
+        end
+        
+        -- FLOOR CHECK
+        for step = 4, math.floor(availableDist), 4 do
+            local checkPos = hrpPos + dir * step + Vector3.new(0, 2, 0)
+            local floorHit = workspace:Raycast(checkPos, Vector3.new(0, -15, 0), raycastParams)
+            if not floorHit then
+                availableDist = step - 2 
+                break
+            end
+        end
+        
+        if availableDist < 2 then continue end 
+        
+        local dangerScore = 0
+        local maxTestDist = math.min(12, availableDist - 1)
+        
+        -- SIMULATE THE FUTURE: Check 0.2s, 0.5s, and 0.9s ahead
+        local timeSteps = {0.2, 0.5, 0.9}
+        
+        for _, tStep in ipairs(timeSteps) do
+            local expectedTravel = math.min(DODGE_SPEED * tStep, maxTestDist)
+            local futurePlayerPos = hrpPos2D + (dir * expectedTravel)
+            
+            for _, t in ipairs(threats) do
+                local futureThreatPos
+                if t.isStatic then
+                    futureThreatPos = Vector3.new(t.pos.X, 0, t.pos.Z)
+                else
+                    local bPos2D = Vector3.new(t.pos.X, 0, t.pos.Z)
+                    local bVel2D = Vector3.new(t.vel.X, 0, t.vel.Z)
+                    futureThreatPos = bPos2D + (bVel2D * tStep)
+                end
+                
+                local dist = (futurePlayerPos - futureThreatPos).Magnitude
+                
+                if dist < t.threatRadius then
+                    dangerScore = dangerScore + (5000 / math.max(0.1, dist))
+                else
+                    dangerScore = dangerScore + (100 / (dist * dist))
+                end
+            end
+        end
+        
+        dangerScore = dangerScore + (50 / math.max(0.1, availableDist))
+        
+        if dangerScore < lowestDanger then
+            lowestDanger = dangerScore
+            bestDir = dir
+        end
+    end
+    
+    return bestDir, lowestDanger
+end
+
+-------------------------------------------------------------------------------
+-- MAIN LOOP
+-------------------------------------------------------------------------------
+local function setOnline()
+    if mainLoopConnection then return end
+    status.Text = "Status: Online"
+    status.TextColor3 = Color3.fromRGB(0, 255, 0)
+    
+    mainLoopConnection = RunService.Heartbeat:Connect(function(dt)
+        local hrp, humanoid = getHRP()
+        local hrpPos = hrp and hrp.Position or Vector3.zero
+        local hrpPos2D = Vector3.new(hrpPos.X, 0, hrpPos.Z)
+        
+        local activeThreats = {}
+        local currentTracked = {}
+        
+        for hazard, hType in pairs(activeHazards) do
+            if hazard.Parent and not hazard:FindFirstAncestorWhichIsA("Tool") then
+                local currentPos = hazard.Position
+                local data = hazardData[hazard] or { lastPos = currentPos, velocity = Vector3.zero, lastVel = Vector3.zero }
+                
+                local vel = (currentPos - data.lastPos) / dt
+                if vel.Magnitude > 1000 then vel = Vector3.zero end
+                
+                local speed = vel.Magnitude
+                local lastVel = data.lastVel
+                
+                local isTurning = false
+                if speed > 30 and lastVel.Magnitude > 30 then
+                    if vel.Unit:Dot(lastVel.Unit) < 0.9 then isTurning = true end
+                end
+                
+                data.lastVel = vel
+                data.velocity = vel
+                data.lastPos = currentPos
+                hazardData[hazard] = data
+                
+                local distToPlayer = (hrpPos - currentPos).Magnitude
+                
+                if hType == "Banana" then
+                    if distToPlayer < 25 then 
+                        table.insert(activeThreats, { 
+                            instance = hazard, pos = currentPos, vel = Vector3.zero, 
+                            isStatic = true, isExtreme = false, threatRadius = BANANA_DISTANCE, type = "Banana"
+                        })
+                        currentTracked[hazard] = true
+                        if not espObjects[hazard] then espObjects[hazard] = createESP(hazard, hType, false) end
+                    end
+                elseif hType == "Ball" or hType == "GoldenBall" then
+                    local isMoving = speed > 5
+                    local isGolden = (hType == "GoldenBall")
+                    local isExtreme = (isGolden and speed > 40) or (isTurning and speed > 40) or (speed > 85)
+                    
+                    local dynamicRadius = THREAT_DISTANCE
+                    if isMoving then
+                        dynamicRadius = math.clamp(speed * 0.35, THREAT_DISTANCE, 35)
+                        if isExtreme then
+                            dynamicRadius = math.clamp(speed * 0.5, 25, 50) 
+                        end
+                    end
+                    
+                    local isDangerouslyClose = distToPlayer < dynamicRadius
+                    
+                    if isMoving or isDangerouslyClose then
+                        table.insert(activeThreats, { 
+                            instance = hazard, pos = currentPos, vel = vel, speed = speed,
+                            isStatic = not isMoving, isExtreme = isExtreme, threatRadius = dynamicRadius, type = "Ball"
+                        })
+                        currentTracked[hazard] = true
+                        
+                        if not espObjects[hazard] then
+                            espObjects[hazard] = createESP(hazard, hType, isExtreme)
+                        else
+                            local espColor = isExtreme and Color3.new(1, 0, 0) or hazard.Color
+                            espObjects[hazard].frame.BackgroundColor3 = espColor
+                            espObjects[hazard].highlight.FillColor = espColor
+                        end
+                    end
+                end
+            else
+                onDescendantRemoving(hazard)
+            end
+        end
+        
+        for hazard, esp in pairs(espObjects) do
+            if not currentTracked[hazard] then
+                esp.billboard:Destroy()
+                esp.highlight:Destroy()
+                espObjects[hazard] = nil
+            end
+        end
+        
+        if hrp and humanoid and humanoid.Health > 0 then
+            local groundRayParams = RaycastParams.new()
+            groundRayParams.FilterType = Enum.RaycastFilterType.Exclude
+            groundRayParams.FilterDescendantsInstances = {player.Character, espFolder}
+            
+            local groundCheck = workspace:Raycast(hrpPos, Vector3.new(0, -5, 0), groundRayParams)
+            local isGrounded = groundCheck ~= nil
+            
+            local deepGroundCheck = workspace:Raycast(hrpPos, Vector3.new(0, -35, 0), groundRayParams)
+            if deepGroundCheck == nil then
+                applyPush(hrp, Vector3.zero, false, 0)
+                return
+            end
+
+            local threatsToDodge = {}
+            local shouldJump = false
+            
+            for _, bData in ipairs(activeThreats) do
+                local bPos2D = Vector3.new(bData.pos.X, 0, bData.pos.Z)
+                local bVel2D = Vector3.new(bData.vel.X, 0, bData.vel.Z)
+                local W2D = hrpPos2D - bPos2D
+                
+                if bData.isStatic or bData.isExtreme then
+                    if W2D.Magnitude < bData.threatRadius then
+                        table.insert(threatsToDodge, bData)
+                        if bData.type == "Ball" and W2D.Magnitude < 15 and bData.pos.Y < (hrpPos.Y + 2) then 
+                            shouldJump = true 
+                        end
+                    end
+                else
+                    local vSq2D = bVel2D:Dot(bVel2D)
+                    if vSq2D > 0 then
+                        local t = W2D:Dot(bVel2D) / vSq2D
+                        if t > -0.1 and t < 1.5 then
+                            local closestPoint2D = bPos2D + bVel2D * t
+                            local distanceAtClosest2D = (hrpPos2D - closestPoint2D).Magnitude
+                            
+                            if distanceAtClosest2D < bData.threatRadius then
+                                table.insert(threatsToDodge, bData)
+                                if bData.type == "Ball" and distanceAtClosest2D < 5 and t < 0.6 and bData.pos.Y < (hrpPos.Y + 1.5) then
+                                    shouldJump = true
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            
+            local safeDirection = Vector3.zero
+            local dangerLevel = 0
+            
+            if #threatsToDodge > 0 then
+                safeDirection, dangerLevel = getBestDodgeDirection(hrpPos, threatsToDodge)
+                if dangerLevel > 3000 then
+                    shouldJump = true
+                end
+            end
+            
+            if shouldJump and isGrounded and jumpState == "None" and (tick() - lastJumpTime > 0.6) then
+                jumpState = "Up"
+                jumpTimer = tick()
+                lastJumpTime = tick()
+            end
+            
+            local useForceY = false
+            local currentYVel = 0
+            
+            if jumpState == "Up" then
+                useForceY = true
+                currentYVel = JUMP_UP_SPEED
+                if tick() - jumpTimer > 0.25 then 
+                    jumpState = "Down"
+                    jumpTimer = tick()
+                end
+            elseif jumpState == "Down" then
+                useForceY = true
+                currentYVel = JUMP_DOWN_SPEED
+                if tick() - jumpTimer > 0.2 or (isGrounded and tick() - jumpTimer > 0.05) then
+                    jumpState = "None"
+                end
+            end
+            
+            if #threatsToDodge > 0 then
+                applyPush(hrp, safeDirection, useForceY, currentYVel)
+            else
+                if jumpState ~= "None" then
+                    applyPush(hrp, Vector3.zero, useForceY, currentYVel)
+                else
+                    applyPush(hrp, Vector3.zero, false, 0)
+                end
+            end
+        end
+    end)
+end
+
+local function setOffline()
+    status.Text = "Status: Offline"
+    status.TextColor3 = Color3.fromRGB(255, 0, 0)
+    
+    if mainLoopConnection then
+        mainLoopConnection:Disconnect()
+        mainLoopConnection = nil
+    end
+    
+    local hrp = getHRP()
+    if hrp then applyPush(hrp, Vector3.zero, false, 0) end
+    
+    for _, esp in pairs(espObjects) do
+        esp.billboard:Destroy()
+        esp.highlight:Destroy()
+    end
+    table.clear(espObjects)
+end
+
+-- Connect clicks
+onBtn.Activated:Connect(setOnline)
+offBtn.Activated:Connect(setOffline)
+destroyBtn.Activated:Connect(function()
+    setOffline()
+    addedConn:Disconnect()
+    removingConn:Disconnect()
+    wallFixConn:Disconnect()
+    
+    local hrp = getHRP()
+    if hrp then
+        local att = hrp:FindFirstChild("AutoDodgeAttachment")
+        local vel = hrp:FindFirstChild("AutoDodgeVelocity")
+        if att then att:Destroy() end
+        if vel then vel:Destroy() end
+    end
+    
+    screenGui:Destroy()
+    espFolder:Destroy()
+end)
