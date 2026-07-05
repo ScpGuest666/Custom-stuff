@@ -2,24 +2,45 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local VirtualUser = game:GetService("VirtualUser")
+local vim = game:GetService("VirtualInputManager")
 local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+local camera = workspace.CurrentCamera
 
--- Configuration
+-------------------------------------------------------------------------------
+-- CONFIGURATION
+-------------------------------------------------------------------------------
 local DODGE_SPEED = 45         
 local ROAM_SPEED = 18          
 local THREAT_DISTANCE = 14     
 local BANANA_DISTANCE = 8      
 local WALL_CHECK_DIST = 18     
-local PLAYER_RADIUS = 2.5      
+local PLAYER_RADIUS = 2.5      -- R6 Hitbox padding
 
--- Jump Physics (Arched)
+-- Jump Physics
 local JUMP_POWER = 85
 local GRAVITY_PULL = 180       
 
--- Dash Physics (Replaces Teleport)
-local DASH_SPEED = 75          -- Speed of the emergency sideways push
-local DASH_DURATION = 0.2      -- 75 speed * 0.2s = 15 studs of distance
+-- Dash Physics & Cooldowns
+local DASH_SPEED = 75          
+local DASH_DURATION = 0.2      
 local DASH_COOLDOWN = 1.5
+
+-- EXACT MOBILE DASH BUTTON COORDINATES (Provided by User)
+local screenX, screenY = camera.ViewportSize.X, camera.ViewportSize.Y
+local LEFT_DASH_X = screenX * 0.77
+local LEFT_DASH_Y = screenY * 0.75
+local RIGHT_DASH_X = screenX * 0.85
+local RIGHT_DASH_Y = screenY * 0.75
+
+-- Touch Simulation Config
+local pointerOffsetX = -38 
+local pointerOffsetY = 0   
+local TOUCH_ID_LEFT = 8823
+local TOUCH_ID_RIGHT = 8824
+
+-- Failsafe variables
+local lastLeftClickX, lastLeftClickY = 0, 0
+local lastRightClickX, lastRightClickY = 0, 0
 
 -- Anti-AFK System
 player.Idled:Connect(function()
@@ -27,32 +48,27 @@ player.Idled:Connect(function()
     VirtualUser:ClickButton2(Vector2.new())
 end)
 
--- Determine the best parent for the GUI
+-------------------------------------------------------------------------------
+-- GUI & POINTER SETUP
+-------------------------------------------------------------------------------
 local guiParent
 if type(gethui) == "function" then
     guiParent = gethui()
 else
-    local success = pcall(function() return game:GetService("CoreGui").Name end)
-    if success then
-        guiParent = game:GetService("CoreGui")
-    else
-        guiParent = player:WaitForChild("PlayerGui")
-    end
+    pcall(function() guiParent = game:GetService("CoreGui") end)
+    if not guiParent then guiParent = player:WaitForChild("PlayerGui") end
 end
 
--- CLEANUP: Prevent multiple UIs from stacking
 for _, child in ipairs(guiParent:GetChildren()) do
     if child.Name == "DodgeOrDieESP_GUI" or child.Name == "DodgeESP_Folder" then
         child:Destroy()
     end
 end
 
--- Create a dedicated folder for ESP objects
 local espFolder = Instance.new("Folder")
 espFolder.Name = "DodgeESP_Folder"
 espFolder.Parent = guiParent
 
--- Create ScreenGui
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "DodgeOrDieESP_GUI"
 screenGui.ResetOnSpawn = false
@@ -61,7 +77,6 @@ screenGui.IgnoreGuiInset = true
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
 screenGui.Parent = guiParent
 
--- Main draggable frame
 local mainFrame = Instance.new("Frame")
 mainFrame.Parent = screenGui
 mainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
@@ -70,7 +85,6 @@ mainFrame.Position = UDim2.new(0.3, 0, 0.5, -50)
 mainFrame.Draggable = true
 mainFrame.Active = true
 
--- Status label
 local status = Instance.new("TextLabel")
 status.Parent = mainFrame
 status.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
@@ -80,7 +94,6 @@ status.Text = "Status: Offline"
 status.TextColor3 = Color3.fromRGB(255, 0, 0)
 status.TextScaled = true
 
--- Helper to create a proper TextButton
 local function createButton(name, text, x, y, width, height)
     local btn = Instance.new("TextButton")
     btn.Name = name
@@ -96,32 +109,62 @@ local function createButton(name, text, x, y, width, height)
     return btn
 end
 
--- Create buttons
 local onBtn = createButton("OnBtn", "On", 10, 20, 80, 30)
 local offBtn = createButton("OffBtn", "Off", 110, 20, 80, 30)
 local destroyBtn = createButton("DestroyBtn", "Destroy", 20, 60, 160, 30)
 
+-- Visual Pointers for Mobile Touches
+local function createPointer(name)
+    local ptr = Instance.new("Frame")
+    ptr.Name = name
+    ptr.Size = UDim2.new(0, 16, 0, 16)
+    ptr.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+    ptr.AnchorPoint = Vector2.new(0.5, 0.5)
+    ptr.ZIndex = 2147483647
+    ptr.Visible = false
+    ptr.Parent = screenGui
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = ptr
+    return ptr
+end
+
+local pointerLeft = createPointer("PointerLeft")
+local pointerRight = createPointer("PointerRight")
+
 -------------------------------------------------------------------------------
--- FIX INVISIBLE WALLS (CanQuery Issue)
+-- VIRTUAL TOUCH SIMULATOR (WITH FAILSAFE)
 -------------------------------------------------------------------------------
-local function fixWall(obj)
-    pcall(function()
-        if obj:IsA("BasePart") then
-            local name = string.lower(obj.Name)
-            if string.find(name, "wall") or name == "wall" then
-                obj.CanQuery = true
-            end
-        end
+local function simulateTouch(isRight)
+    local x = isRight and RIGHT_DASH_X or LEFT_DASH_X
+    local y = isRight and RIGHT_DASH_Y or LEFT_DASH_Y
+    local touchId = isRight and TOUCH_ID_RIGHT or TOUCH_ID_LEFT
+    local ptr = isRight and pointerRight or pointerLeft
+    
+    if isRight then
+        lastRightClickX, lastRightClickY = x, y
+    else
+        lastLeftClickX, lastLeftClickY = x, y
+    end
+
+    ptr.Position = UDim2.new(0, x + pointerOffsetX, 0, y + pointerOffsetY)
+    ptr.Visible = true
+
+    task.spawn(function()
+        pcall(function()
+            vim:SendTouchEvent(touchId, 0, x, y) 
+            task.wait(0.05)
+            vim:SendTouchEvent(touchId, 1, x, y) 
+            task.wait(0.05)
+            vim:SendTouchEvent(touchId, 2, x, y) 
+        end)
+        task.wait(0.1)
+        ptr.Visible = false
     end)
 end
 
-for _, obj in ipairs(workspace:GetDescendants()) do
-    fixWall(obj)
-end
-local wallFixConn = workspace.DescendantAdded:Connect(fixWall)
-
 -------------------------------------------------------------------------------
--- STRICT HAZARD DETECTION SYSTEM
+-- HAZARD DETECTION
 -------------------------------------------------------------------------------
 local activeHazards = {}
 local hazardData = {} 
@@ -132,7 +175,6 @@ local jumpState = "None"
 local currentYVel = 0
 local lastJumpTime = 0 
 
--- Dash State Variables
 local lastDashTime = 0
 local nextDashSide = "Left" 
 local isDashing = false
@@ -140,46 +182,31 @@ local dashEndTime = 0
 local dashDir = Vector3.zero
 local dashLookDir = Vector3.zero
 
--- Roaming State Variables
 local lastRoamDir = Vector3.zero
 local lastRoamTime = 0
 
 local function getHazardType(obj)
     if not obj:IsA("BasePart") then return nil end
     if obj.Name == "HumanoidRootPart" then return nil end
-    
     local model = obj:FindFirstAncestorOfClass("Model")
     if model and model:FindFirstChildOfClass("Humanoid") then return nil end
     if obj:FindFirstAncestorWhichIsA("Tool") then return nil end
     
     local name = string.lower(obj.Name)
-    
-    if string.find(name, "banana") or string.find(name, "peel") or name == "bananamodel" then 
-        return "Banana" 
-    end
-    if obj:IsA("MeshPart") and obj.MeshId and string.find(string.lower(obj.MeshId), "banana") then 
-        return "Banana" 
-    end
+    if string.find(name, "banana") or string.find(name, "peel") or name == "bananamodel" then return "Banana" end
+    if obj:IsA("MeshPart") and obj.MeshId and string.find(string.lower(obj.MeshId), "banana") then return "Banana" end
     
     local isBall = false
-    if obj:IsA("Part") and obj.Shape == Enum.PartType.Ball then
-        isBall = true
-    elseif string.find(name, "ball") then
-        isBall = true
-    end
+    if obj:IsA("Part") and obj.Shape == Enum.PartType.Ball then isBall = true
+    elseif string.find(name, "ball") then isBall = true end
     
     if isBall then
         local size = obj.Size
         local maxDim = math.max(size.X, size.Y, size.Z)
         local minDim = math.min(size.X, size.Y, size.Z)
-        
-        if maxDim > 20 then return nil end
-        if maxDim / (minDim + 0.001) > 4 then return nil end
-        
+        if maxDim > 20 or maxDim / (minDim + 0.001) > 4 then return nil end
         local c = obj.Color
-        if c.R > 0.6 and c.G > 0.5 and c.B < 0.4 then
-            return "GoldenBall"
-        end
+        if c.R > 0.6 and c.G > 0.5 and c.B < 0.4 then return "GoldenBall" end
         return "Ball"
     end
     return nil
@@ -208,17 +235,11 @@ local function onDescendantRemoving(obj)
 end
 
 task.spawn(function()
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        onDescendantAdded(obj)
-    end
+    for _, obj in ipairs(workspace:GetDescendants()) do onDescendantAdded(obj) end
 end)
-
 local addedConn = workspace.DescendantAdded:Connect(onDescendantAdded)
 local removingConn = workspace.DescendantRemoving:Connect(onDescendantRemoving)
 
--------------------------------------------------------------------------------
--- ESP VISUALIZER
--------------------------------------------------------------------------------
 local function createESP(hazard, hType, isExtreme)
     local esp = {}
     local billboard = Instance.new("BillboardGui")
@@ -226,31 +247,24 @@ local function createESP(hazard, hType, isExtreme)
     billboard.Adornee = hazard
     billboard.Size = UDim2.new(3.5, 0, 3.5, 0) 
     billboard.AlwaysOnTop = true
-    
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(1, 0, 1, 0)
-    
     local espColor = hazard.Color
     if hType == "Banana" then espColor = Color3.new(1, 1, 0) end
     if isExtreme then espColor = Color3.new(1, 0, 0) end 
-    
     frame.BackgroundColor3 = espColor
     frame.BackgroundTransparency = 0.2
-    
     local corner = Instance.new("UICorner")
     corner.CornerRadius = UDim.new(1, 0)
     corner.Parent = frame
-    
     local stroke = Instance.new("UIStroke")
     stroke.Color = Color3.new(1, 1, 1)
     stroke.Thickness = 2
     stroke.Parent = frame
-    
     frame.Parent = billboard
     billboard.Parent = espFolder
     esp.billboard = billboard
     esp.frame = frame
-    
     local hl = Instance.new("Highlight")
     hl.Adornee = hazard
     hl.FillColor = espColor
@@ -258,28 +272,16 @@ local function createESP(hazard, hType, isExtreme)
     hl.FillTransparency = 0.5
     hl.Parent = espFolder
     esp.highlight = hl
-    
     return esp
 end
 
 -------------------------------------------------------------------------------
--- MATH & PHYSICS HELPERS
+-- PHYSICS & MOVEMENT
 -------------------------------------------------------------------------------
 local function getHRP()
     local char = player.Character
-    if char then
-        return char:FindFirstChild("HumanoidRootPart"), char:FindFirstChild("Humanoid")
-    end
+    if char then return char:FindFirstChild("HumanoidRootPart"), char:FindFirstChild("Humanoid") end
     return nil, nil
-end
-
-local function distToSegment(p, a, b)
-    local ab = b - a
-    local ap = p - a
-    if ab:Dot(ab) == 0 then return ap.Magnitude end
-    local t = math.clamp(ap:Dot(ab) / ab:Dot(ab), 0, 1)
-    local c = a + t * ab
-    return (p - c).Magnitude
 end
 
 local function applyPush(hrp, direction, useForceY, yVelocity, speed, lookDir)
@@ -330,17 +332,12 @@ local function applyPush(hrp, direction, useForceY, yVelocity, speed, lookDir)
         if flatDir.Magnitude ~= flatDir.Magnitude then flatDir = Vector3.zero end 
         
         local targetVel = flatDir * speed
-        
-        if useForceY then
-            targetVel = Vector3.new(targetVel.X, yVelocity, targetVel.Z)
-        else
-            targetVel = Vector3.new(targetVel.X, 0, targetVel.Z)
-        end
+        if useForceY then targetVel = Vector3.new(targetVel.X, yVelocity, targetVel.Z)
+        else targetVel = Vector3.new(targetVel.X, 0, targetVel.Z) end
         
         linVel.VectorVelocity = targetVel
         linVel.Enabled = true
         
-        -- Prioritize looking at the threat, otherwise look where we are going
         if lookDir and lookDir.Magnitude > 0.1 then
             alignOri.CFrame = CFrame.lookAt(Vector3.zero, lookDir)
         elseif flatDir.Magnitude > 0.1 then
@@ -349,9 +346,12 @@ local function applyPush(hrp, direction, useForceY, yVelocity, speed, lookDir)
     end
 end
 
+-------------------------------------------------------------------------------
+-- HYPER-ADVANCED TIME-STEPPED PREDICTION ENGINE
+-------------------------------------------------------------------------------
 local dodgeDirections = {}
-for i = 1, 24 do
-    local angle = (i / 24) * math.pi * 2
+for i = 1, 36 do
+    local angle = (i / 36) * math.pi * 2
     table.insert(dodgeDirections, Vector3.new(math.cos(angle), 0, math.sin(angle)))
 end
 
@@ -360,33 +360,37 @@ local function getBestDirection(hrpPos, threats, isRoaming)
     local lowestDanger = math.huge
     
     local hrpPos2D = Vector3.new(hrpPos.X, 0, hrpPos.Z)
-    
     local raycastParams = RaycastParams.new()
     raycastParams.FilterType = Enum.RaycastFilterType.Exclude
     local ignoreList = {player.Character, espFolder}
     for _, t in ipairs(threats) do table.insert(ignoreList, t.instance) end
     raycastParams.FilterDescendantsInstances = ignoreList
     
+    local speedToUse = isRoaming and ROAM_SPEED or DODGE_SPEED
+    
+    -- High-Resolution Time Steps (6 distinct future checks)
+    local timeSteps = isRoaming and {0.5, 1.0, 1.5} or {0.15, 0.3, 0.5, 0.75, 1.0, 1.5}
+
     for _, dir in ipairs(dodgeDirections) do
         local availableDist = WALL_CHECK_DIST
         local right = Vector3.new(0, 1, 0):Cross(dir).Unit
         
+        -- 3-Prong Raycast for Wall Detection
         local hits = {}
         table.insert(hits, workspace:Raycast(hrpPos, dir * WALL_CHECK_DIST, raycastParams))
         table.insert(hits, workspace:Raycast(hrpPos + right * 1.5, dir * WALL_CHECK_DIST, raycastParams))
         table.insert(hits, workspace:Raycast(hrpPos - right * 1.5, dir * WALL_CHECK_DIST, raycastParams))
         
         for _, hit in ipairs(hits) do
-            if hit then
-                local dist = (hit.Position - hrpPos).Magnitude
-                if dist < availableDist then availableDist = dist end
+            if hit and (hit.Position - hrpPos).Magnitude < availableDist then 
+                availableDist = (hit.Position - hrpPos).Magnitude 
             end
         end
         
+        -- Floor Check (Don't walk off edges)
         for step = 4, math.floor(availableDist), 4 do
             local checkPos = hrpPos + dir * step + Vector3.new(0, 2, 0)
-            local floorHit = workspace:Raycast(checkPos, Vector3.new(0, -15, 0), raycastParams)
-            if not floorHit then
+            if not workspace:Raycast(checkPos, Vector3.new(0, -15, 0), raycastParams) then
                 availableDist = step - 2 
                 break
             end
@@ -396,6 +400,7 @@ local function getBestDirection(hrpPos, threats, isRoaming)
         
         local dangerScore = 0
         
+        -- Strict Wall Penalty
         if availableDist < 3.5 then
             dangerScore = dangerScore + 1000000 
         else
@@ -403,9 +408,8 @@ local function getBestDirection(hrpPos, threats, isRoaming)
         end
         
         local maxTestDist = math.min(12, availableDist - 1)
-        local timeSteps = isRoaming and {0.5, 1.0} or {0.2, 0.5, 0.9}
-        local speedToUse = isRoaming and ROAM_SPEED or DODGE_SPEED
         
+        -- SIMULATE THE FUTURE
         for _, tStep in ipairs(timeSteps) do
             local expectedTravel = math.min(speedToUse * tStep, maxTestDist)
             local futurePlayerPos = hrpPos2D + (dir * expectedTravel)
@@ -421,15 +425,18 @@ local function getBestDirection(hrpPos, threats, isRoaming)
                 end
                 
                 local rawDist = (futurePlayerPos - futureThreatPos).Magnitude
+                -- R6 Hitbox Padding: Subtract player radius so we don't squeeze through tight gaps
                 local effectiveDist = math.max(0.1, rawDist - PLAYER_RADIUS)
                 
                 if isRoaming then
                     dangerScore = dangerScore + (100 / effectiveDist)
                 else
                     if effectiveDist < t.threatRadius then
-                        dangerScore = dangerScore + (5000 / effectiveDist)
+                        -- Exponential penalty for being inside the threat radius at this future time
+                        dangerScore = dangerScore + (10000 / effectiveDist)
                     else
-                        dangerScore = dangerScore + (100 / (effectiveDist * effectiveDist))
+                        -- Inverse square for general proximity
+                        dangerScore = dangerScore + (200 / (effectiveDist * effectiveDist))
                     end
                 end
             end
@@ -481,25 +488,17 @@ local function setOnline()
                 local realVel = hazard.AssemblyLinearVelocity
                 local calcVel = (currentPos - data.lastPos) / dt
                 local vel = (realVel.Magnitude > calcVel.Magnitude) and realVel or calcVel
-                
                 if vel.Magnitude > 1000 then vel = Vector3.zero end
                 
                 local speed = vel.Magnitude
                 local lastVel = data.lastVel
-                
-                local isTurning = false
-                if speed > 30 and lastVel.Magnitude > 30 then
-                    if vel.Unit:Dot(lastVel.Unit) < 0.9 then isTurning = true end
-                end
+                local isTurning = (speed > 30 and lastVel.Magnitude > 30 and vel.Unit:Dot(lastVel.Unit) < 0.9)
                 
                 data.lastVel = vel
                 data.velocity = vel
                 
                 local distToPlayer = (hrpPos - currentPos).Magnitude
                 if distToPlayer < closestBallDist then closestBallDist = distToPlayer end
-                
-                local sweptDist = distToSegment(hrpPos, data.lastPos, currentPos)
-                local teleportedNear = (sweptDist < THREAT_DISTANCE and (currentPos - data.lastPos).Magnitude > 5)
                 
                 data.lastPos = currentPos
                 hazardData[hazard] = data
@@ -519,27 +518,21 @@ local function setOnline()
                     end
                 elseif hType == "Ball" or hType == "GoldenBall" then
                     local isMoving = speed > 5
-                    local isGolden = (hType == "GoldenBall")
-                    local isExtreme = (isGolden and speed > 40) or (isTurning and speed > 40) or (speed > 85) or teleportedNear
+                    local isExtreme = (hType == "GoldenBall" and speed > 40) or (isTurning and speed > 40) or (speed > 85)
                     
                     local dynamicRadius = THREAT_DISTANCE
                     if isMoving then
                         dynamicRadius = math.clamp(speed * 0.35, THREAT_DISTANCE, 35)
-                        if isExtreme then
-                            dynamicRadius = math.clamp(speed * 0.5, 25, 50) 
-                        end
+                        if isExtreme then dynamicRadius = math.clamp(speed * 0.5, 25, 50) end
                     end
                     
-                    local isDangerouslyClose = distToPlayer < dynamicRadius or teleportedNear
-                    
-                    if isMoving or isDangerouslyClose then
+                    if isMoving or distToPlayer < dynamicRadius then
                         hazardInfo.isExtreme = isExtreme
                         hazardInfo.threatRadius = dynamicRadius
                         table.insert(activeThreats, hazardInfo)
                         currentTracked[hazard] = true
                         
-                        if not espObjects[hazard] then
-                            espObjects[hazard] = createESP(hazard, hType, isExtreme)
+                        if not espObjects[hazard] then espObjects[hazard] = createESP(hazard, hType, isExtreme)
                         else
                             local espColor = isExtreme and Color3.new(1, 0, 0) or hazard.Color
                             espObjects[hazard].frame.BackgroundColor3 = espColor
@@ -565,19 +558,14 @@ local function setOnline()
             groundRayParams.FilterType = Enum.RaycastFilterType.Exclude
             groundRayParams.FilterDescendantsInstances = {char, espFolder}
             
-            local groundCheck = workspace:Raycast(hrpPos, Vector3.new(0, -5, 0), groundRayParams)
-            local isGrounded = groundCheck ~= nil
-            
-            local deepGroundCheck = workspace:Raycast(hrpPos, Vector3.new(0, -35, 0), groundRayParams)
-            if deepGroundCheck == nil then
+            local isGrounded = workspace:Raycast(hrpPos, Vector3.new(0, -5, 0), groundRayParams) ~= nil
+            if workspace:Raycast(hrpPos, Vector3.new(0, -35, 0), groundRayParams) == nil then
                 applyPush(hrp, Vector3.zero, false, 0, 0, nil)
                 return
             end
 
             local threatsToDodge = {}
             local shouldJump = false
-            
-            -- Find the primary threat (closest/most dangerous ball) to look at
             local primaryThreat = nil
             local minThreatDist = math.huge
             
@@ -585,8 +573,8 @@ local function setOnline()
                 local bPos2D = Vector3.new(bData.pos.X, 0, bData.pos.Z)
                 local bVel2D = Vector3.new(bData.vel.X, 0, bData.vel.Z)
                 local W2D = hrpPos2D - bPos2D
-                
                 local dist = W2D.Magnitude
+                
                 if dist < minThreatDist then
                     minThreatDist = dist
                     primaryThreat = bData
@@ -630,7 +618,6 @@ local function setOnline()
                 end
             end
             
-            -- DASH LOGIC (Replaces Teleport)
             if isDashing and tick() < dashEndTime then
                 safeDirection = dashDir
                 lookDirection = dashLookDir
@@ -640,24 +627,20 @@ local function setOnline()
                 if #threatsToDodge > 0 then
                     safeDirection, dangerLevel = getBestDirection(hrpPos, threatsToDodge, false)
                     
-                    -- Trigger Sideways Dash if danger is high
-                    if dangerLevel > 1500 and tick() - lastDashTime > DASH_COOLDOWN and lookDirection ~= Vector3.zero then
+                    -- Trigger Sideways Dash if danger is extremely high (trapped)
+                    if dangerLevel > 4000 and tick() - lastDashTime > DASH_COOLDOWN and lookDirection ~= Vector3.zero then
                         local rightVec = lookDirection:Cross(Vector3.new(0, 1, 0)).Unit
                         local leftVec = -rightVec
-                        
                         local chosenDir = (nextDashSide == "Left") and leftVec or rightVec
                         
-                        -- Safety Check: Don't dash into walls or off the map
                         local function isSafeDash(dir)
                             local hit = workspace:Raycast(hrpPos, dir * 15, groundRayParams)
                             if hit and hit.Distance < 5 then return false end
-                            local floorCheck = workspace:Raycast(hrpPos + (dir * 15) + Vector3.new(0, 2, 0), Vector3.new(0, -15, 0), groundRayParams)
-                            if not floorCheck then return false end
+                            if not workspace:Raycast(hrpPos + (dir * 15) + Vector3.new(0, 2, 0), Vector3.new(0, -15, 0), groundRayParams) then return false end
                             return true
                         end
                         
                         if not isSafeDash(chosenDir) then
-                            -- Swap sides if the chosen side is blocked
                             chosenDir = (nextDashSide == "Left") and rightVec or leftVec
                             nextDashSide = (nextDashSide == "Left") and "Right" or "Left"
                         end
@@ -667,8 +650,12 @@ local function setOnline()
                         dashDir = chosenDir
                         dashLookDir = lookDirection
                         lastDashTime = tick()
-                        nextDashSide = (nextDashSide == "Left") and "Right" or "Left"
                         
+                        -- TRIGGER MOBILE UI TOUCH
+                        local isDashingRight = (chosenDir == rightVec)
+                        simulateTouch(isDashingRight)
+                        
+                        nextDashSide = (nextDashSide == "Left") and "Right" or "Left"
                         safeDirection = dashDir
                     end
                 else
@@ -687,7 +674,6 @@ local function setOnline()
                 end
             end
             
-            -- ARCHED JUMP LOGIC
             if shouldJump and isGrounded and jumpState == "None" and (tick() - lastJumpTime > 0.6) then
                 jumpState = "Airborne"
                 currentYVel = JUMP_POWER
@@ -695,11 +681,9 @@ local function setOnline()
             end
             
             local useForceY = false
-            
             if jumpState == "Airborne" then
                 useForceY = true
                 currentYVel = currentYVel - (GRAVITY_PULL * dt)
-                
                 if currentYVel < 0 and isGrounded and (tick() - lastJumpTime > 0.2) then
                     jumpState = "None"
                     currentYVel = 0
@@ -707,20 +691,14 @@ local function setOnline()
             end
             
             local moveSpeed = DODGE_SPEED
-            if isDashing then
-                moveSpeed = DASH_SPEED
-            elseif isRoaming then
-                moveSpeed = ROAM_SPEED
-            end
+            if isDashing then moveSpeed = DASH_SPEED
+            elseif isRoaming then moveSpeed = ROAM_SPEED end
             
             if safeDirection ~= Vector3.zero then
                 applyPush(hrp, safeDirection, useForceY, currentYVel, moveSpeed, lookDirection)
             else
-                if jumpState ~= "None" then
-                    applyPush(hrp, Vector3.zero, useForceY, currentYVel, 0, lookDirection)
-                else
-                    applyPush(hrp, Vector3.zero, false, 0, 0, lookDirection)
-                end
+                if jumpState ~= "None" then applyPush(hrp, Vector3.zero, useForceY, currentYVel, 0, lookDirection)
+                else applyPush(hrp, Vector3.zero, false, 0, 0, lookDirection) end
             end
         end
     end)
@@ -735,6 +713,14 @@ local function setOffline()
         mainLoopConnection = nil
     end
     
+    -- FAILSAFE: Release any stuck touches
+    pcall(function()
+        vim:SendTouchEvent(TOUCH_ID_LEFT, 2, lastLeftClickX, lastLeftClickY)
+        vim:SendTouchEvent(TOUCH_ID_RIGHT, 2, lastRightClickX, lastRightClickY)
+    end)
+    pointerLeft.Visible = false
+    pointerRight.Visible = false
+    
     local hrp = getHRP()
     if hrp then applyPush(hrp, Vector3.zero, false, 0, 0, nil) end
     
@@ -745,14 +731,12 @@ local function setOffline()
     table.clear(espObjects)
 end
 
--- Connect clicks
 onBtn.Activated:Connect(setOnline)
 offBtn.Activated:Connect(setOffline)
 destroyBtn.Activated:Connect(function()
     setOffline()
     addedConn:Disconnect()
     removingConn:Disconnect()
-    wallFixConn:Disconnect()
     
     local hrp = getHRP()
     if hrp then
