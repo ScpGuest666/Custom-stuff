@@ -1,15 +1,31 @@
 -- Wait for player
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local VirtualUser = game:GetService("VirtualUser")
 local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
 
 -- Configuration
 local DODGE_SPEED = 45         
-local JUMP_UP_SPEED = 85       
-local JUMP_DOWN_SPEED = -110   
+local ROAM_SPEED = 18          
 local THREAT_DISTANCE = 14     
 local BANANA_DISTANCE = 8      
 local WALL_CHECK_DIST = 18     
+local PLAYER_RADIUS = 2.5      
+
+-- Jump Physics (Arched)
+local JUMP_POWER = 85
+local GRAVITY_PULL = 180       
+
+-- Dash Physics (Replaces Teleport)
+local DASH_SPEED = 75          -- Speed of the emergency sideways push
+local DASH_DURATION = 0.2      -- 75 speed * 0.2s = 15 studs of distance
+local DASH_COOLDOWN = 1.5
+
+-- Anti-AFK System
+player.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
 
 -- Determine the best parent for the GUI
 local guiParent
@@ -113,8 +129,20 @@ local espObjects = {}
 local mainLoopConnection = nil
 
 local jumpState = "None"
-local jumpTimer = 0
+local currentYVel = 0
 local lastJumpTime = 0 
+
+-- Dash State Variables
+local lastDashTime = 0
+local nextDashSide = "Left" 
+local isDashing = false
+local dashEndTime = 0
+local dashDir = Vector3.zero
+local dashLookDir = Vector3.zero
+
+-- Roaming State Variables
+local lastRoamDir = Vector3.zero
+local lastRoamTime = 0
 
 local function getHazardType(obj)
     if not obj:IsA("BasePart") then return nil end
@@ -126,7 +154,6 @@ local function getHazardType(obj)
     
     local name = string.lower(obj.Name)
     
-    -- 1. Banana Check
     if string.find(name, "banana") or string.find(name, "peel") or name == "bananamodel" then 
         return "Banana" 
     end
@@ -134,13 +161,9 @@ local function getHazardType(obj)
         return "Banana" 
     end
     
-    -- 2. Strict Ball Check
     local isBall = false
-    
-    -- If it's physically a sphere
     if obj:IsA("Part") and obj.Shape == Enum.PartType.Ball then
         isBall = true
-    -- Or if it explicitly has "ball" in the name
     elseif string.find(name, "ball") then
         isBall = true
     end
@@ -150,23 +173,15 @@ local function getHazardType(obj)
         local maxDim = math.max(size.X, size.Y, size.Z)
         local minDim = math.min(size.X, size.Y, size.Z)
         
-        -- Filter out massive objects (like skyboxes or map boundaries named "ball")
         if maxDim > 20 then return nil end
-        
-        -- Filter out flat objects (like the lobby pads in your screenshots)
-        -- A real ball has roughly equal dimensions. A flat pad has a huge maxDim compared to minDim.
         if maxDim / (minDim + 0.001) > 4 then return nil end
         
-        -- Check for Golden Ball
         local c = obj.Color
         if c.R > 0.6 and c.G > 0.5 and c.B < 0.4 then
             return "GoldenBall"
         end
-        
         return "Ball"
     end
-
-    -- FIX: Return nil by default so random lobby parts are ignored!
     return nil
 end
 
@@ -248,7 +263,7 @@ local function createESP(hazard, hType, isExtreme)
 end
 
 -------------------------------------------------------------------------------
--- AUTO-DODGE & ENDGAME PREDICTION MATH
+-- MATH & PHYSICS HELPERS
 -------------------------------------------------------------------------------
 local function getHRP()
     local char = player.Character
@@ -258,9 +273,19 @@ local function getHRP()
     return nil, nil
 end
 
-local function applyPush(hrp, direction, useForceY, yVelocity)
+local function distToSegment(p, a, b)
+    local ab = b - a
+    local ap = p - a
+    if ab:Dot(ab) == 0 then return ap.Magnitude end
+    local t = math.clamp(ap:Dot(ab) / ab:Dot(ab), 0, 1)
+    local c = a + t * ab
+    return (p - c).Magnitude
+end
+
+local function applyPush(hrp, direction, useForceY, yVelocity, speed, lookDir)
     local attachment = hrp:FindFirstChild("AutoDodgeAttachment")
     local linVel = hrp:FindFirstChild("AutoDodgeVelocity")
+    local alignOri = hrp:FindFirstChild("AutoDodgeOrientation")
     
     if not attachment then
         attachment = Instance.new("Attachment")
@@ -276,6 +301,16 @@ local function applyPush(hrp, direction, useForceY, yVelocity)
         linVel.RelativeTo = Enum.ActuatorRelativeTo.World
         linVel.Parent = hrp
     end
+    if not alignOri then
+        alignOri = Instance.new("AlignOrientation")
+        alignOri.Name = "AutoDodgeOrientation"
+        alignOri.Mode = Enum.OrientationAlignmentMode.OneAttachment
+        alignOri.Attachment0 = attachment
+        alignOri.MaxTorque = 1000000
+        alignOri.MaxAngularVelocity = 50
+        alignOri.Responsiveness = 40
+        alignOri.Parent = hrp
+    end
     
     if useForceY then
         linVel.MaxAxesForce = Vector3.new(500000, 500000, 500000) 
@@ -285,11 +320,16 @@ local function applyPush(hrp, direction, useForceY, yVelocity)
     
     if direction == Vector3.zero and not useForceY then
         linVel.Enabled = false
+        if lookDir and lookDir.Magnitude > 0.1 then
+            alignOri.CFrame = CFrame.lookAt(Vector3.zero, lookDir)
+        else
+            alignOri.CFrame = CFrame.lookAt(Vector3.zero, Vector3.new(hrp.CFrame.LookVector.X, 0, hrp.CFrame.LookVector.Z))
+        end
     else
         local flatDir = Vector3.new(direction.X, 0, direction.Z).Unit
         if flatDir.Magnitude ~= flatDir.Magnitude then flatDir = Vector3.zero end 
         
-        local targetVel = flatDir * DODGE_SPEED
+        local targetVel = flatDir * speed
         
         if useForceY then
             targetVel = Vector3.new(targetVel.X, yVelocity, targetVel.Z)
@@ -299,6 +339,13 @@ local function applyPush(hrp, direction, useForceY, yVelocity)
         
         linVel.VectorVelocity = targetVel
         linVel.Enabled = true
+        
+        -- Prioritize looking at the threat, otherwise look where we are going
+        if lookDir and lookDir.Magnitude > 0.1 then
+            alignOri.CFrame = CFrame.lookAt(Vector3.zero, lookDir)
+        elseif flatDir.Magnitude > 0.1 then
+            alignOri.CFrame = CFrame.lookAt(Vector3.zero, flatDir)
+        end
     end
 end
 
@@ -308,7 +355,7 @@ for i = 1, 24 do
     table.insert(dodgeDirections, Vector3.new(math.cos(angle), 0, math.sin(angle)))
 end
 
-local function getBestDodgeDirection(hrpPos, threats)
+local function getBestDirection(hrpPos, threats, isRoaming)
     local bestDir = Vector3.zero
     local lowestDanger = math.huge
     
@@ -324,7 +371,6 @@ local function getBestDodgeDirection(hrpPos, threats)
         local availableDist = WALL_CHECK_DIST
         local right = Vector3.new(0, 1, 0):Cross(dir).Unit
         
-        -- 360-DEGREE WIDE RAYCAST
         local hits = {}
         table.insert(hits, workspace:Raycast(hrpPos, dir * WALL_CHECK_DIST, raycastParams))
         table.insert(hits, workspace:Raycast(hrpPos + right * 1.5, dir * WALL_CHECK_DIST, raycastParams))
@@ -337,7 +383,6 @@ local function getBestDodgeDirection(hrpPos, threats)
             end
         end
         
-        -- FLOOR CHECK
         for step = 4, math.floor(availableDist), 4 do
             local checkPos = hrpPos + dir * step + Vector3.new(0, 2, 0)
             local floorHit = workspace:Raycast(checkPos, Vector3.new(0, -15, 0), raycastParams)
@@ -350,13 +395,19 @@ local function getBestDodgeDirection(hrpPos, threats)
         if availableDist < 2 then continue end 
         
         local dangerScore = 0
-        local maxTestDist = math.min(12, availableDist - 1)
         
-        -- SIMULATE THE FUTURE: Check 0.2s, 0.5s, and 0.9s ahead
-        local timeSteps = {0.2, 0.5, 0.9}
+        if availableDist < 3.5 then
+            dangerScore = dangerScore + 1000000 
+        else
+            dangerScore = dangerScore + (2000 / availableDist) 
+        end
+        
+        local maxTestDist = math.min(12, availableDist - 1)
+        local timeSteps = isRoaming and {0.5, 1.0} or {0.2, 0.5, 0.9}
+        local speedToUse = isRoaming and ROAM_SPEED or DODGE_SPEED
         
         for _, tStep in ipairs(timeSteps) do
-            local expectedTravel = math.min(DODGE_SPEED * tStep, maxTestDist)
+            local expectedTravel = math.min(speedToUse * tStep, maxTestDist)
             local futurePlayerPos = hrpPos2D + (dir * expectedTravel)
             
             for _, t in ipairs(threats) do
@@ -369,17 +420,20 @@ local function getBestDodgeDirection(hrpPos, threats)
                     futureThreatPos = bPos2D + (bVel2D * tStep)
                 end
                 
-                local dist = (futurePlayerPos - futureThreatPos).Magnitude
+                local rawDist = (futurePlayerPos - futureThreatPos).Magnitude
+                local effectiveDist = math.max(0.1, rawDist - PLAYER_RADIUS)
                 
-                if dist < t.threatRadius then
-                    dangerScore = dangerScore + (5000 / math.max(0.1, dist))
+                if isRoaming then
+                    dangerScore = dangerScore + (100 / effectiveDist)
                 else
-                    dangerScore = dangerScore + (100 / (dist * dist))
+                    if effectiveDist < t.threatRadius then
+                        dangerScore = dangerScore + (5000 / effectiveDist)
+                    else
+                        dangerScore = dangerScore + (100 / (effectiveDist * effectiveDist))
+                    end
                 end
             end
         end
-        
-        dangerScore = dangerScore + (50 / math.max(0.1, availableDist))
         
         if dangerScore < lowestDanger then
             lowestDanger = dangerScore
@@ -400,18 +454,34 @@ local function setOnline()
     
     mainLoopConnection = RunService.Heartbeat:Connect(function(dt)
         local hrp, humanoid = getHRP()
+        local char = player.Character
         local hrpPos = hrp and hrp.Position or Vector3.zero
         local hrpPos2D = Vector3.new(hrpPos.X, 0, hrpPos.Z)
         
+        if humanoid then
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+            humanoid.PlatformStand = false
+            humanoid.Sit = false
+            if humanoid:GetState() == Enum.HumanoidStateType.FallingDown or humanoid:GetState() == Enum.HumanoidStateType.Ragdoll then
+                humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end
+        end
+        
         local activeThreats = {}
+        local allHazardsList = {} 
         local currentTracked = {}
+        local closestBallDist = math.huge
         
         for hazard, hType in pairs(activeHazards) do
             if hazard.Parent and not hazard:FindFirstAncestorWhichIsA("Tool") then
                 local currentPos = hazard.Position
                 local data = hazardData[hazard] or { lastPos = currentPos, velocity = Vector3.zero, lastVel = Vector3.zero }
                 
-                local vel = (currentPos - data.lastPos) / dt
+                local realVel = hazard.AssemblyLinearVelocity
+                local calcVel = (currentPos - data.lastPos) / dt
+                local vel = (realVel.Magnitude > calcVel.Magnitude) and realVel or calcVel
+                
                 if vel.Magnitude > 1000 then vel = Vector3.zero end
                 
                 local speed = vel.Magnitude
@@ -424,24 +494,33 @@ local function setOnline()
                 
                 data.lastVel = vel
                 data.velocity = vel
+                
+                local distToPlayer = (hrpPos - currentPos).Magnitude
+                if distToPlayer < closestBallDist then closestBallDist = distToPlayer end
+                
+                local sweptDist = distToSegment(hrpPos, data.lastPos, currentPos)
+                local teleportedNear = (sweptDist < THREAT_DISTANCE and (currentPos - data.lastPos).Magnitude > 5)
+                
                 data.lastPos = currentPos
                 hazardData[hazard] = data
                 
-                local distToPlayer = (hrpPos - currentPos).Magnitude
+                local hazardInfo = {
+                    instance = hazard, pos = currentPos, vel = vel, speed = speed,
+                    isStatic = (speed < 5), isExtreme = false, threatRadius = THREAT_DISTANCE, type = hType
+                }
+                table.insert(allHazardsList, hazardInfo)
                 
                 if hType == "Banana" then
                     if distToPlayer < 25 then 
-                        table.insert(activeThreats, { 
-                            instance = hazard, pos = currentPos, vel = Vector3.zero, 
-                            isStatic = true, isExtreme = false, threatRadius = BANANA_DISTANCE, type = "Banana"
-                        })
+                        hazardInfo.threatRadius = BANANA_DISTANCE
+                        table.insert(activeThreats, hazardInfo)
                         currentTracked[hazard] = true
                         if not espObjects[hazard] then espObjects[hazard] = createESP(hazard, hType, false) end
                     end
                 elseif hType == "Ball" or hType == "GoldenBall" then
                     local isMoving = speed > 5
                     local isGolden = (hType == "GoldenBall")
-                    local isExtreme = (isGolden and speed > 40) or (isTurning and speed > 40) or (speed > 85)
+                    local isExtreme = (isGolden and speed > 40) or (isTurning and speed > 40) or (speed > 85) or teleportedNear
                     
                     local dynamicRadius = THREAT_DISTANCE
                     if isMoving then
@@ -451,13 +530,12 @@ local function setOnline()
                         end
                     end
                     
-                    local isDangerouslyClose = distToPlayer < dynamicRadius
+                    local isDangerouslyClose = distToPlayer < dynamicRadius or teleportedNear
                     
                     if isMoving or isDangerouslyClose then
-                        table.insert(activeThreats, { 
-                            instance = hazard, pos = currentPos, vel = vel, speed = speed,
-                            isStatic = not isMoving, isExtreme = isExtreme, threatRadius = dynamicRadius, type = "Ball"
-                        })
+                        hazardInfo.isExtreme = isExtreme
+                        hazardInfo.threatRadius = dynamicRadius
+                        table.insert(activeThreats, hazardInfo)
                         currentTracked[hazard] = true
                         
                         if not espObjects[hazard] then
@@ -482,32 +560,42 @@ local function setOnline()
             end
         end
         
-        if hrp and humanoid and humanoid.Health > 0 then
+        if hrp and char and humanoid and humanoid.Health > 0 then
             local groundRayParams = RaycastParams.new()
             groundRayParams.FilterType = Enum.RaycastFilterType.Exclude
-            groundRayParams.FilterDescendantsInstances = {player.Character, espFolder}
+            groundRayParams.FilterDescendantsInstances = {char, espFolder}
             
             local groundCheck = workspace:Raycast(hrpPos, Vector3.new(0, -5, 0), groundRayParams)
             local isGrounded = groundCheck ~= nil
             
             local deepGroundCheck = workspace:Raycast(hrpPos, Vector3.new(0, -35, 0), groundRayParams)
             if deepGroundCheck == nil then
-                applyPush(hrp, Vector3.zero, false, 0)
+                applyPush(hrp, Vector3.zero, false, 0, 0, nil)
                 return
             end
 
             local threatsToDodge = {}
             local shouldJump = false
             
+            -- Find the primary threat (closest/most dangerous ball) to look at
+            local primaryThreat = nil
+            local minThreatDist = math.huge
+            
             for _, bData in ipairs(activeThreats) do
                 local bPos2D = Vector3.new(bData.pos.X, 0, bData.pos.Z)
                 local bVel2D = Vector3.new(bData.vel.X, 0, bData.vel.Z)
                 local W2D = hrpPos2D - bPos2D
                 
+                local dist = W2D.Magnitude
+                if dist < minThreatDist then
+                    minThreatDist = dist
+                    primaryThreat = bData
+                end
+                
                 if bData.isStatic or bData.isExtreme then
-                    if W2D.Magnitude < bData.threatRadius then
+                    if dist < bData.threatRadius then
                         table.insert(threatsToDodge, bData)
-                        if bData.type == "Ball" and W2D.Magnitude < 15 and bData.pos.Y < (hrpPos.Y + 2) then 
+                        if bData.type == "Ball" and dist < 15 and bData.pos.Y < (hrpPos.Y + 2) then 
                             shouldJump = true 
                         end
                     end
@@ -532,45 +620,106 @@ local function setOnline()
             
             local safeDirection = Vector3.zero
             local dangerLevel = 0
+            local isRoaming = false
+            local lookDirection = Vector3.zero
             
-            if #threatsToDodge > 0 then
-                safeDirection, dangerLevel = getBestDodgeDirection(hrpPos, threatsToDodge)
-                if dangerLevel > 3000 then
-                    shouldJump = true
+            if primaryThreat then
+                local flatThreatPos = Vector3.new(primaryThreat.pos.X, hrpPos.Y, primaryThreat.pos.Z)
+                if (flatThreatPos - hrpPos).Magnitude > 0.1 then
+                    lookDirection = (flatThreatPos - hrpPos).Unit
                 end
             end
             
+            -- DASH LOGIC (Replaces Teleport)
+            if isDashing and tick() < dashEndTime then
+                safeDirection = dashDir
+                lookDirection = dashLookDir
+            else
+                isDashing = false
+                
+                if #threatsToDodge > 0 then
+                    safeDirection, dangerLevel = getBestDirection(hrpPos, threatsToDodge, false)
+                    
+                    -- Trigger Sideways Dash if danger is high
+                    if dangerLevel > 1500 and tick() - lastDashTime > DASH_COOLDOWN and lookDirection ~= Vector3.zero then
+                        local rightVec = lookDirection:Cross(Vector3.new(0, 1, 0)).Unit
+                        local leftVec = -rightVec
+                        
+                        local chosenDir = (nextDashSide == "Left") and leftVec or rightVec
+                        
+                        -- Safety Check: Don't dash into walls or off the map
+                        local function isSafeDash(dir)
+                            local hit = workspace:Raycast(hrpPos, dir * 15, groundRayParams)
+                            if hit and hit.Distance < 5 then return false end
+                            local floorCheck = workspace:Raycast(hrpPos + (dir * 15) + Vector3.new(0, 2, 0), Vector3.new(0, -15, 0), groundRayParams)
+                            if not floorCheck then return false end
+                            return true
+                        end
+                        
+                        if not isSafeDash(chosenDir) then
+                            -- Swap sides if the chosen side is blocked
+                            chosenDir = (nextDashSide == "Left") and rightVec or leftVec
+                            nextDashSide = (nextDashSide == "Left") and "Right" or "Left"
+                        end
+                        
+                        isDashing = true
+                        dashEndTime = tick() + DASH_DURATION
+                        dashDir = chosenDir
+                        dashLookDir = lookDirection
+                        lastDashTime = tick()
+                        nextDashSide = (nextDashSide == "Left") and "Right" or "Left"
+                        
+                        safeDirection = dashDir
+                    end
+                else
+                    if closestBallDist > 40 then
+                        safeDirection = Vector3.zero
+                        lookDirection = hrp.CFrame.LookVector
+                    elseif #allHazardsList > 0 then
+                        if tick() - lastRoamTime > 0.5 or lastRoamDir == Vector3.zero then
+                            lastRoamDir, _ = getBestDirection(hrpPos, allHazardsList, true)
+                            lastRoamTime = tick()
+                        end
+                        safeDirection = lastRoamDir
+                        isRoaming = true
+                        lookDirection = safeDirection 
+                    end
+                end
+            end
+            
+            -- ARCHED JUMP LOGIC
             if shouldJump and isGrounded and jumpState == "None" and (tick() - lastJumpTime > 0.6) then
-                jumpState = "Up"
-                jumpTimer = tick()
+                jumpState = "Airborne"
+                currentYVel = JUMP_POWER
                 lastJumpTime = tick()
             end
             
             local useForceY = false
-            local currentYVel = 0
             
-            if jumpState == "Up" then
+            if jumpState == "Airborne" then
                 useForceY = true
-                currentYVel = JUMP_UP_SPEED
-                if tick() - jumpTimer > 0.25 then 
-                    jumpState = "Down"
-                    jumpTimer = tick()
-                end
-            elseif jumpState == "Down" then
-                useForceY = true
-                currentYVel = JUMP_DOWN_SPEED
-                if tick() - jumpTimer > 0.2 or (isGrounded and tick() - jumpTimer > 0.05) then
+                currentYVel = currentYVel - (GRAVITY_PULL * dt)
+                
+                if currentYVel < 0 and isGrounded and (tick() - lastJumpTime > 0.2) then
                     jumpState = "None"
+                    currentYVel = 0
                 end
             end
             
-            if #threatsToDodge > 0 then
-                applyPush(hrp, safeDirection, useForceY, currentYVel)
+            local moveSpeed = DODGE_SPEED
+            if isDashing then
+                moveSpeed = DASH_SPEED
+            elseif isRoaming then
+                moveSpeed = ROAM_SPEED
+            end
+            
+            if safeDirection ~= Vector3.zero then
+                applyPush(hrp, safeDirection, useForceY, currentYVel, moveSpeed, lookDirection)
             else
                 if jumpState ~= "None" then
-                    applyPush(hrp, Vector3.zero, useForceY, currentYVel)
+                    applyPush(hrp, Vector3.zero, useForceY, currentYVel, 0, lookDirection)
                 else
-                    applyPush(hrp, Vector3.zero, false, 0)
+                    applyPush(hrp, Vector3.zero, false, 0, 0, lookDirection)
                 end
             end
         end
@@ -587,7 +736,7 @@ local function setOffline()
     end
     
     local hrp = getHRP()
-    if hrp then applyPush(hrp, Vector3.zero, false, 0) end
+    if hrp then applyPush(hrp, Vector3.zero, false, 0, 0, nil) end
     
     for _, esp in pairs(espObjects) do
         esp.billboard:Destroy()
@@ -609,8 +758,10 @@ destroyBtn.Activated:Connect(function()
     if hrp then
         local att = hrp:FindFirstChild("AutoDodgeAttachment")
         local vel = hrp:FindFirstChild("AutoDodgeVelocity")
+        local ori = hrp:FindFirstChild("AutoDodgeOrientation")
         if att then att:Destroy() end
         if vel then vel:Destroy() end
+        if ori then ori:Destroy() end
     end
     
     screenGui:Destroy()
