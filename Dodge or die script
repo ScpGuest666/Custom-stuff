@@ -198,7 +198,7 @@ local burstLookDir = Vector3.zero
 local lastRoamDir = Vector3.zero
 local lastRoamTime = 0
 local lastHrpPos = nil 
-local currentMovementDir = Vector3.zero -- Used for momentum tracking
+local currentMovementDir = Vector3.zero 
 
 local function getHazardType(obj)
     if not obj:IsA("BasePart") then return nil end
@@ -355,13 +355,10 @@ local function applyPush(hrp, direction, useForceY, yVelocity, speed, lookDir)
         linVel.MaxAxesForce = Vector3.new(500000, 0, 500000) 
     end
     
+    -- FIX: Properly disable AlignOrientation when not forcing movement
     if direction == Vector3.zero and not useForceY then
         linVel.Enabled = false
-        if lookDir and lookDir.Magnitude > 0.1 then
-            alignOri.CFrame = CFrame.lookAt(Vector3.zero, lookDir)
-        else
-            alignOri.CFrame = CFrame.lookAt(Vector3.zero, Vector3.new(hrp.CFrame.LookVector.X, 0, hrp.CFrame.LookVector.Z))
-        end
+        alignOri.Enabled = false
     else
         local flatDir = Vector3.new(direction.X, 0, direction.Z).Unit
         if flatDir.Magnitude ~= flatDir.Magnitude then flatDir = Vector3.zero end 
@@ -375,8 +372,12 @@ local function applyPush(hrp, direction, useForceY, yVelocity, speed, lookDir)
         
         if lookDir and lookDir.Magnitude > 0.1 then
             alignOri.CFrame = CFrame.lookAt(Vector3.zero, lookDir)
+            alignOri.Enabled = true
         elseif flatDir.Magnitude > 0.1 then
             alignOri.CFrame = CFrame.lookAt(Vector3.zero, flatDir)
+            alignOri.Enabled = true
+        else
+            alignOri.Enabled = false
         end
     end
 end
@@ -387,7 +388,6 @@ end
 local function getSafeBurstDistance(hrpPos, dir, threats, rayParams)
     local maxDist = MAX_BURST_DIST
     
-    -- 5-Ray Wide Corridor Check to ensure we don't dash into a corner
     local right = dir:Cross(Vector3.new(0, 1, 0)).Unit
     local hits = {}
     table.insert(hits, workspace:Raycast(hrpPos, dir * maxDist, rayParams))
@@ -454,9 +454,8 @@ local function getBestDirection(hrpPos, threats, isRoaming, huntTargetPos, curre
     raycastParams.FilterDescendantsInstances = ignoreList
     
     local speedToUse = isRoaming and ROAM_SPEED or DODGE_SPEED
-    local timeSteps = {0.1, 0.3, 0.6, 0.9, 1.2, 1.5} -- Look up to 1.5s ahead for fast balls
+    local timeSteps = {0.1, 0.3, 0.6, 0.9, 1.2, 1.5} 
 
-    -- Calculate Center of Mass for Herding
     local centerOfMass = Vector3.zero
     if #threats > 0 then
         for _, t in ipairs(threats) do
@@ -469,7 +468,6 @@ local function getBestDirection(hrpPos, threats, isRoaming, huntTargetPos, curre
         local availableDist = WALL_CHECK_DIST
         local right = dir:Cross(Vector3.new(0, 1, 0)).Unit
         
-        -- Deep Space Mapping (Center, Left, Right)
         local hits = {}
         table.insert(hits, workspace:Raycast(hrpPos, dir * WALL_CHECK_DIST, raycastParams))
         table.insert(hits, workspace:Raycast(hrpPos + right * 2.5, dir * WALL_CHECK_DIST, raycastParams))
@@ -491,7 +489,6 @@ local function getBestDirection(hrpPos, threats, isRoaming, huntTargetPos, curre
         
         if availableDist < 3 then continue end 
         
-        -- 1. DANGER SCORE (Paramount)
         local dangerScore = 0
         local maxTestDist = math.min(20, availableDist - 1)
         
@@ -513,28 +510,25 @@ local function getBestDirection(hrpPos, threats, isRoaming, huntTargetPos, curre
                 local effectiveDist = math.max(0.1, rawDist - PLAYER_RADIUS)
                 
                 if effectiveDist < t.threatRadius then
-                    dangerScore = dangerScore + (25000 / effectiveDist) -- Extreme penalty for collision
+                    dangerScore = dangerScore + (25000 / effectiveDist) 
                 else
                     dangerScore = dangerScore + (500 / (effectiveDist * effectiveDist))
                 end
             end
         end
         
-        -- 2. SPACE SCORE (Seek open areas)
-        local spaceScore = - (availableDist * 15) -- Up to -1200 for 80 studs of space
+        local spaceScore = - (availableDist * 15) 
         
-        -- 3. MOMENTUM SCORE (Create smooth circular paths, avoid jittering)
         local momentumScore = 0
         if currentDir and currentDir.Magnitude > 0.1 then
-            momentumScore = - (dir:Dot(currentDir) * 400) -- Up to -400 for maintaining direction
+            momentumScore = - (dir:Dot(currentDir) * 400) 
         end
         
-        -- 4. HERDING SCORE (Keep balls behind us)
         local herdScore = 0
         if #threats > 0 then
             local toBalls = (centerOfMass - hrpPos2D).Unit
             if toBalls.Magnitude > 0 then
-                herdScore = (dir:Dot(toBalls) * 600) -- +600 if moving towards them, -600 if moving away
+                herdScore = (dir:Dot(toBalls) * 600) 
             end
         end
         
@@ -543,7 +537,6 @@ local function getBestDirection(hrpPos, threats, isRoaming, huntTargetPos, curre
             herdScore = herdScore - (dir:Dot(targetDir) * 300)
         end
         
-        -- Combine into Total Cost
         local totalCost = dangerScore + spaceScore + momentumScore + herdScore
         
         if dangerScore > highestDangerEncountered then
@@ -556,7 +549,6 @@ local function getBestDirection(hrpPos, threats, isRoaming, huntTargetPos, curre
         end
     end
     
-    -- Return the best direction, and the raw danger of that direction to determine if we need to Burst/Jump
     return bestDir, lowestCost, highestDangerEncountered
 end
 
@@ -711,7 +703,6 @@ local function setOnline()
                         
                         if distanceAtClosest2D < bData.threatRadius then
                             table.insert(threatsToDodge, bData)
-                            -- Check if impact is extremely close (for last-resort jumping)
                             if bData.type == "Ball" and distanceAtClosest2D < 5 and t < 0.3 and bData.pos.Y < (hrpPos.Y + 2) then
                                 imminentImpact = true
                             end
@@ -748,18 +739,16 @@ local function setOnline()
                     end
                 end
                 
-                -- LAST RESORT JUMP LOGIC (Only if cornered and about to be hit)
                 if imminentImpact and dangerLevel > 4000 then
                     shouldJump = true
                 end
                 
-                -- EMERGENCY BURST LOGIC (Only if danger is high, but we have space)
                 if dangerLevel > 3000 and safeDirection ~= Vector3.zero then
                     local bestBurst = nil
                     local desiredBurstDir = safeDirection
                     local safeDist = getSafeBurstDistance(hrpPos, desiredBurstDir, activeThreats, groundRayParams)
                     
-                    if safeDist > 15 then -- Require deep space to burst
+                    if safeDist > 15 then 
                         if tick() - lastRollTime > ROLL_COOLDOWN then
                             bestBurst = {type = "Roll", dir = desiredBurstDir, lookDir = desiredBurstDir, dist = safeDist}
                         elseif tick() - lastDashTime > DASH_COOLDOWN then
