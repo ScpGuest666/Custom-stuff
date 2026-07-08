@@ -119,7 +119,7 @@ local missingSheepCoroutine = nil
 
 -- UFO Tracking State
 local ufoState = {
-    threatLevel = 0 -- 0: Safe, 1: Incoming (Outside), 2: Inside Zone, 3: Strike (Ascending)
+    threatLevel = 0 -- 0: Safe, 1: Incoming (Outside), 2: Inside Zone/Deep Inspected, 3: Strike (Ascending)
 }
 local ufoData = {}
 local trackedUFOs = {}
@@ -224,6 +224,27 @@ local function findUIElementByText(targetText, excludeText)
         end
     end
     return nil
+end
+
+-- NEW: Function to read the "0/37" sheep count from the UI
+local function getSheepCountFromUI()
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if not playerGui then return nil end
+
+    for _, desc in ipairs(playerGui:GetDescendants()) do
+        if desc:IsA("TextLabel") or desc:IsA("TextButton") then
+            if desc.Text and desc.Text ~= "" and isTrulyVisible(desc) then
+                -- Strip rich text tags (like images)
+                local rawText = string.gsub(desc.Text, "<[^>]+>", "")
+                -- Strict match for "X/Y" format (e.g., "0/37", "2/37")
+                local current, total = string.match(rawText, "^%s*(%d+)%s*/%s*(%d+)%s*$")
+                if current and total then
+                    return tonumber(current), tonumber(total)
+                end
+            end
+        end
+    end
+    return nil, nil
 end
 
 local function clickUIElement(element, buttonName)
@@ -470,9 +491,9 @@ RunService.Heartbeat:Connect(function(dt)
                     threat = 2 -- Inside zone, descending/hovering
                 end
             else
-                -- If deep inspection flagged it, lock it as Threat 1 immediately
+                -- If deep inspection flagged it, lock it as Threat 2 immediately to force instant Stop Grazing
                 if data.isTargeting then
-                    threat = 1
+                    threat = 2 
                 elseif isHeadingTowards(currentPos, data.velocity, pasturePos, incomingRadius) then
                     threat = 1 -- Incoming via trajectory!
                 end
@@ -483,15 +504,28 @@ RunService.Heartbeat:Connect(function(dt)
             end
 
             if threat > 0 then
-                if not trackedUFOs[ufoPart] then
-                    local ufoESP = Instance.new("Highlight")
+                local ufoESP = trackedUFOs[ufoPart]
+                if not ufoESP then
+                    ufoESP = Instance.new("Highlight")
                     ufoESP.Name = "UFO_ESP"
-                    ufoESP.FillColor = Color3.fromRGB(170, 0, 255)
-                    ufoESP.OutlineColor = Color3.fromRGB(255, 255, 255)
                     ufoESP.FillTransparency = 0.5
                     ufoESP.OutlineTransparency = 0
                     ufoESP.Parent = ufoPart
                     trackedUFOs[ufoPart] = ufoESP
+                end
+                
+                -- Red and Blue Flashing for Deep Inspected Threats
+                if data.isTargeting then
+                    -- Smooth sine wave interpolation between Red and Blue
+                    local cycle = (math.sin(os.clock() * 8) + 1) / 2 
+                    local flashColor = Color3.fromRGB(255, 0, 0):Lerp(Color3.fromRGB(0, 0, 255), cycle)
+                    
+                    ufoESP.FillColor = flashColor
+                    ufoESP.OutlineColor = flashColor
+                else
+                    -- Standard Purple for trajectory-based threats
+                    ufoESP.FillColor = Color3.fromRGB(170, 0, 255)
+                    ufoESP.OutlineColor = Color3.fromRGB(255, 255, 255)
                 end
             else
                 if trackedUFOs[ufoPart] then
@@ -785,13 +819,27 @@ local function startFarmingCycle()
                 
             elseif bringInBtn then
                 status.Text = "Bringing In..."
-                -- Perfect, we are at the sheepfold and ready to bring in.
-                if (hrp.Position - originalCFrame.Position).Magnitude > 50 then
-                    hrp.CFrame = originalCFrame
+                
+                -- NEW: Check if sheep were left behind by reading the X/Y text
+                local currentSheep, totalSheep = getSheepCountFromUI()
+                if currentSheep and (currentSheep == 0 or currentSheep == 2 or currentSheep == 4) then
+                    status.Text = "Sheep Left Behind! Recovering..."
+                    hrp.CFrame = grazeAreaCFrame
                     task.wait(1.5)
+                    local recoverStop = findUIElementByText("stop grazing")
+                    if recoverStop then 
+                        clickUIElement(recoverStop, "Stop Grazing") 
+                        task.wait(1.5)
+                    end
                 else
-                    clickUIElement(bringInBtn, "Bring in")
-                    task.wait(1.5)
+                    -- Perfect, we are at the sheepfold and ready to bring in.
+                    if (hrp.Position - originalCFrame.Position).Magnitude > 50 then
+                        hrp.CFrame = originalCFrame
+                        task.wait(1.5)
+                    else
+                        clickUIElement(bringInBtn, "Bring in")
+                        task.wait(1.5)
+                    end
                 end
                 
             elseif bringOutBtn then
