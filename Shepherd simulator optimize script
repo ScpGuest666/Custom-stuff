@@ -1,9 +1,20 @@
 -- Wait for player
 local Players = game:GetService("Players")
 local vim = game:GetService("VirtualInputManager")
+local VirtualUser = game:GetService("VirtualUser")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
+-------------------------------------------------------------------------------
+-- ANTI-AFK SYSTEM
+-------------------------------------------------------------------------------
+player.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+    vim:SendKeyEvent(true, Enum.KeyCode.RightShift, false, game)
+    vim:SendKeyEvent(false, Enum.KeyCode.RightShift, false, game)
+end)
 
 -- Determine the best parent for the GUI
 local guiParent
@@ -104,6 +115,7 @@ local maxDistance = 40
 local mySheep = {}
 local activeFakeLimb = nil 
 local farmCoroutine = nil
+local missingSheepCoroutine = nil 
 
 -- UFO Tracking State
 local ufoState = {
@@ -188,30 +200,6 @@ local function cleanText(str)
     return str
 end
 
-local function findUIElementByKeywords(keywords)
-    local playerGui = player:FindFirstChild("PlayerGui")
-    if not playerGui then return nil end
-
-    for _, desc in ipairs(playerGui:GetDescendants()) do
-        if desc:IsA("TextLabel") or desc:IsA("TextButton") then
-            if desc.Text and desc.Text ~= "" then
-                local text = cleanText(desc.Text)
-                local allMatch = true
-                for _, kw in ipairs(keywords) do
-                    if not string.find(text, string.lower(kw), 1, true) then
-                        allMatch = false
-                        break
-                    end
-                end
-                if allMatch and isTrulyVisible(desc) then
-                    return desc
-                end
-            end
-        end
-    end
-    return nil
-end
-
 local function findUIElementByText(targetText, excludeText)
     local playerGui = player:FindFirstChild("PlayerGui")
     if not playerGui then return nil end
@@ -274,6 +262,32 @@ local function clickUIElement(element, buttonName)
 end
 
 -------------------------------------------------------------------------------
+-- MISSING SHEEP DETECTION (DISCONNECT FEATURE)
+-------------------------------------------------------------------------------
+local function checkForMissingSheep()
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if not playerGui then return false end
+
+    for _, desc in ipairs(playerGui:GetDescendants()) do
+        if desc:IsA("TextLabel") or desc:IsA("TextButton") then
+            if desc.Text and desc.Text ~= "" then
+                local rawText = string.gsub(desc.Text, "<[^>]+>", "")
+                local sheepName = string.match(rawText, "^[Aa] (.-) has gone missing!!") 
+                               or string.match(rawText, "^[Aa]n (.-) has gone missing!!")
+                
+                if sheepName and isTrulyVisible(desc) then
+                    local currentTime = os.date("%I:%M:%S %p")
+                    local kickMessage = string.format("Disconnected at %s\nMissing Sheep: %s", currentTime, sheepName)
+                    player:Kick(kickMessage)
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+-------------------------------------------------------------------------------
 -- WOOL COLLECTION HELPER FUNCTION
 -------------------------------------------------------------------------------
 local toggleWiggle = false
@@ -320,6 +334,56 @@ local function doWoolCollection(char, currentHrp)
             mySheep[sheepModel] = nil 
         end
     end
+end
+
+-------------------------------------------------------------------------------
+-- DEEP UFO INSPECTION ENGINE
+-------------------------------------------------------------------------------
+local targetKeywords = {
+    "heavenly pasture", "heavenly_pasture", "heavenlypasture",
+    "pasture 6", "pasture_6", "pasture6"
+}
+
+local function containsKeyword(text)
+    if type(text) ~= "string" then return false end
+    local lowerText = string.lower(text)
+    for _, kw in ipairs(targetKeywords) do
+        if string.find(lowerText, kw, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+local function isUFOTargetingPasture(ufoModel)
+    -- 1. Check the model's name
+    if containsKeyword(ufoModel.Name) then return true end
+    
+    -- 2. Check attributes of the model itself
+    for attr, val in pairs(ufoModel:GetAttributes()) do
+        if containsKeyword(attr) or containsKeyword(tostring(val)) then
+            return true
+        end
+    end
+
+    -- 3. Deep scan all descendants
+    for _, desc in ipairs(ufoModel:GetDescendants()) do
+        if containsKeyword(desc.Name) then return true end
+        
+        if desc:IsA("StringValue") and containsKeyword(desc.Value) then return true end
+        if desc:IsA("ObjectValue") and desc.Value and containsKeyword(desc.Value.Name) then return true end
+        if desc:IsA("TextLabel") or desc:IsA("TextButton") then
+            if containsKeyword(desc.Text) then return true end
+        end
+        
+        for attr, val in pairs(desc:GetAttributes()) do
+            if containsKeyword(attr) or containsKeyword(tostring(val)) then
+                return true
+            end
+        end
+    end
+    
+    return false
 end
 
 -------------------------------------------------------------------------------
@@ -387,7 +451,7 @@ RunService.Heartbeat:Connect(function(dt)
             local data = ufoData[ufoPart]
             
             if not data then
-                data = { lastPos = currentPos, velocity = Vector3.new(0,0,0) }
+                data = { lastPos = currentPos, velocity = Vector3.new(0,0,0), isTargeting = false }
                 ufoData[ufoPart] = data
             else
                 data.velocity = (currentPos - data.lastPos) / dt
@@ -406,8 +470,11 @@ RunService.Heartbeat:Connect(function(dt)
                     threat = 2 -- Inside zone, descending/hovering
                 end
             else
-                if isHeadingTowards(currentPos, data.velocity, pasturePos, incomingRadius) then
-                    threat = 1 -- Incoming!
+                -- If deep inspection flagged it, lock it as Threat 1 immediately
+                if data.isTargeting then
+                    threat = 1
+                elseif isHeadingTowards(currentPos, data.velocity, pasturePos, incomingRadius) then
+                    threat = 1 -- Incoming via trajectory!
                 end
             end
 
@@ -834,6 +901,14 @@ local function setOnline()
                 local ufoPart = desc:IsA("BasePart") and desc or desc:FindFirstChildWhichIsA("BasePart")
                 if ufoPart then
                     activeUFOsCache[ufoPart] = true
+                    
+                    -- Perform Deep Inspection immediately upon spawn
+                    local isTargeting = isUFOTargetingPasture(desc)
+                    if not ufoData[ufoPart] then
+                        ufoData[ufoPart] = { lastPos = ufoPart.Position, velocity = Vector3.new(0,0,0), isTargeting = isTargeting }
+                    else
+                        ufoData[ufoPart].isTargeting = isTargeting
+                    end
                 end
             end)
         elseif desc.Parent and desc.Parent.Name == "FlyingSaucer" and desc:IsA("BasePart") then
@@ -876,6 +951,14 @@ local function setOnline()
     isFarming = true
     status.TextColor3 = Color3.fromRGB(0, 255, 0)
     
+    -- Start the missing sheep monitor loop
+    missingSheepCoroutine = task.spawn(function()
+        while isFarming do
+            checkForMissingSheep()
+            task.wait(0.5) -- Check every half second
+        end
+    end)
+    
     farmCoroutine = task.spawn(startFarmingCycle)
 end
 
@@ -888,6 +971,11 @@ local function setOffline()
     if farmCoroutine then
         task.cancel(farmCoroutine)
         farmCoroutine = nil
+    end
+    
+    if missingSheepCoroutine then
+        task.cancel(missingSheepCoroutine)
+        missingSheepCoroutine = nil
     end
     
     -- Failsafe: Release any stuck touches
