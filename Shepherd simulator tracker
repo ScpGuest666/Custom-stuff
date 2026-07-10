@@ -1,0 +1,400 @@
+-- Wait for player
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
+-- Determine the best parent for the GUI
+local guiParent
+if type(gethui) == "function" then
+    guiParent = gethui()
+else
+    local success = pcall(function()
+        return game:GetService("CoreGui").Name
+    end)
+    if success then
+        guiParent = game:GetService("CoreGui")
+    else
+        guiParent = player:WaitForChild("PlayerGui")
+    end
+end
+
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "Gui_" .. math.random(10000, 99999)
+screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 2147483647
+screenGui.IgnoreGuiInset = true
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+screenGui.Parent = guiParent
+
+-- Main draggable frame
+local mainFrame = Instance.new("Frame")
+mainFrame.Parent = screenGui
+mainFrame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+mainFrame.Size = UDim2.new(0, 200, 0, 100)
+mainFrame.Position = UDim2.new(0.3, 0, 0.5, -50)
+mainFrame.Draggable = true
+mainFrame.Active = true
+
+-- Status label
+local status = Instance.new("TextLabel")
+status.Parent = mainFrame
+status.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+status.Size = UDim2.new(0, 200, 0, 30)
+status.Position = UDim2.new(0, 0, 0, -30)
+status.Text = "Status: Offline"
+status.TextColor3 = Color3.fromRGB(255, 0, 0)
+status.TextScaled = true
+
+-- Helper to create a proper TextButton
+local function createButton(name, text, x, y, width, height)
+    local btn = Instance.new("TextButton")
+    btn.Name = name
+    btn.Parent = mainFrame
+    btn.Text = text
+    btn.Size = UDim2.new(0, width, 0, height)
+    btn.Position = UDim2.new(0, x, 0, y)
+    btn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextScaled = true
+    btn.AutoButtonColor = true
+    btn.BorderSizePixel = 0
+    return btn
+end
+
+-- Create buttons
+local onBtn = createButton("OnBtn", "On", 10, 20, 80, 30)
+local offBtn = createButton("OffBtn", "Off", 110, 20, 80, 30)
+local destroyBtn = createButton("DestroyBtn", "Destroy", 20, 60, 160, 30)
+
+-------------------------------------------------------------------------------
+-- HIGHLIGHT & ESP LOGIC
+-------------------------------------------------------------------------------
+local isActive = false
+local boxEspObjects = {} 
+local trackedSheep = {} 
+local activeLabels = {} 
+local myBoxes = {}
+local sheepStart = nil
+local sheepEnd = nil
+local sheepConnection
+local renderConnection
+
+-- Helper to safely get position of a Model or Part
+local function getPosition(obj)
+    if obj:IsA("Model") then
+        if obj.PrimaryPart then
+            return obj.PrimaryPart.Position
+        else
+            return obj:GetPivot().Position
+        end
+    elseif obj:IsA("BasePart") then
+        return obj.Position
+    end
+    return nil
+end
+
+-- Helper to determine the color of the sheep
+local function getSheepColor(sheep)
+    if sheep:IsA("BasePart") then return sheep.Color end
+    local bestPart = nil
+    for _, child in ipairs(sheep:GetDescendants()) do
+        if child:IsA("BasePart") then
+            local name = string.lower(child.Name)
+            if string.find(name, "body") or string.find(name, "torso") or string.find(name, "fleece") then
+                return child.Color
+            end
+            if not bestPart then bestPart = child end
+        end
+    end
+    return bestPart and bestPart.Color or Color3.fromRGB(255, 255, 255)
+end
+
+-- Safely gets the highest level model that is STILL A MODEL.
+local function getTopSheepModel(obj)
+    if not obj or not obj:IsA("Model") then return nil end
+    
+    local name = string.lower(obj.Name)
+    if not (string.find(name, "sheep") or string.find(name, "sheel")) then return nil end
+    
+    local current = obj
+    while current.Parent and current.Parent:IsA("Model") do
+        local pName = string.lower(current.Parent.Name)
+        if string.find(pName, "sheep") or string.find(pName, "sheel") then
+            current = current.Parent
+        else
+            break
+        end
+    end
+    return current
+end
+
+-- Calculates distance from a sheep to the exact line segment between Start and End
+local function getDistanceToPen(pos)
+    local a = sheepStart and getPosition(sheepStart) or (myBoxes[1] and getPosition(myBoxes[1]))
+    local b = sheepEnd and getPosition(sheepEnd) or (myBoxes[2] and getPosition(myBoxes[2]))
+    
+    if a and b then
+        local ab = b - a
+        local ap = pos - a
+        local dotAB = ab:Dot(ab)
+        if dotAB == 0 then return (pos - a).Magnitude end
+        
+        local t = math.clamp(ap:Dot(ab) / dotAB, 0, 1)
+        local closestPoint = a + ab * t
+        return (pos - closestPoint).Magnitude
+    elseif a then
+        return (pos - a).Magnitude
+    elseif b then
+        return (pos - b).Magnitude
+    end
+    return 999
+end
+
+-- Robust check to ensure it's YOUR sheep and STILL in the market
+local function isMySheep(topSheep)
+    if not topSheep or not topSheep.Parent then return false end
+
+    -- 1. Strict Owner Check
+    local ownerTag = topSheep:FindFirstChild("Owner", true) or topSheep:FindFirstChild("owner", true)
+    if ownerTag then
+        local ownerName = tostring(ownerTag.Value)
+        if ownerName == player.Name or ownerTag.Value == player then
+            -- It's explicitly ours
+        elseif ownerName ~= "" then
+            return false -- Explicitly owned by someone else
+        end
+    end
+
+    -- 2. Strict Pen Path Check (Must be within 22 studs of the path between Start and End)
+    local pos = getPosition(topSheep)
+    if pos then
+        local dist = getDistanceToPen(pos)
+        if dist <= 22 then 
+            return true
+        end
+    end
+
+    return false
+end
+
+-- Finds YOUR Box1s, and the SheepStart/SheepEnd inside them
+local function findMyBoxesAndPath()
+    table.clear(myBoxes)
+    sheepStart = nil
+    sheepEnd = nil
+
+    local char = player.Character or player.CharacterAdded:Wait()
+    local hrp = char:WaitForChild("HumanoidRootPart")
+    local allBoxes = {}
+
+    for _, v in pairs(workspace:GetDescendants()) do
+        if v.Name == "Box1" and (v:IsA("Model") or v:IsA("BasePart")) then
+            table.insert(allBoxes, v)
+        end
+    end
+
+    table.sort(allBoxes, function(a, b)
+        local posA, posB = getPosition(a), getPosition(b)
+        if posA and posB then return (posA - hrp.Position).Magnitude < (posB - hrp.Position).Magnitude end
+        return false
+    end)
+
+    if allBoxes[1] then table.insert(myBoxes, allBoxes[1]) end
+    if allBoxes[2] then table.insert(myBoxes, allBoxes[2]) end
+
+    -- Highlight Box1s (Purple, NO Billboard)
+    for _, box in ipairs(myBoxes) do
+        if not box:FindFirstChild("Box_Highlight") then
+            local hl = Instance.new("Highlight")
+            hl.Name = "Box_Highlight"
+            hl.Parent = box
+            hl.Adornee = box
+            hl.FillColor = Color3.fromRGB(170, 0, 255)
+            hl.OutlineColor = Color3.new(1, 1, 1)
+            hl.FillTransparency = 0.5
+            hl.OutlineTransparency = 0.1
+            table.insert(boxEspObjects, hl)
+        end
+        
+        local startNode = box:FindFirstChild("SheepStart", true)
+        if startNode then sheepStart = startNode end
+        
+        local endNode = box:FindFirstChild("SheepEnd", true)
+        if endNode then sheepEnd = endNode end
+    end
+end
+
+local function unhighlightSheep(sheep)
+    if trackedSheep[sheep] then
+        if trackedSheep[sheep].highlight then trackedSheep[sheep].highlight:Destroy() end
+        if trackedSheep[sheep].billboard then trackedSheep[sheep].billboard:Destroy() end
+        activeLabels[trackedSheep[sheep].textLabel] = nil
+        trackedSheep[sheep] = nil
+    end
+end
+
+-- Processes a sheep: Highlights it, adds Billboard, and updates Status
+local function processSheep(sheep)
+    local topSheep = getTopSheepModel(sheep)
+    if not topSheep then return end
+    if trackedSheep[topSheep] then return end 
+
+    if not isMySheep(topSheep) then return end
+
+    local sheepColor = getSheepColor(topSheep)
+    local realName = topSheep.Name 
+    
+    -- Create Highlight (Outline ONLY based on sheep color)
+    local hl = Instance.new("Highlight")
+    hl.Name = "ESP_Highlight"
+    hl.Parent = topSheep
+    hl.Adornee = topSheep
+    hl.FillTransparency = 1 -- Completely invisible fill
+    hl.OutlineColor = sheepColor -- Outline matches sheep color
+    hl.OutlineTransparency = 0 -- Fully visible outline
+
+    -- Create Billboard (Exactly 4 studs above, no randomization)
+    local bg = Instance.new("BillboardGui")
+    bg.Name = "ESP_Billboard"
+    bg.Adornee = topSheep
+    bg.Size = UDim2.new(6, 0, 1.5, 0) 
+    bg.ExtentsOffsetWorldSpace = Vector3.new(0, 4, 0) 
+    bg.AlwaysOnTop = true 
+    
+    local tl = Instance.new("TextLabel")
+    tl.Parent = bg
+    tl.Size = UDim2.new(1, 0, 1, 0)
+    tl.BackgroundTransparency = 1
+    tl.TextColor3 = Color3.fromRGB(255, 255, 255)
+    tl.TextScaled = true
+    tl.Font = Enum.Font.GothamBold
+    tl.RichText = true
+    
+    bg.Parent = topSheep
+
+    -- Store in tracking table
+    trackedSheep[topSheep] = {
+        highlight = hl,
+        billboard = bg,
+        textLabel = tl
+    }
+    activeLabels[tl] = realName
+
+    -- Update the main UI status ONLY if it just spawned near the start
+    local pos = getPosition(topSheep)
+    local startPos = sheepStart and getPosition(sheepStart) or (myBoxes[1] and getPosition(myBoxes[1]))
+    if pos and startPos and (pos - startPos).Magnitude < 15 then
+        status.Text = "Spawn: " .. realName
+        status.TextColor3 = Color3.fromRGB(0, 255, 0)
+    end
+end
+
+local function startHighlighting()
+    if isActive then return end
+    isActive = true
+    
+    status.Text = "Status: Online"
+    status.TextColor3 = Color3.fromRGB(0, 255, 0)
+
+    findMyBoxesAndPath()
+
+    -- Scan Models on startup
+    task.spawn(function()
+        for _, v in pairs(workspace:GetDescendants()) do
+            if v:IsA("Model") then
+                local name = string.lower(v.Name)
+                if string.find(name, "sheep") or string.find(name, "sheel") then
+                    processSheep(v)
+                end
+            end
+        end
+    end)
+
+    -- Trigger on Models being added
+    sheepConnection = workspace.DescendantAdded:Connect(function(v)
+        if not isActive then return end
+        if v:IsA("Model") then
+            local name = string.lower(v.Name)
+            if string.find(name, "sheep") or string.find(name, "sheel") then
+                task.wait(0.1) 
+                processSheep(v)
+            end
+        end
+    end)
+
+    -- Validation loop runs twice a second
+    task.spawn(function()
+        while isActive do
+            task.wait(0.5)
+            for sheep, data in pairs(trackedSheep) do
+                if not isMySheep(sheep) then
+                    unhighlightSheep(sheep)
+                end
+            end
+        end
+    end)
+
+    -- Render loop handles the text color animation
+    renderConnection = RunService.RenderStepped:Connect(function()
+        local t = tick()
+        for label, baseText in pairs(activeLabels) do
+            if label.Parent then
+                local animatedText = ""
+                for i = 1, #baseText do
+                    local char = string.sub(baseText, i, i)
+                    if char == " " then
+                        animatedText = animatedText .. " "
+                    else
+                        local wave = (math.sin(t * 6 + i * 0.8) + 1) / 2
+                        local r = math.floor((1 - wave) * 255)
+                        local b = math.floor(wave * 255)
+                        local hexColor = string.format("#%02X00%02X", r, b)
+                        animatedText = animatedText .. string.format('<stroke color="%s" thickness="3">%s</stroke>', hexColor, char)
+                    end
+                end
+                label.Text = animatedText
+            else
+                activeLabels[label] = nil
+            end
+        end
+    end)
+end
+
+local function stopHighlighting()
+    isActive = false
+    
+    status.Text = "Status: Offline"
+    status.TextColor3 = Color3.fromRGB(255, 0, 0)
+
+    if sheepConnection then
+        sheepConnection:Disconnect()
+        sheepConnection = nil
+    end
+    if renderConnection then
+        renderConnection:Disconnect()
+        renderConnection = nil
+    end
+
+    -- Remove Box1 highlights
+    for _, obj in ipairs(boxEspObjects) do
+        if obj and obj.Parent then obj:Destroy() end
+    end
+    table.clear(boxEspObjects)
+
+    -- Remove all Sheep highlights
+    for sheep, _ in pairs(trackedSheep) do
+        unhighlightSheep(sheep)
+    end
+    table.clear(trackedSheep)
+    table.clear(activeLabels)
+end
+
+-- Connect clicks
+onBtn.MouseButton1Click:Connect(startHighlighting)
+offBtn.MouseButton1Click:Connect(stopHighlighting)
+
+destroyBtn.MouseButton1Click:Connect(function()
+    stopHighlighting()
+    screenGui:Destroy()
+end)
