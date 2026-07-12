@@ -188,16 +188,213 @@ local function getSheepCountFromUI()
 end
 
 -------------------------------------------------------------------------------
+-- FRAME 1: UFO DETECTION ENGINE
+-------------------------------------------------------------------------------
+local ufoState = { threatLevel = 0 }
+local ufoData = {}
+local trackedUFOs = {}
+local activeUFOsCache = {} 
+local foundPasture = nil
+local zoneVisualizer = nil 
+local ufoAddedConn = nil
+local ufoRemovedConn = nil
+local ufoHeartbeatConn = nil
+
+local targetKeywords = { "heavenly pasture", "heavenly_pasture", "heavenlypasture", "pasture 6", "pasture_6", "pasture6" }
+
+local function containsKeyword(text)
+    if type(text) ~= "string" then return false end
+    local lowerText = string.lower(text)
+    for _, kw in ipairs(targetKeywords) do
+        if string.find(lowerText, kw, 1, true) then return true end
+    end
+    return false
+end
+
+local function isUFOTargetingPasture(ufoModel)
+    if containsKeyword(ufoModel.Name) then return true end
+    for attr, val in pairs(ufoModel:GetAttributes()) do
+        if containsKeyword(attr) or containsKeyword(tostring(val)) then return true end
+    end
+    for _, desc in ipairs(ufoModel:GetDescendants()) do
+        if containsKeyword(desc.Name) then return true end
+        if desc:IsA("StringValue") and containsKeyword(desc.Value) then return true end
+        if desc:IsA("ObjectValue") and desc.Value and containsKeyword(desc.Value.Name) then return true end
+        if desc:IsA("TextLabel") or desc:IsA("TextButton") then
+            if containsKeyword(desc.Text) then return true end
+        end
+    end
+    return false
+end
+
+local function isHeadingTowards(ufoPos, ufoVel, targetPos, targetRadius)
+    local ux, uz = ufoPos.X, ufoPos.Z
+    local vx, vz = ufoVel.X, ufoVel.Z
+    local tx, tz = targetPos.X, targetPos.Z
+    local speedXZ = math.sqrt(vx^2 + vz^2)
+    if speedXZ < 0.5 then return false end 
+    local wx, wz = tx - ux, tz - uz
+    local dot = (vx * wx) + (vz * wz)
+    if dot <= 0 then return false end 
+    local dist = math.abs(vz * tx - vx * tz + vx * uz - vz * ux) / speedXZ
+    return dist <= targetRadius
+end
+
+local function startUFODetection()
+    activeUFOsCache = {}
+    ufoData = {}
+    trackedUFOs = {}
+    ufoState.threatLevel = 0
+
+    local function checkAndCacheUFO(desc)
+        if desc.Name == "FlyingSaucer" then
+            task.spawn(function()
+                task.wait(0.5)
+                local ufoPart = desc:IsA("BasePart") and desc or desc:FindFirstChildWhichIsA("BasePart")
+                if ufoPart then
+                    activeUFOsCache[ufoPart] = true
+                    local isTargeting = isUFOTargetingPasture(desc)
+                    ufoData[ufoPart] = { lastPos = ufoPart.Position, velocity = Vector3.new(0,0,0), isTargeting = isTargeting }
+                end
+            end)
+        elseif desc.Parent and desc.Parent.Name == "FlyingSaucer" and desc:IsA("BasePart") then
+            activeUFOsCache[desc] = true
+        end
+    end
+
+    for _, desc in ipairs(workspace:GetDescendants()) do checkAndCacheUFO(desc) end
+    ufoAddedConn = workspace.DescendantAdded:Connect(checkAndCacheUFO)
+    ufoRemovedConn = workspace.DescendantRemoving:Connect(function(desc)
+        if desc.Name == "FlyingSaucer" then
+            for part, _ in pairs(activeUFOsCache) do
+                if part == desc or part:IsDescendantOf(desc) then
+                    activeUFOsCache[part] = nil
+                end
+            end
+        end
+    end)
+
+    ufoHeartbeatConn = RunService.Heartbeat:Connect(function(dt)
+        if not foundPasture then
+            for _, desc in ipairs(workspace:GetDescendants()) do
+                if desc.Name == "Pasture_6" then
+                    if desc:IsA("BasePart") then foundPasture = desc; break
+                    elseif desc:IsA("Model") or desc:IsA("Folder") then
+                        foundPasture = desc:FindFirstChildWhichIsA("BasePart")
+                        if foundPasture then break end
+                    end
+                end
+            end
+            if foundPasture and not zoneVisualizer then
+                zoneVisualizer = Instance.new("Part")
+                zoneVisualizer.Name = "UFO_Detection_Zone"
+                zoneVisualizer.Shape = Enum.PartType.Block 
+                zoneVisualizer.Size = Vector3.new(foundPasture.Size.X, 3000, foundPasture.Size.Z) 
+                zoneVisualizer.CFrame = foundPasture.CFrame 
+                zoneVisualizer.Anchored = true
+                zoneVisualizer.CanCollide = false
+                zoneVisualizer.CastShadow = false
+                zoneVisualizer.Transparency = 0.5 
+                zoneVisualizer.Color = Color3.fromRGB(255, 85, 0) 
+                zoneVisualizer.Material = Enum.Material.SmoothPlastic
+                zoneVisualizer.Parent = workspace
+            end
+        end
+
+        if not foundPasture then return end
+
+        local pasturePos = foundPasture.Position
+        local pastureTopY = pasturePos.Y + (foundPasture.Size.Y / 2) + 15 
+        local incomingRadius = math.max(foundPasture.Size.X, foundPasture.Size.Z)
+        local highestThreat = 0
+
+        for ufoPart, _ in pairs(activeUFOsCache) do
+            if ufoPart and ufoPart.Parent then
+                local currentPos = ufoPart.Position
+                local data = ufoData[ufoPart]
+                if not data then
+                    data = { lastPos = currentPos, velocity = Vector3.new(0,0,0), isTargeting = false }
+                    ufoData[ufoPart] = data
+                else
+                    data.velocity = (currentPos - data.lastPos) / dt
+                    data.lastPos = currentPos
+                end
+
+                local localPos = foundPasture.CFrame:PointToObjectSpace(currentPos)
+                local isInside = math.abs(localPos.X) <= (foundPasture.Size.X / 2) and math.abs(localPos.Z) <= (foundPasture.Size.Z / 2)
+                local threat = 0
+
+                if isInside then
+                    if currentPos.Y > pastureTopY and data.velocity.Y > 0.5 then threat = 3
+                    else threat = 2 end
+                else
+                    if data.isTargeting then threat = 2 
+                    elseif isHeadingTowards(currentPos, data.velocity, pasturePos, incomingRadius) then threat = 1 end
+                end
+
+                if threat > highestThreat then highestThreat = threat end
+
+                if threat > 0 then
+                    local ufoESP = trackedUFOs[ufoPart]
+                    if not ufoESP then
+                        ufoESP = Instance.new("Highlight")
+                        ufoESP.Name = "UFO_ESP"
+                        ufoESP.FillTransparency = 0.5
+                        ufoESP.OutlineTransparency = 0
+                        ufoESP.Parent = ufoPart
+                        trackedUFOs[ufoPart] = ufoESP
+                    end
+                    if data.isTargeting then
+                        local cycle = (math.sin(os.clock() * 8) + 1) / 2 
+                        local flashColor = Color3.fromRGB(255, 0, 0):Lerp(Color3.fromRGB(0, 0, 255), cycle)
+                        ufoESP.FillColor = flashColor
+                        ufoESP.OutlineColor = flashColor
+                    else
+                        ufoESP.FillColor = Color3.fromRGB(170, 0, 255)
+                        ufoESP.OutlineColor = Color3.fromRGB(255, 255, 255)
+                    end
+                else
+                    if trackedUFOs[ufoPart] then
+                        trackedUFOs[ufoPart]:Destroy()
+                        trackedUFOs[ufoPart] = nil
+                    end
+                end
+            else
+                activeUFOsCache[ufoPart] = nil
+                ufoData[ufoPart] = nil
+                if trackedUFOs[ufoPart] then
+                    trackedUFOs[ufoPart]:Destroy()
+                    trackedUFOs[ufoPart] = nil
+                end
+            end
+        end
+        ufoState.threatLevel = highestThreat
+    end)
+end
+
+local function stopUFODetection()
+    if ufoAddedConn then ufoAddedConn:Disconnect(); ufoAddedConn = nil end
+    if ufoRemovedConn then ufoRemovedConn:Disconnect(); ufoRemovedConn = nil end
+    if ufoHeartbeatConn then ufoHeartbeatConn:Disconnect(); ufoHeartbeatConn = nil end
+    ufoState.threatLevel = 0
+    for ufo, esp in pairs(trackedUFOs) do if esp then esp:Destroy() end end
+    trackedUFOs = {}
+    ufoData = {}
+    activeUFOsCache = {}
+    foundPasture = nil
+    if zoneVisualizer then zoneVisualizer:Destroy(); zoneVisualizer = nil end
+end
+
+-------------------------------------------------------------------------------
 -- FRAME 1: FARMING LOGIC
 -------------------------------------------------------------------------------
 local isFarming = false
-local originalCFrame = nil -- STRICTLY NIL UNTIL "ON" IS PRESSED
+local originalCFrame = nil 
 local maxDistance = 40
 local mySheep = {}
 local activeFakeLimb = nil 
 local farmCoroutine = nil
 local missingSheepCoroutine = nil 
-local ufoState = { threatLevel = 0 }
 local lastClickX = 0
 local lastClickY = 0
 
@@ -330,7 +527,6 @@ local function doWoolCollection(char, currentHrp)
     end
 end
 
--- SAFETY OVERRIDE: Secures sheep and yields to Auto-Buy
 local function secureSheepForAutoBuy(hrp, grazeAreaCFrame)
     status.Text = "Securing Sheep for Auto-Buy..."
     while isFarming and _G.AutoBuyTarget do
@@ -349,23 +545,19 @@ local function secureSheepForAutoBuy(hrp, grazeAreaCFrame)
             if (hrp.Position - originalCFrame.Position).Magnitude > 50 then hrp.CFrame = originalCFrame; task.wait(1.5)
             else clickUIElement(bringInBtn, "Bring in"); task.wait(1.5) end
         elseif bringOutBtn then
-            -- Sheep are safe! Yield to Auto-Buy
             _G.SheepSecured = true
             status.Text = "Sheep Secured. Auto-Buying..."
             
-            -- Wait until Auto-Buy finishes its job
             while _G.AutoBuyTarget and isFarming do task.wait(0.5) end
             
             _G.SheepSecured = false
             
-            -- TELEPORT BACK TO BASE TO RESUME FARMING
             if hrp and originalCFrame then
                 hrp.CFrame = originalCFrame
                 task.wait(0.5)
             end
             return 
         else
-            -- Sync UI
             if (hrp.Position - originalCFrame.Position).Magnitude > 50 then hrp.CFrame = originalCFrame; task.wait(1.5)
             else hrp.CFrame = grazeAreaCFrame; task.wait(1.5) end
         end
@@ -379,10 +571,9 @@ local function startFarmingCycle()
     local grazeAreaCFrame = CFrame.new(176.67967224121095, 10.65000057220459, 311.4925231933594)
 
     while isFarming do
-        -- Check for Auto-Buy Priority
         if _G.AutoBuyTarget then
             secureSheepForAutoBuy(hrp, grazeAreaCFrame)
-            continue -- Restart cycle to bring sheep back out after Auto-Buy finishes
+            continue 
         end
 
         local currentFarmDuration = 4 * 60 
@@ -429,7 +620,7 @@ local function startFarmingCycle()
         local isAtGrazeArea = true
 
         while isFarming and elapsedGrazeTime < maxGrazeTime do
-            if _G.AutoBuyTarget then break end -- Break out to handle priority
+            if _G.AutoBuyTarget then break end 
 
             if ufoState.threatLevel >= 2 then
                 local stopBtn = findUIElementByText("stop grazing")
@@ -503,7 +694,7 @@ local function startFarmingCycle()
             end
         end
         if not isFarming then break end
-        if _G.AutoBuyTarget then continue end -- Skip to top to secure sheep
+        if _G.AutoBuyTarget then continue end 
 
         status.Text = "Finishing Graze & Returning..."
         while isFarming do
@@ -573,8 +764,10 @@ onBtn.MouseButton1Click:Connect(function()
     local character = player.Character
     local hrp = character and character:FindFirstChild("HumanoidRootPart")
     if hrp then 
-        originalCFrame = hrp.CFrame -- STRICTLY SET ONLY HERE
+        originalCFrame = hrp.CFrame 
     end
+    
+    startUFODetection() 
     
     mySheep = {}
     for _, desc in pairs(workspace:GetDescendants()) do
@@ -604,6 +797,9 @@ offBtn.MouseButton1Click:Connect(function()
     status.Text = "Status: Offline"
     status.TextColor3 = Color3.fromRGB(255, 0, 0)
     farmPointer.Visible = false
+    
+    stopUFODetection() 
+    
     if farmCoroutine then task.cancel(farmCoroutine); farmCoroutine = nil end
     if missingSheepCoroutine then task.cancel(missingSheepCoroutine); missingSheepCoroutine = nil end
     pcall(function() vim:SendTouchEvent(TOUCH_ID, 2, lastClickX, lastClickY) end)
@@ -628,6 +824,7 @@ local sheepStart = nil
 local sheepEnd = nil
 local sheepConnection
 local renderConnection
+local trackerLoopCoroutine = nil
 
 local function getPosition(obj)
     if obj:IsA("Model") then
@@ -702,14 +899,33 @@ local function getDistanceToPen(pos)
     return 999
 end
 
-local function isUnownedSheepInMyMarket(topSheep)
+local function isSheepValidToTrack(topSheep)
     if not topSheep or not topSheep.Parent then return false end
-    local pos = getPosition(topSheep)
-    if not pos then return false end
-    if getDistanceToPen(pos) > 22 then return false end
     local ownerTag = topSheep:FindFirstChild("Owner", true) or topSheep:FindFirstChild("owner", true)
     if ownerTag and tostring(ownerTag.Value) ~= "" then return false end
     return true
+end
+
+local function shouldRemoveHighlight(topSheep)
+    if not topSheep or not topSheep.Parent then return true end
+    if not isSheepValidToTrack(topSheep) then return true end
+    
+    local pos = getPosition(topSheep)
+    if not pos then return true end
+    
+    -- REMOVE HIGHLIGHT IF IT WALKS OUT OF RANGE
+    if getDistanceToPen(pos) > 35 then
+        return true
+    end
+    
+    if sheepEnd then
+        local endPos = getPosition(sheepEnd)
+        if endPos and (pos - endPos).Magnitude <= 25 then
+            return true
+        end
+    end
+    
+    return false
 end
 
 local function unhighlightSheep(sheep)
@@ -725,7 +941,6 @@ local function processSheep(sheep)
     local topSheep = getTopSheepModel(sheep)
     if not topSheep then return end
     if trackedSheep[topSheep] then return end 
-    if not isUnownedSheepInMyMarket(topSheep) then return end
 
     local sheepColor = getSheepColor(topSheep)
     local realName = topSheep.Name 
@@ -760,6 +975,109 @@ local function processSheep(sheep)
     activeLabels[tl] = realName
 end
 
+-------------------------------------------------------------------------------
+-- HIDE/SHOW OTHER SHEEP LOGIC (EXTREMELY THOROUGH)
+-------------------------------------------------------------------------------
+local hiddenSheepCache = {}
+
+local function hideOtherSheep(targetSheep)
+    for _, v in pairs(workspace:GetDescendants()) do
+        if v:IsA("Model") then
+            local name = string.lower(v.Name)
+            if string.find(name, "sheep") or string.find(name, "sheel") then
+                local topSheep = getTopSheepModel(v)
+                -- Ensure we DO NOT hide the target sheep
+                if topSheep and topSheep ~= targetSheep then
+                    if not hiddenSheepCache[topSheep] then
+                        hiddenSheepCache[topSheep] = {}
+                        
+                        -- Hide everything inside the sheep model
+                        for _, desc in ipairs(topSheep:GetDescendants()) do
+                            if desc:IsA("BasePart") then
+                                hiddenSheepCache[topSheep][desc] = {
+                                    Transparency = desc.Transparency,
+                                    CanQuery = desc.CanQuery,
+                                    CanCollide = desc.CanCollide,
+                                    CanTouch = desc.CanTouch
+                                }
+                                desc.Transparency = 1
+                                desc.CanQuery = false
+                                desc.CanCollide = false
+                                desc.CanTouch = false
+                            elseif desc:IsA("Decal") or desc:IsA("Texture") then
+                                hiddenSheepCache[topSheep][desc] = { Transparency = desc.Transparency }
+                                desc.Transparency = 1
+                            elseif desc:IsA("BillboardGui") or desc:IsA("SurfaceGui") or desc:IsA("ProximityPrompt") or desc:IsA("ParticleEmitter") or desc:IsA("Trail") or desc:IsA("Beam") or desc:IsA("Highlight") then
+                                hiddenSheepCache[topSheep][desc] = { Enabled = desc.Enabled }
+                                desc.Enabled = false
+                            elseif desc:IsA("ClickDetector") then
+                                hiddenSheepCache[topSheep][desc] = { MaxActivationDistance = desc.MaxActivationDistance }
+                                desc.MaxActivationDistance = 0
+                            end
+                        end
+                        
+                        -- Hide our own ESP for this sheep
+                        if trackedSheep[topSheep] then
+                            if trackedSheep[topSheep].highlight then trackedSheep[topSheep].highlight.Enabled = false end
+                            if trackedSheep[topSheep].billboard then trackedSheep[topSheep].billboard.Enabled = false end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Hide any PlayerGui BillboardGuis/SurfaceGuis Adornee'd to the hidden sheep
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if playerGui then
+        for _, gui in ipairs(playerGui:GetDescendants()) do
+            if gui:IsA("BillboardGui") or gui:IsA("SurfaceGui") or gui:IsA("Highlight") then
+                local adornee = gui.Adornee
+                if adornee then
+                    local topAdorneeSheep = getTopSheepModel(adornee)
+                    if topAdorneeSheep and topAdorneeSheep ~= targetSheep and hiddenSheepCache[topAdorneeSheep] then
+                        if not hiddenSheepCache[topAdorneeSheep][gui] then
+                            hiddenSheepCache[topAdorneeSheep][gui] = { Enabled = gui.Enabled }
+                            gui.Enabled = false
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function showAllSheep()
+    for sheep, cache in pairs(hiddenSheepCache) do
+        if sheep and sheep.Parent then
+            for obj, props in pairs(cache) do
+                if obj and obj.Parent then
+                    if obj:IsA("BasePart") then
+                        obj.Transparency = props.Transparency
+                        obj.CanQuery = props.CanQuery
+                        obj.CanCollide = props.CanCollide
+                        obj.CanTouch = props.CanTouch
+                    elseif obj:IsA("Decal") or obj:IsA("Texture") then
+                        obj.Transparency = props.Transparency
+                    elseif obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") or obj:IsA("ProximityPrompt") or obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") or obj:IsA("Highlight") then
+                        obj.Enabled = props.Enabled
+                    elseif obj:IsA("ClickDetector") then
+                        obj.MaxActivationDistance = props.MaxActivationDistance
+                    end
+                end
+            end
+            if trackedSheep[sheep] then
+                if trackedSheep[sheep].highlight then trackedSheep[sheep].highlight.Enabled = true end
+                if trackedSheep[sheep].billboard then trackedSheep[sheep].billboard.Enabled = true end
+            end
+        end
+    end
+    table.clear(hiddenSheepCache)
+end
+
+-------------------------------------------------------------------------------
+-- ESP START/STOP
+-------------------------------------------------------------------------------
 local function startHighlighting()
     if isActive then return end
     isActive = true
@@ -779,31 +1097,70 @@ local function startHighlighting()
         end
     end
 
+    -- Initial Scan: Only highlight sheep currently within the radius
     task.spawn(function()
         for _, v in pairs(workspace:GetDescendants()) do
             if v:IsA("Model") then
                 local name = string.lower(v.Name)
-                if string.find(name, "sheep") or string.find(name, "sheel") then processSheep(v) end
+                if string.find(name, "sheep") or string.find(name, "sheel") then 
+                    local topSheep = getTopSheepModel(v)
+                    if topSheep and not trackedSheep[topSheep] then
+                        local pos = getPosition(topSheep)
+                        if pos and getDistanceToPen(pos) <= 35 and isSheepValidToTrack(topSheep) then
+                            processSheep(topSheep)
+                        end
+                    end
+                end
             end
         end
     end)
 
+    -- Event Listener: Only highlight new sheep if they spawn at/near SheepStart
     sheepConnection = workspace.DescendantAdded:Connect(function(v)
         if not isActive then return end
         if v:IsA("Model") then
             local name = string.lower(v.Name)
             if string.find(name, "sheep") or string.find(name, "sheel") then
-                task.wait(0.1) 
-                processSheep(v)
+                task.spawn(function()
+                    task.wait(0.5) 
+                    if not isActive then return end
+                    local topSheep = getTopSheepModel(v)
+                    if topSheep and not trackedSheep[topSheep] then
+                        local pos = getPosition(topSheep)
+                        if pos then
+                            local validSpawn = false
+                            if sheepStart then
+                                local startPos = getPosition(sheepStart)
+                                if startPos and (pos - startPos).Magnitude <= 35 then
+                                    validSpawn = true
+                                end
+                            elseif getDistanceToPen(pos) <= 35 then
+                                validSpawn = true
+                            end
+                            
+                            if validSpawn and isSheepValidToTrack(topSheep) then
+                                processSheep(topSheep)
+                            end
+                        end
+                    end
+                end)
             end
         end
     end)
 
-    task.spawn(function()
+    -- Continuous Validation Loop: Removes invalid sheep & hides new ones if buying
+    trackerLoopCoroutine = task.spawn(function()
         while isActive do
-            task.wait(0.5)
+            task.wait(1)
             for sheep, data in pairs(trackedSheep) do
-                if not isUnownedSheepInMyMarket(sheep) then unhighlightSheep(sheep) end
+                if shouldRemoveHighlight(sheep) then 
+                    unhighlightSheep(sheep) 
+                end
+            end
+            
+            -- If we are currently buying a target, ensure any newly spawned sheep are hidden
+            if _G.AutoBuyTarget then
+                hideOtherSheep(_G.AutoBuyTarget)
             end
         end
     end)
@@ -836,24 +1193,27 @@ local function stopHighlighting()
     isActive = false
     if sheepConnection then sheepConnection:Disconnect(); sheepConnection = nil end
     if renderConnection then renderConnection:Disconnect(); renderConnection = nil end
+    if trackerLoopCoroutine then task.cancel(trackerLoopCoroutine); trackerLoopCoroutine = nil end
     for _, obj in ipairs(boxEspObjects) do if obj and obj.Parent then obj:Destroy() end end
     table.clear(boxEspObjects)
     for sheep, _ in pairs(trackedSheep) do unhighlightSheep(sheep) end
     table.clear(trackedSheep)
     table.clear(activeLabels)
+    showAllSheep()
 end
 
 -------------------------------------------------------------------------------
--- AUTO-BUY LOGIC (WITH 90-DEGREE CAMERA & CENTER CLICK)
+-- AUTO-BUY LOGIC (WITH SPIN DETECTION & DYNAMIC MOUSE OFFSET)
 -------------------------------------------------------------------------------
 local sideActive = false
 local boughtCount = 0
 local autoBuyCoroutine = nil
 
--- Tweak these if the Buy button isn't perfectly centered
 local CAMERA_HEIGHT = 15
 local CLICK_OFFSET_X = 0
-local CLICK_OFFSET_Y = 0
+local BASE_CLICK_OFFSET_Y = 0
+local WALKING_OFFSET_Y = -25 -- Pixels to shift upward when sheep is walking
+local RUNNING_OFFSET_Y = -50 -- Pixels to shift upward when sheep is running
 
 local function cleanString(str)
     return string.gsub(string.lower(str), "%s+", "")
@@ -861,12 +1221,12 @@ end
 
 local function findTargetSheep(targetName)
     local cleanedTarget = cleanString(targetName)
-    for _, v in pairs(workspace:GetDescendants()) do
-        if v:IsA("Model") then
-            local name = string.lower(v.Name)
-            if string.find(name, "sheep") or string.find(name, "sheel") then
-                if cleanString(v.Name) == cleanedTarget then
-                    if isUnownedSheepInMyMarket(v) then return v end
+    -- Only search through currently tracked (highlighted) sheep
+    for sheep, _ in pairs(trackedSheep) do
+        if sheep and sheep.Parent then
+            if cleanString(sheep.Name) == cleanedTarget then
+                if not shouldRemoveHighlight(sheep) then 
+                    return sheep 
                 end
             end
         end
@@ -887,12 +1247,10 @@ local function autoBuyLoop()
             if sheep then
                 _G.AutoBuyTarget = sheep
                 
-                -- Wait for Farming script to secure sheep (if it's running)
                 local aborted = false
                 if isFarming then
                     while isFarming and not _G.SheepSecured and sideActive do
-                        -- Failsafe: If sheep despawns while we are running back to base, abort!
-                        if not sheep or not sheep.Parent or not isUnownedSheepInMyMarket(sheep) then
+                        if not sheep or not sheep.Parent or shouldRemoveHighlight(sheep) then
                             aborted = true
                             break
                         end
@@ -902,9 +1260,13 @@ local function autoBuyLoop()
                 
                 if aborted or not sideActive then 
                     _G.AutoBuyTarget = nil
+                    showAllSheep()
                     task.wait(0.5)
                     continue 
                 end
+                
+                -- HIDE ALL OTHER SHEEP TO PREVENT ACCIDENTAL CLICKS
+                hideOtherSheep(sheep)
                 
                 local char = player.Character
                 local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -914,14 +1276,13 @@ local function autoBuyLoop()
                     local preAutoBuyCFrame = hrp.CFrame
                     cam.CameraType = Enum.CameraType.Scriptable
                     
-                    -- Show Red Dot exactly in the center
-                    autoBuyPointer.Position = UDim2.new(0.5, CLICK_OFFSET_X, 0.5, CLICK_OFFSET_Y)
                     autoBuyPointer.Visible = true
                     
+                    local isSpinning = false
                     local tpConnection
                     tpConnection = RunService.Heartbeat:Connect(function()
-                        if not sideActive or not _G.AutoBuyTarget then 
-                            tpConnection:Disconnect() 
+                        if not sideActive or not _G.AutoBuyTarget or isSpinning then 
+                            if tpConnection then tpConnection:Disconnect() end
                             return 
                         end
                         if sheep and sheep.Parent and sheep.PrimaryPart then
@@ -929,57 +1290,113 @@ local function autoBuyLoop()
                             local sheepPos = sheepCFrame.Position
                             local forwardDir = sheepCFrame.LookVector
                             
-                            -- Teleport character exactly 3 studs IN FRONT of the sheep, facing the sheep
                             hrp.CFrame = CFrame.lookAt(sheepPos + (forwardDir * 3), sheepPos)
-                            
-                            -- Force camera 90 degrees down, using the sheep's forward direction as the "Up" vector
-                            -- This makes the camera face forward in the direction the sheep is moving
                             cam.CFrame = CFrame.lookAt(sheepPos + Vector3.new(0, CAMERA_HEIGHT, 0), sheepPos, forwardDir)
                         else
-                            tpConnection:Disconnect()
+                            if tpConnection then tpConnection:Disconnect() end
                         end
                     end)
                     
-                    task.wait(0.5) -- Wait for camera to stabilize and 3D UI to render
+                    task.wait(0.5) 
                     
-                    if sideActive then
+                    if sideActive and sheep and sheep.PrimaryPart then
                         local viewport = cam.ViewportSize
-                        local clickX = (viewport.X / 2) + CLICK_OFFSET_X
-                        local clickY = (viewport.Y / 2) + CLICK_OFFSET_Y
+                        local wasBought = false
                         
-                        vim:SendTouchEvent(TOUCH_ID, 0, clickX, clickY)
-                        
-                        -- Hold loop (handles 20s despawn automatically)
-                        local holdTime = 0
-                        while holdTime < 1.5 and sideActive and sheep and sheep.Parent and isUnownedSheepInMyMarket(sheep) do
-                            task.wait(0.1)
-                            holdTime = holdTime + 0.1
+                        -- REPEATING 1.5s HOLD LOOP
+                        while sideActive and sheep and sheep.Parent and not shouldRemoveHighlight(sheep) and not wasBought do
+                            local lastPos = sheep.PrimaryPart.Position
+                            local currentOffsetY = BASE_CLICK_OFFSET_Y
+                            local clickX = (viewport.X / 2) + CLICK_OFFSET_X
+                            local clickY = (viewport.Y / 2) + currentOffsetY
+                            
+                            autoBuyPointer.Position = UDim2.new(0.5, CLICK_OFFSET_X, 0.5, currentOffsetY)
+                            vim:SendTouchEvent(TOUCH_ID, 0, clickX, clickY)
+                            
+                            local holdTime = 0
+                            local lastFwd = sheep.PrimaryPart.CFrame.LookVector
+                            local spinAccumulator = 0
+
+                            while holdTime < 1.5 and sideActive and sheep and sheep.Parent and not shouldRemoveHighlight(sheep) do
+                                task.wait(0.05)
+                                holdTime = holdTime + 0.05
+                                
+                                if sheep.PrimaryPart then
+                                    -- 1. Update Mouse/Dot Offset dynamically based on 3D Position change
+                                    local currentPos = sheep.PrimaryPart.Position
+                                    local distMoved = (currentPos - lastPos).Magnitude
+                                    lastPos = currentPos
+                                    
+                                    -- Determine movement phase based on distance moved in 0.05s
+                                    if distMoved > 0.5 then
+                                        currentOffsetY = RUNNING_OFFSET_Y
+                                    elseif distMoved > 0.02 then
+                                        currentOffsetY = WALKING_OFFSET_Y
+                                    else
+                                        currentOffsetY = BASE_CLICK_OFFSET_Y
+                                    end
+                                    
+                                    clickX = (viewport.X / 2) + CLICK_OFFSET_X
+                                    clickY = (viewport.Y / 2) + currentOffsetY
+                                    
+                                    autoBuyPointer.Position = UDim2.new(0.5, CLICK_OFFSET_X, 0.5, currentOffsetY)
+                                    vim:SendTouchEvent(TOUCH_ID, 1, clickX, clickY) -- Update touch position
+                                    
+                                    -- 2. Spin Detection (Tracking the SHEEP's rotation)
+                                    local currentFwd = sheep.PrimaryPart.CFrame.LookVector
+                                    local dot = math.clamp(lastFwd:Dot(currentFwd), -1, 1)
+                                    local angle = math.acos(dot)
+                                    spinAccumulator = spinAccumulator + angle
+                                    lastFwd = currentFwd
+                                    
+                                    -- If the sheep rotates rapidly (more than ~180 degrees total during the hold)
+                                    if spinAccumulator > math.pi then
+                                        isSpinning = true
+                                        break
+                                    end
+                                end
+                            end
+                            
+                            vim:SendTouchEvent(TOUCH_ID, 2, clickX, clickY)
+                            task.wait(0.1) -- Brief pause before checking or repeating
+                            
+                            -- VERIFY PURCHASE: Only count if it spun OR ownership changed
+                            if isSpinning then
+                                wasBought = true
+                            elseif sheep and sheep.Parent then
+                                local ownerTag = sheep:FindFirstChild("Owner", true) or sheep:FindFirstChild("owner", true)
+                                if ownerTag and tostring(ownerTag.Value) ~= "" then
+                                    wasBought = true
+                                end
+                            end
                         end
                         
-                        vim:SendTouchEvent(TOUCH_ID, 2, clickX, clickY)
-                        
-                        task.wait(0.5) 
-                        if not sheep or not sheep.Parent or not isUnownedSheepInMyMarket(sheep) then
+                        if wasBought then
                             boughtCount = boughtCount + 1
+                            unhighlightSheep(sheep) -- Instantly remove highlight so we don't target it again
                         end
                     end
                     
                     if tpConnection then tpConnection:Disconnect() end
                     cam.CameraType = Enum.CameraType.Custom
                     autoBuyPointer.Visible = false
+                    
+                    -- RESTORE ALL OTHER SHEEP
+                    showAllSheep()
                     _G.AutoBuyTarget = nil
                     
-                    -- If farming is OFF, politely return character to where they were
                     if not isFarming then
                         hrp.CFrame = preAutoBuyCFrame
                     end
                 end
             else
                 _G.AutoBuyTarget = nil
+                showAllSheep()
                 task.wait(0.5) 
             end
         else
             _G.AutoBuyTarget = nil
+            showAllSheep()
             task.wait(0.5)
         end
         
@@ -991,11 +1408,13 @@ local function autoBuyLoop()
             pcall(function() vim:SendTouchEvent(TOUCH_ID, 2, 0, 0) end)
             autoBuyPointer.Visible = false
             _G.AutoBuyTarget = nil
+            showAllSheep()
             workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
         end
     end
     
     _G.AutoBuyTarget = nil
+    showAllSheep()
     workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
     autoBuyPointer.Visible = false
 end
@@ -1024,6 +1443,7 @@ sideActiveBtn.MouseButton1Click:Connect(function()
         pcall(function() vim:SendTouchEvent(TOUCH_ID, 2, 0, 0) end)
         autoBuyPointer.Visible = false
         _G.AutoBuyTarget = nil
+        showAllSheep()
         workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
     end
 end)
@@ -1049,6 +1469,7 @@ local limitCheckerCoroutine = task.spawn(function()
                 pcall(function() vim:SendTouchEvent(TOUCH_ID, 2, 0, 0) end)
                 autoBuyPointer.Visible = false
                 _G.AutoBuyTarget = nil
+                showAllSheep()
                 workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
             end
         end
@@ -1062,6 +1483,8 @@ local function cleanupScript()
     isFarming = false
     sideActive = false
     stopHighlighting()
+    stopUFODetection()
+    showAllSheep()
     
     if farmCoroutine then task.cancel(farmCoroutine) end
     if missingSheepCoroutine then task.cancel(missingSheepCoroutine) end
