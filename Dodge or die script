@@ -13,16 +13,17 @@ local DODGE_SPEED = 35
 local ROAM_SPEED = 18          
 local THREAT_DISTANCE = 14     
 local BANANA_DISTANCE = 8      
-local WALL_CHECK_DIST = 80     -- Massively increased to map the arena's open space
-local PLAYER_RADIUS = 3.5      
+local WALL_CHECK_DIST = 80     
+local PLAYER_RADIUS = 5.0      
+local MAX_THREAT_EVAL_DIST = 150 
 
--- Jump Physics
+-- Jump Physics (now rarely used)
 local JUMP_POWER = 85
 local GRAVITY_PULL = 180       
 
 -- Burst Physics (Dash & Roll)
 local DASH_SPEED = 150         
-local MAX_BURST_DIST = 30      
+local MAX_BURST_DIST = 40      
 local DASH_COOLDOWN = 1.5
 local ROLL_COOLDOWN = 2.5
 
@@ -176,6 +177,133 @@ local function simulateRoll()
 end
 
 -------------------------------------------------------------------------------
+-- AGGRESSIVE INVISIBLE WALL FIXER
+-------------------------------------------------------------------------------
+local function forceQuery()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and not obj:IsA("Terrain") then
+            if obj.Name ~= "HumanoidRootPart" then
+                local isInvisible = (obj.Transparency >= 0.9 or obj.LocalTransparencyModifier >= 0.9)
+                local isLarge = (obj.Size.X > 10 or obj.Size.Y > 10 or obj.Size.Z > 10)
+                local name = string.lower(obj.Name)
+                local isWallName = string.find(name, "wall") or string.find(name, "barrier") or string.find(name, "boundary") or string.find(name, "border")
+                
+                if (isInvisible and isLarge) or isWallName then
+                    if not obj.CanQuery then
+                        pcall(function() obj.CanQuery = true end)
+                    end
+                end
+            end
+        end
+    end
+end
+
+forceQuery()
+local forceQueryLoop = task.spawn(function()
+    while task.wait(2) do
+        forceQuery()
+    end
+end)
+
+-------------------------------------------------------------------------------
+-- WALL CACHE (for remembering obstacle positions)
+-------------------------------------------------------------------------------
+local wallCache = {}
+local WALL_CACHE_MAX = 30
+local WALL_CACHE_LIFETIME = 30 -- seconds
+
+local function addWallToCache(position)
+    local now = tick()
+    for i = #wallCache, 1, -1 do
+        if now - wallCache[i].time > WALL_CACHE_LIFETIME then
+            table.remove(wallCache, i)
+        end
+    end
+    for _, entry in ipairs(wallCache) do
+        if (entry.pos - position).Magnitude < 5 then
+            entry.time = now
+            return
+        end
+    end
+    table.insert(wallCache, { pos = position, time = now })
+    if #wallCache > WALL_CACHE_MAX then
+        table.remove(wallCache, 1)
+    end
+end
+
+-------------------------------------------------------------------------------
+-- WALL DETECTION & ESP (Black outline, Yellow fill)
+-------------------------------------------------------------------------------
+local wallEspConnection = nil
+
+local function isWall(obj)
+    if not obj:IsA("BasePart") then return false end
+    local name = string.lower(obj.Name)
+    if string.find(name, "wall") or string.find(name, "barrier") or string.find(name, "boundary") or string.find(name, "border") or string.find(name, "clip") then
+        return true
+    end
+    if obj.Transparency == 1 then
+        if obj.Size.X > 25 or obj.Size.Y > 25 or obj.Size.Z > 25 then
+            return true
+        end
+    end
+    return false
+end
+
+local function highlightWall(obj)
+    if isWall(obj) and not obj:FindFirstChild("WallESP_Box") then
+        local box = Instance.new("SelectionBox")
+        box.Name = "WallESP_Box"
+        box.Adornee = obj
+        box.LineThickness = 0.1
+        box.Color3 = Color3.fromRGB(0, 0, 0)
+        box.SurfaceColor3 = Color3.fromRGB(255, 255, 0)
+        box.SurfaceTransparency = 0.6
+        box.Parent = obj
+    end
+end
+
+local function removeWallHighlights()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        local box = obj:FindFirstChild("WallESP_Box")
+        if box and box:IsA("SelectionBox") then
+            box:Destroy()
+        end
+    end
+end
+
+local function scanAndCacheWalls()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if isWall(obj) then
+            addWallToCache(obj.Position)
+            highlightWall(obj)
+        end
+    end
+end
+
+local function startWallESP()
+    scanAndCacheWalls()
+    if not wallEspConnection then
+        wallEspConnection = workspace.DescendantAdded:Connect(function(newObj)
+            task.defer(function()
+                if isWall(newObj) then
+                    addWallToCache(newObj.Position)
+                    highlightWall(newObj)
+                end
+            end)
+        end)
+    end
+end
+
+local function stopWallESP()
+    if wallEspConnection then
+        wallEspConnection:Disconnect()
+        wallEspConnection = nil
+    end
+    removeWallHighlights()
+end
+
+-------------------------------------------------------------------------------
 -- HAZARD DETECTION
 -------------------------------------------------------------------------------
 local activeHazards = {}
@@ -199,6 +327,10 @@ local lastRoamDir = Vector3.zero
 local lastRoamTime = 0
 local lastHrpPos = nil 
 local currentMovementDir = Vector3.zero 
+
+-- Stuck detection variables
+local stuckCounter = 0
+local lastPosition = nil
 
 local function getHazardType(obj)
     if not obj:IsA("BasePart") then return nil end
@@ -299,27 +431,7 @@ local function getHRP()
     return nil, nil
 end
 
-local function get1v1Opponent(myHrpPos)
-    local aliveOpponents = {}
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= player then
-            local char = p.Character
-            if char then
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                local hum = char:FindFirstChild("Humanoid")
-                if hrp and hum and hum.Health > 0 then
-                    if math.abs(hrp.Position.Y - myHrpPos.Y) < 50 and (hrp.Position - myHrpPos).Magnitude < 400 then
-                        table.insert(aliveOpponents, hrp)
-                    end
-                end
-            end
-        end
-    end
-    if #aliveOpponents == 1 then return aliveOpponents[1] end
-    return nil
-end
-
-local function applyPush(hrp, direction, useForceY, yVelocity, speed, lookDir)
+local function applyPush(hrp, humanoid, direction, useForceY, yVelocity, speed, lookDir)
     local attachment = hrp:FindFirstChild("AutoDodgeAttachment")
     local linVel = hrp:FindFirstChild("AutoDodgeVelocity")
     local alignOri = hrp:FindFirstChild("AutoDodgeOrientation")
@@ -349,15 +461,23 @@ local function applyPush(hrp, direction, useForceY, yVelocity, speed, lookDir)
         alignOri.Parent = hrp
     end
     
-    if useForceY then
-        linVel.MaxAxesForce = Vector3.new(500000, 500000, 500000) 
+    local HORIZONTAL_FORCE = 5e5
+    local VERTICAL_FORCE = 9e9
+    
+    if useForceY and yVelocity > 0 then
+        linVel.MaxAxesForce = Vector3.new(HORIZONTAL_FORCE, VERTICAL_FORCE, HORIZONTAL_FORCE)
     else
-        linVel.MaxAxesForce = Vector3.new(500000, 0, 500000) 
+        linVel.MaxAxesForce = Vector3.new(HORIZONTAL_FORCE, 0, HORIZONTAL_FORCE)
     end
     
-    -- FIX: Properly disable AlignOrientation when not forcing movement
     if direction == Vector3.zero and not useForceY then
-        linVel.Enabled = false
+        local moveDir = humanoid.MoveDirection
+        if moveDir.Magnitude > 0 then
+            linVel.VectorVelocity = moveDir * humanoid.WalkSpeed
+        else
+            linVel.VectorVelocity = Vector3.zero 
+        end
+        linVel.Enabled = true
         alignOri.Enabled = false
     else
         local flatDir = Vector3.new(direction.X, 0, direction.Z).Unit
@@ -383,29 +503,28 @@ local function applyPush(hrp, direction, useForceY, yVelocity, speed, lookDir)
 end
 
 -------------------------------------------------------------------------------
--- DYNAMIC BURST DISTANCE CALCULATOR (ANTI-WALL COLLISION)
+-- DYNAMIC BURST DISTANCE CALCULATOR
 -------------------------------------------------------------------------------
-local function getSafeBurstDistance(hrpPos, dir, threats, rayParams)
+local function getSafeBurstDistance(hrpPos, dir, threats, wallRayParams, pitRayParams)
     local maxDist = MAX_BURST_DIST
-    
     local right = dir:Cross(Vector3.new(0, 1, 0)).Unit
+    
     local hits = {}
-    table.insert(hits, workspace:Raycast(hrpPos, dir * maxDist, rayParams))
-    table.insert(hits, workspace:Raycast(hrpPos + right * 3, dir * maxDist, rayParams))
-    table.insert(hits, workspace:Raycast(hrpPos - right * 3, dir * maxDist, rayParams))
-    table.insert(hits, workspace:Raycast(hrpPos + right * 6, dir * maxDist, rayParams))
-    table.insert(hits, workspace:Raycast(hrpPos - right * 6, dir * maxDist, rayParams))
+    table.insert(hits, workspace:Raycast(hrpPos, dir * maxDist, wallRayParams))
+    table.insert(hits, workspace:Raycast(hrpPos + right * 1.5, dir * maxDist, wallRayParams))
+    table.insert(hits, workspace:Raycast(hrpPos - right * 1.5, dir * maxDist, wallRayParams))
+    table.insert(hits, workspace:Raycast(hrpPos + Vector3.new(0, 1.5, 0), dir * maxDist, wallRayParams))
     
     for _, hit in ipairs(hits) do
-        if hit and hit.Distance - 4 < maxDist then
-            maxDist = hit.Distance - 4
+        if hit and hit.Distance - 3 < maxDist then
+            maxDist = hit.Distance - 3
         end
     end
     
     for step = 5, math.floor(maxDist), 5 do
         local checkPos = hrpPos + (dir * step) + Vector3.new(0, 2, 0)
-        if not workspace:Raycast(checkPos, Vector3.new(0, -15, 0), rayParams) then
-            maxDist = step - 3
+        if not workspace:Raycast(checkPos, Vector3.new(0, -500, 0), pitRayParams) then
+            maxDist = math.max(0, step - 5) 
             break
         end
     end
@@ -433,7 +552,40 @@ local function getSafeBurstDistance(hrpPos, dir, threats, rayParams)
 end
 
 -------------------------------------------------------------------------------
--- HERDING & KITING PREDICTION ENGINE
+-- GAP DETECTION (for squeezing between threats)
+-------------------------------------------------------------------------------
+local function getMinimumGap(hrpPos, dir, threats, maxDist)
+    -- Returns the smallest gap (in studs) between threats along the path direction
+    local minGap = math.huge
+    local playerDiameter = PLAYER_RADIUS * 2 + 1  -- plus margin
+    
+    -- We'll project threats onto a line perpendicular to the direction at various steps
+    local right = dir:Cross(Vector3.new(0, 1, 0)).Unit
+    local steps = 10
+    for i = 0, steps do
+        local t = i / steps * maxDist
+        local pos = hrpPos + dir * t
+        -- Collect lateral distances to all threats
+        local lateralDists = {}
+        for _, threat in ipairs(threats) do
+            local toThreat = threat.pos - pos
+            local lateral = toThreat:Dot(right)
+            table.insert(lateralDists, lateral)
+        end
+        table.sort(lateralDists)
+        -- Find largest gap between sorted laterals
+        local largestGap = 0
+        for i = 2, #lateralDists do
+            local gap = lateralDists[i] - lateralDists[i-1]
+            if gap > largestGap then largestGap = gap end
+        end
+        if largestGap < minGap then minGap = largestGap end
+    end
+    return minGap
+end
+
+-------------------------------------------------------------------------------
+-- HIGH-PERFORMANCE 3D PREDICTION & HERDING (with gap awareness)
 -------------------------------------------------------------------------------
 local dodgeDirections = {}
 for i = 1, 36 do
@@ -441,27 +593,46 @@ for i = 1, 36 do
     table.insert(dodgeDirections, Vector3.new(math.cos(angle), 0, math.sin(angle)))
 end
 
-local function getBestDirection(hrpPos, threats, isRoaming, huntTargetPos, currentDir)
+local function getBestDirection(hrpPos, playerVelY, threats, isRoaming, currentDir, wallRayParams, pitRayParams)
     local bestDir = Vector3.zero
     local lowestCost = math.huge
     local highestDangerEncountered = 0
     
-    local hrpPos2D = Vector3.new(hrpPos.X, 0, hrpPos.Z)
-    local raycastParams = RaycastParams.new()
-    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-    local ignoreList = {player.Character, espFolder}
-    for _, t in ipairs(threats) do table.insert(ignoreList, t.instance) end
-    raycastParams.FilterDescendantsInstances = ignoreList
-    
     local speedToUse = isRoaming and ROAM_SPEED or DODGE_SPEED
     local timeSteps = {0.1, 0.3, 0.6, 0.9, 1.2, 1.5} 
 
-    local centerOfMass = Vector3.zero
-    if #threats > 0 then
-        for _, t in ipairs(threats) do
-            centerOfMass = centerOfMass + Vector3.new(t.pos.X, 0, t.pos.Z)
+    local threatVector = Vector3.zero
+    local threatCenter = Vector3.zero
+    local threatCount = 0
+    local validThreats = {}
+    
+    for _, t in ipairs(threats) do
+        local toBall = t.pos - hrpPos
+        local dist = toBall.Magnitude
+        if dist < MAX_THREAT_EVAL_DIST then
+            table.insert(validThreats, t)
+            threatCenter = threatCenter + t.pos
+            threatCount = threatCount + 1
+            if dist > 0.1 then
+                threatVector = threatVector + (toBall.Unit / (dist * dist))
+            end
         end
-        centerOfMass = centerOfMass / #threats
+    end
+    
+    if threatVector.Magnitude > 0 then
+        threatVector = threatVector.Unit
+    end
+
+    local futureThreatPositions = {}
+    for _, tStep in ipairs(timeSteps) do
+        futureThreatPositions[tStep] = {}
+        for i, t in ipairs(validThreats) do
+            if t.isStatic then
+                futureThreatPositions[tStep][i] = t.pos
+            else
+                futureThreatPositions[tStep][i] = t.pos + (t.vel * tStep)
+            end
+        end
     end
 
     for _, dir in ipairs(dodgeDirections) do
@@ -469,75 +640,106 @@ local function getBestDirection(hrpPos, threats, isRoaming, huntTargetPos, curre
         local right = dir:Cross(Vector3.new(0, 1, 0)).Unit
         
         local hits = {}
-        table.insert(hits, workspace:Raycast(hrpPos, dir * WALL_CHECK_DIST, raycastParams))
-        table.insert(hits, workspace:Raycast(hrpPos + right * 2.5, dir * WALL_CHECK_DIST, raycastParams))
-        table.insert(hits, workspace:Raycast(hrpPos - right * 2.5, dir * WALL_CHECK_DIST, raycastParams))
+        table.insert(hits, workspace:Raycast(hrpPos, dir * WALL_CHECK_DIST, wallRayParams))
+        table.insert(hits, workspace:Raycast(hrpPos + right * 1.5, dir * WALL_CHECK_DIST, wallRayParams))
+        table.insert(hits, workspace:Raycast(hrpPos - right * 1.5, dir * WALL_CHECK_DIST, wallRayParams))
+        table.insert(hits, workspace:Raycast(hrpPos + Vector3.new(0, 1.5, 0), dir * WALL_CHECK_DIST, wallRayParams))
         
         for _, hit in ipairs(hits) do
-            if hit and (hit.Position - hrpPos).Magnitude < availableDist then 
-                availableDist = (hit.Position - hrpPos).Magnitude 
+            if hit and hit.Distance < availableDist then 
+                availableDist = hit.Distance 
             end
         end
         
         for step = 5, math.floor(availableDist), 5 do
             local checkPos = hrpPos + dir * step + Vector3.new(0, 2, 0)
-            if not workspace:Raycast(checkPos, Vector3.new(0, -15, 0), raycastParams) then
-                availableDist = step - 2 
+            if not workspace:Raycast(checkPos, Vector3.new(0, -500, 0), pitRayParams) then
+                availableDist = step - 5 
                 break
             end
         end
         
-        if availableDist < 3 then continue end 
+        if availableDist < 2.5 then continue end 
+        
+        -- GAP EVALUATION
+        local gap = getMinimumGap(hrpPos, dir, validThreats, math.min(availableDist, 30))
+        local gapBonus = 0
+        if gap > PLAYER_RADIUS * 2 + 1 then
+            -- This direction is viable for squeezing
+            gapBonus = -5000  -- large bonus to encourage squeezing
+        end
         
         local dangerScore = 0
         local maxTestDist = math.min(20, availableDist - 1)
         
         for _, tStep in ipairs(timeSteps) do
             local expectedTravel = math.min(speedToUse * tStep, maxTestDist)
-            local futurePlayerPos = hrpPos2D + (dir * expectedTravel)
+            local futurePlayerPos = hrpPos + (dir * expectedTravel) + Vector3.new(0, playerVelY * tStep, 0)
             
-            for _, t in ipairs(threats) do
-                local futureThreatPos
-                if t.isStatic then
-                    futureThreatPos = Vector3.new(t.pos.X, 0, t.pos.Z)
-                else
-                    local bPos2D = Vector3.new(t.pos.X, 0, t.pos.Z)
-                    local bVel2D = Vector3.new(t.vel.X, 0, t.vel.Z)
-                    futureThreatPos = bPos2D + (bVel2D * tStep)
-                end
-                
+            for i, t in ipairs(validThreats) do
+                local futureThreatPos = futureThreatPositions[tStep][i]
                 local rawDist = (futurePlayerPos - futureThreatPos).Magnitude
                 local effectiveDist = math.max(0.1, rawDist - PLAYER_RADIUS)
                 
                 if effectiveDist < t.threatRadius then
-                    dangerScore = dangerScore + (25000 / effectiveDist) 
+                    dangerScore = dangerScore + (50000 / effectiveDist) 
+                elseif effectiveDist < t.threatRadius + 5 then
+                    dangerScore = dangerScore + (10000 / effectiveDist) 
                 else
                     dangerScore = dangerScore + (500 / (effectiveDist * effectiveDist))
                 end
             end
         end
         
-        local spaceScore = - (availableDist * 15) 
-        
-        local momentumScore = 0
-        if currentDir and currentDir.Magnitude > 0.1 then
-            momentumScore = - (dir:Dot(currentDir) * 400) 
+        local spaceScore
+        if availableDist < 40 then
+            spaceScore = ((40 - availableDist) ^ 3) * 50
+        else
+            spaceScore = -availableDist * 10
         end
         
-        local herdScore = 0
-        if #threats > 0 then
-            local toBalls = (centerOfMass - hrpPos2D).Unit
-            if toBalls.Magnitude > 0 then
-                herdScore = (dir:Dot(toBalls) * 600) 
+        local cachePenalty = 0
+        if #wallCache > 0 then
+            local testPos = hrpPos + dir * 15
+            for _, entry in ipairs(wallCache) do
+                local distToWall = (testPos - entry.pos).Magnitude
+                if distToWall < 10 then
+                    cachePenalty = cachePenalty + (10 - distToWall) * 500
+                end
             end
         end
         
-        if huntTargetPos then
-            local targetDir = (Vector3.new(huntTargetPos.X, 0, huntTargetPos.Z) - hrpPos2D).Unit
-            herdScore = herdScore - (dir:Dot(targetDir) * 300)
+        local momentumScore = 0
+        if currentDir and currentDir.Magnitude > 0.1 then
+            momentumScore = - (dir:Dot(currentDir) * 800) 
         end
         
-        local totalCost = dangerScore + spaceScore + momentumScore + herdScore
+        local clusterScore = 0
+        if threatVector.Magnitude > 0 then
+            clusterScore = (dir:Dot(threatVector) * 1000) 
+        end
+        
+        local herdScore = 0
+        if threatCount > 0 then
+            local centerOfMass = threatCenter / threatCount
+            local toCenter = (centerOfMass - hrpPos)
+            local toCenter2D = Vector3.new(toCenter.X, 0, toCenter.Z)
+            
+            if toCenter2D.Magnitude > 15 then
+                toCenter2D = toCenter2D.Unit
+                local tangent1 = Vector3.new(-toCenter2D.Z, 0, toCenter2D.X)
+                local tangent2 = Vector3.new(toCenter2D.Z, 0, -toCenter2D.X)
+                local bestTangent = tangent1
+                if currentDir and currentDir:Dot(tangent2) > currentDir:Dot(tangent1) then
+                    bestTangent = tangent2
+                end
+                herdScore = - (dir:Dot(bestTangent) * 2000) 
+            else
+                herdScore = (dir:Dot(toCenter2D.Unit) * 1500) 
+            end
+        end
+        
+        local totalCost = dangerScore + spaceScore + cachePenalty + momentumScore + clusterScore + herdScore + gapBonus
         
         if dangerScore > highestDangerEncountered then
             highestDangerEncountered = dangerScore
@@ -560,6 +762,8 @@ local function setOnline()
     status.Text = "Status: Online"
     status.TextColor3 = Color3.fromRGB(0, 255, 0)
     
+    startWallESP()
+    
     mainLoopConnection = RunService.Heartbeat:Connect(function(dt)
         local hrp, humanoid = getHRP()
         local char = player.Character
@@ -573,6 +777,7 @@ local function setOnline()
         
         local hrpPos = hrp.Position
         local hrpPos2D = Vector3.new(hrpPos.X, 0, hrpPos.Z)
+        local playerVelY = hrp.AssemblyLinearVelocity.Y
         
         humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
         humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
@@ -585,7 +790,10 @@ local function setOnline()
         local groundRayParams = RaycastParams.new()
         groundRayParams.FilterType = Enum.RaycastFilterType.Exclude
         groundRayParams.FilterDescendantsInstances = {char, espFolder}
+        
+        local groundHit = workspace:Raycast(hrpPos, Vector3.new(0, -500, 0), groundRayParams)
         local isGrounded = workspace:Raycast(hrpPos, Vector3.new(0, -5, 0), groundRayParams) ~= nil
+        local currentFloor = groundHit and groundHit.Instance or nil
         
         local activeThreats = {}
         local allHazardsList = {} 
@@ -665,11 +873,24 @@ local function setOnline()
             end
         end
         
-        local opponentHrp = get1v1Opponent(hrpPos)
-        local huntTargetPos = opponentHrp and opponentHrp.Position or nil
+        local pitIgnoreList = {char, espFolder}
+        for _, t in ipairs(allHazardsList) do
+            if t.instance then table.insert(pitIgnoreList, t.instance) end
+        end
+        local pitRayParams = RaycastParams.new()
+        pitRayParams.FilterType = Enum.RaycastFilterType.Exclude
+        pitRayParams.FilterDescendantsInstances = pitIgnoreList
+
+        local wallIgnoreList = {char, espFolder}
+        for _, t in ipairs(allHazardsList) do
+            if t.instance then table.insert(wallIgnoreList, t.instance) end
+        end
+        local wallRayParams = RaycastParams.new()
+        wallRayParams.FilterType = Enum.RaycastFilterType.Exclude
+        wallRayParams.FilterDescendantsInstances = wallIgnoreList
         
-        if workspace:Raycast(hrpPos, Vector3.new(0, -35, 0), groundRayParams) == nil then
-            applyPush(hrp, Vector3.zero, false, 0, 0, nil)
+        if workspace:Raycast(hrpPos, Vector3.new(0, -500, 0), groundRayParams) == nil then
+            applyPush(hrp, humanoid, Vector3.zero, false, 0, 0, nil)
             return
         end
 
@@ -718,158 +939,203 @@ local function setOnline()
         local lookDirection = Vector3.zero
         local shouldJump = false
         
-        if isBursting and tick() < burstEndTime then
-            safeDirection = burstDir
-            lookDirection = burstLookDir
-            shouldJump = false 
+        -- Stuck detection
+        if safeDirection ~= Vector3.zero or currentMovementDir ~= Vector3.zero then
+            if lastPosition then
+                local moved = (hrpPos - lastPosition).Magnitude
+                if moved < 0.1 then
+                    stuckCounter = stuckCounter + 1
+                else
+                    stuckCounter = 0
+                end
+            end
+            lastPosition = hrpPos
+        end
+        
+        if stuckCounter > 15 then
+            local escapeDir = Vector3.new(math.random(-1,1), 0, math.random(-1,1)).Unit
+            if escapeDir.Magnitude < 0.1 then escapeDir = Vector3.new(1,0,0) end
+            applyPush(hrp, humanoid, escapeDir, false, 0, 20, escapeDir)
+            stuckCounter = 0
+            safeDirection = Vector3.zero
         else
-            isBursting = false
-            
-            if #threatsToDodge > 0 then
-                local rawDanger
-                safeDirection, dangerLevel, rawDanger = getBestDirection(hrpPos, threatsToDodge, false, huntTargetPos, currentMovementDir)
-                currentMovementDir = safeDirection
-                
-                if safeDirection ~= Vector3.zero then
-                    lookDirection = safeDirection
-                elseif primaryThreat then
-                    local flatThreatPos = Vector3.new(primaryThreat.pos.X, hrpPos.Y, primaryThreat.pos.Z)
-                    if (flatThreatPos - hrpPos).Magnitude > 0.1 then
-                        lookDirection = (flatThreatPos - hrpPos).Unit
-                    end
-                end
-                
-                if imminentImpact and dangerLevel > 4000 then
-                    shouldJump = true
-                end
-                
-                if dangerLevel > 3000 and safeDirection ~= Vector3.zero then
-                    local bestBurst = nil
-                    local desiredBurstDir = safeDirection
-                    local safeDist = getSafeBurstDistance(hrpPos, desiredBurstDir, activeThreats, groundRayParams)
-                    
-                    if safeDist > 15 then 
-                        if tick() - lastRollTime > ROLL_COOLDOWN then
-                            bestBurst = {type = "Roll", dir = desiredBurstDir, lookDir = desiredBurstDir, dist = safeDist}
-                        elseif tick() - lastDashTime > DASH_COOLDOWN then
-                            local lookRight = CFrame.Angles(0, -math.pi/2, 0) * desiredBurstDir
-                            local lookLeft = CFrame.Angles(0, math.pi/2, 0) * desiredBurstDir
-                            if nextDashSide == "Left" then
-                                bestBurst = {type = "DashLeft", dir = desiredBurstDir, lookDir = lookRight, dist = safeDist}
-                            else
-                                bestBurst = {type = "DashRight", dir = desiredBurstDir, lookDir = lookLeft, dist = safeDist}
-                            end
-                        end
-                    end
-                    
-                    if not bestBurst then
-                        local bestAltDir = Vector3.zero
-                        local lowestAltDanger = math.huge
-                        local bestAltDist = 0
-                        
-                        for _, dir in ipairs(dodgeDirections) do
-                            local dist = getSafeBurstDistance(hrpPos, dir, activeThreats, groundRayParams)
-                            if dist > 18 then
-                                local futurePos = Vector3.new(hrpPos.X, 0, hrpPos.Z) + (dir * dist)
-                                local altDanger = 0
-                                
-                                for _, t in ipairs(activeThreats) do
-                                    local futureThreatPos
-                                    if t.isStatic then
-                                        futureThreatPos = Vector3.new(t.pos.X, 0, t.pos.Z)
-                                    else
-                                        local bPos2D = Vector3.new(t.pos.X, 0, t.pos.Z)
-                                        local bVel2D = Vector3.new(t.vel.X, 0, t.vel.Z)
-                                        local burstTime = dist / DASH_SPEED
-                                        futureThreatPos = bPos2D + (bVel2D * burstTime)
-                                    end
-                                    
-                                    local rawDist = (futurePos - futureThreatPos).Magnitude
-                                    local effectiveDist = math.max(0.1, rawDist - PLAYER_RADIUS)
-                                    
-                                    if effectiveDist < t.threatRadius then
-                                        altDanger = altDanger + (25000 / effectiveDist)
-                                    else
-                                        altDanger = altDanger + (500 / (effectiveDist * effectiveDist))
-                                    end
-                                end
-                                
-                                if altDanger < lowestAltDanger then
-                                    lowestAltDanger = altDanger
-                                    bestAltDir = dir
-                                    bestAltDist = dist
-                                end
-                            end
-                        end
-                        
-                        if bestAltDist > 18 and lowestAltDanger < dangerLevel then
-                            if tick() - lastRollTime > ROLL_COOLDOWN then
-                                bestBurst = {type = "Roll", dir = bestAltDir, lookDir = bestAltDir, dist = bestAltDist}
-                            elseif tick() - lastDashTime > DASH_COOLDOWN then
-                                local lookRight = CFrame.Angles(0, -math.pi/2, 0) * bestAltDir
-                                local lookLeft = CFrame.Angles(0, math.pi/2, 0) * bestAltDir
-                                if nextDashSide == "Left" then
-                                    bestBurst = {type = "DashLeft", dir = bestAltDir, lookDir = lookRight, dist = bestAltDist}
-                                else
-                                    bestBurst = {type = "DashRight", dir = bestAltDir, lookDir = lookLeft, dist = bestAltDist}
-                                end
-                            end
-                        end
-                    end
-                    
-                    if bestBurst then
-                        isBursting = true
-                        burstEndTime = tick() + (bestBurst.dist / DASH_SPEED)
-                        burstDir = bestBurst.dir
-                        burstLookDir = bestBurst.lookDir
-                        
-                        hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + burstLookDir)
-                        
-                        if bestBurst.type == "Roll" then
-                            lastRollTime = tick()
-                            simulateRoll()
-                        elseif bestBurst.type == "DashLeft" then
-                            lastDashTime = tick()
-                            simulateTouch(false) 
-                            nextDashSide = "Right"
-                        elseif bestBurst.type == "DashRight" then
-                            lastDashTime = tick()
-                            simulateTouch(true) 
-                            nextDashSide = "Left"
-                        end
-                        
-                        safeDirection = burstDir
-                        lookDirection = burstLookDir
-                        shouldJump = false 
-                    end
+            -- Normal movement
+            if isBursting and tick() < burstEndTime then
+                local newDist = getSafeBurstDistance(hrpPos, burstDir, activeThreats, wallRayParams, pitRayParams)
+                if newDist < 5 then
+                    isBursting = false
+                    safeDirection = Vector3.zero
+                else
+                    burstEndTime = tick() + (newDist / DASH_SPEED)
+                    safeDirection = burstDir
+                    lookDirection = burstLookDir
+                    shouldJump = false
                 end
             else
-                if huntTargetPos then
-                    if tick() - lastRoamTime > 0.5 or lastRoamDir == Vector3.zero then
-                        lastRoamDir, _, _ = getBestDirection(hrpPos, allHazardsList, true, huntTargetPos, currentMovementDir)
-                        lastRoamTime = tick()
-                    end
-                    safeDirection = lastRoamDir
+                isBursting = false
+                
+                if #threatsToDodge > 0 then
+                    local rawDanger
+                    safeDirection, dangerLevel, rawDanger = getBestDirection(hrpPos, playerVelY, threatsToDodge, false, currentMovementDir, wallRayParams, pitRayParams)
                     currentMovementDir = safeDirection
-                    isRoaming = true
                     
-                    local flatTargetPos = Vector3.new(huntTargetPos.X, hrpPos.Y, huntTargetPos.Z)
-                    if (flatTargetPos - hrpPos).Magnitude > 0.1 then
-                        lookDirection = (flatTargetPos - hrpPos).Unit
+                    if safeDirection ~= Vector3.zero then
+                        lookDirection = safeDirection
+                    elseif primaryThreat then
+                        local flatThreatPos = Vector3.new(primaryThreat.pos.X, hrpPos.Y, primaryThreat.pos.Z)
+                        if (flatThreatPos - hrpPos).Magnitude > 0.1 then
+                            lookDirection = (flatThreatPos - hrpPos).Unit
+                        end
                     end
-                elseif closestBallDist > 40 then
-                    safeDirection = Vector3.zero
-                    currentMovementDir = Vector3.zero
-                    lookDirection = hrp.CFrame.LookVector
-                elseif #allHazardsList > 0 then
-                    if tick() - lastRoamTime > 0.5 or lastRoamDir == Vector3.zero then
-                        lastRoamDir, _, _ = getBestDirection(hrpPos, allHazardsList, true, nil, currentMovementDir)
-                        lastRoamTime = tick()
+                    
+                    -- JUMP only if no safe direction and extreme danger
+                    if imminentImpact and dangerLevel > 12000 and safeDirection == Vector3.zero then
+                        shouldJump = true
                     end
-                    safeDirection = lastRoamDir
-                    currentMovementDir = safeDirection
-                    isRoaming = true
-                    lookDirection = safeDirection 
+                    
+                    -- ABILITY USAGE: only if danger is extremely high AND there is no safe non‑burst path
+                    -- Also ensure we don't spam: require dangerLevel > 5000 and no safe direction that has a decent gap
+                    local canUseBurst = dangerLevel > 5000 and safeDirection ~= Vector3.zero
+                    if canUseBurst then
+                        -- Check if there is a safe direction without bursting (i.e., we already have a safeDirection)
+                        -- But we want to burst if the safe direction is not providing enough clearance (e.g., gap < threshold)
+                        -- We'll compute if the safeDirection has a gap sufficient for normal movement
+                        local gap = getMinimumGap(hrpPos, safeDirection, activeThreats, 15)
+                        local needBurst = (gap < PLAYER_RADIUS * 2 + 1) and (dangerLevel > 8000)
+                        if not needBurst then
+                            -- Still, we might want to use burst if we are about to be hit
+                            needBurst = (minThreatDist < 8 and dangerLevel > 6000)
+                        end
+                        if needBurst then
+                            local bestBurst = nil
+                            local desiredBurstDir = safeDirection
+                            local safeDist = getSafeBurstDistance(hrpPos, desiredBurstDir, activeThreats, wallRayParams, pitRayParams)
+                            
+                            if safeDist > 15 then 
+                                if tick() - lastRollTime > ROLL_COOLDOWN then
+                                    bestBurst = {type = "Roll", dir = desiredBurstDir, lookDir = desiredBurstDir, dist = safeDist}
+                                elseif tick() - lastDashTime > DASH_COOLDOWN then
+                                    local lookRight = CFrame.Angles(0, -math.pi/2, 0) * desiredBurstDir
+                                    local lookLeft = CFrame.Angles(0, math.pi/2, 0) * desiredBurstDir
+                                    if nextDashSide == "Left" then
+                                        bestBurst = {type = "DashLeft", dir = desiredBurstDir, lookDir = lookRight, dist = safeDist}
+                                    else
+                                        bestBurst = {type = "DashRight", dir = desiredBurstDir, lookDir = lookLeft, dist = safeDist}
+                                    end
+                                end
+                            end
+                            
+                            if not bestBurst then
+                                -- Try alternative directions
+                                local bestAltDir = Vector3.zero
+                                local lowestAltDanger = math.huge
+                                local bestAltDist = 0
+                                
+                                for _, dir in ipairs(dodgeDirections) do
+                                    local dist = getSafeBurstDistance(hrpPos, dir, activeThreats, wallRayParams, pitRayParams)
+                                    if dist > 18 then
+                                        local futurePos = hrpPos + (dir * dist)
+                                        local altDanger = 0
+                                        
+                                        for _, t in ipairs(activeThreats) do
+                                            local futureThreatPos
+                                            if t.isStatic then
+                                                futureThreatPos = t.pos
+                                            else
+                                                local burstTime = dist / DASH_SPEED
+                                                futureThreatPos = t.pos + (t.vel * burstTime)
+                                            end
+                                            
+                                            local rawDist = (futurePos - futureThreatPos).Magnitude
+                                            local effectiveDist = math.max(0.1, rawDist - PLAYER_RADIUS)
+                                            
+                                            if effectiveDist < t.threatRadius then
+                                                altDanger = altDanger + (25000 / effectiveDist)
+                                            else
+                                                altDanger = altDanger + (500 / (effectiveDist * effectiveDist))
+                                            end
+                                        end
+                                        
+                                        if altDanger < lowestAltDanger then
+                                            lowestAltDanger = altDanger
+                                            bestAltDir = dir
+                                            bestAltDist = dist
+                                        end
+                                    end
+                                end
+                                
+                                if bestAltDist > 18 and lowestAltDanger < dangerLevel then
+                                    if tick() - lastRollTime > ROLL_COOLDOWN then
+                                        bestBurst = {type = "Roll", dir = bestAltDir, lookDir = bestAltDir, dist = bestAltDist}
+                                    elseif tick() - lastDashTime > DASH_COOLDOWN then
+                                        local lookRight = CFrame.Angles(0, -math.pi/2, 0) * bestAltDir
+                                        local lookLeft = CFrame.Angles(0, math.pi/2, 0) * bestAltDir
+                                        if nextDashSide == "Left" then
+                                            bestBurst = {type = "DashLeft", dir = bestAltDir, lookDir = lookRight, dist = bestAltDist}
+                                        else
+                                            bestBurst = {type = "DashRight", dir = bestAltDir, lookDir = lookLeft, dist = bestAltDist}
+                                        end
+                                    end
+                                end
+                            end
+                            
+                            if bestBurst then
+                                isBursting = true
+                                burstEndTime = tick() + (bestBurst.dist / DASH_SPEED)
+                                burstDir = bestBurst.dir
+                                burstLookDir = bestBurst.lookDir
+                                
+                                hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + burstLookDir)
+                                
+                                if bestBurst.type == "Roll" then
+                                    lastRollTime = tick()
+                                    simulateRoll()
+                                elseif bestBurst.type == "DashLeft" then
+                                    lastDashTime = tick()
+                                    simulateTouch(false) 
+                                    nextDashSide = "Right"
+                                elseif bestBurst.type == "DashRight" then
+                                    lastDashTime = tick()
+                                    simulateTouch(true) 
+                                    nextDashSide = "Left"
+                                end
+                                
+                                safeDirection = burstDir
+                                lookDirection = burstLookDir
+                                shouldJump = false 
+                            end
+                        end
+                    end
+                else
+                    if closestBallDist > 40 then
+                        safeDirection = Vector3.zero
+                        currentMovementDir = Vector3.zero
+                        lookDirection = hrp.CFrame.LookVector
+                    elseif #allHazardsList > 0 then
+                        if tick() - lastRoamTime > 0.5 or lastRoamDir == Vector3.zero then
+                            lastRoamDir, _, _ = getBestDirection(hrpPos, playerVelY, allHazardsList, true, currentMovementDir, wallRayParams, pitRayParams)
+                            lastRoamTime = tick()
+                        end
+                        safeDirection = lastRoamDir
+                        currentMovementDir = safeDirection
+                        isRoaming = true
+                        lookDirection = safeDirection 
+                    end
+                end
+            end
+        end
+        
+        -- REAL‑TIME WALL AVOIDANCE & CACHING
+        if safeDirection ~= Vector3.zero then
+            local wallCheckDist = 3.5
+            local wallHit = workspace:Raycast(hrpPos, safeDirection * wallCheckDist, wallRayParams)
+            if wallHit and wallHit.Distance < wallCheckDist then
+                addWallToCache(wallHit.Position)
+                safeDirection = Vector3.zero
+                local normal = wallHit.Normal
+                local tangent = (safeDirection - normal * safeDirection:Dot(normal)).Unit
+                if tangent.Magnitude > 0.1 then
+                    safeDirection = tangent
                 end
             end
         end
@@ -882,8 +1148,12 @@ local function setOnline()
         
         local useForceY = false
         if jumpState == "Airborne" then
-            useForceY = true
             currentYVel = currentYVel - (GRAVITY_PULL * dt)
+            if currentYVel > 0 then
+                useForceY = true
+            else
+                useForceY = false
+            end
             if currentYVel < 0 and isGrounded and (tick() - lastJumpTime > 0.2) then
                 jumpState = "None"
                 currentYVel = 0
@@ -895,10 +1165,10 @@ local function setOnline()
         elseif isRoaming then moveSpeed = ROAM_SPEED end
         
         if safeDirection ~= Vector3.zero then
-            applyPush(hrp, safeDirection, useForceY, currentYVel, moveSpeed, lookDirection)
+            applyPush(hrp, humanoid, safeDirection, useForceY, currentYVel, moveSpeed, lookDirection)
         else
-            if jumpState ~= "None" then applyPush(hrp, Vector3.zero, useForceY, currentYVel, 0, lookDirection)
-            else applyPush(hrp, Vector3.zero, false, 0, 0, lookDirection) end
+            if jumpState ~= "None" then applyPush(hrp, humanoid, Vector3.zero, useForceY, currentYVel, 0, lookDirection)
+            else applyPush(hrp, humanoid, Vector3.zero, false, 0, 0, lookDirection) end
         end
     end)
 end
@@ -906,6 +1176,8 @@ end
 local function setOffline()
     status.Text = "Status: Offline"
     status.TextColor3 = Color3.fromRGB(255, 0, 0)
+    
+    stopWallESP()
     
     if mainLoopConnection then
         mainLoopConnection:Disconnect()
@@ -919,7 +1191,12 @@ local function setOffline()
     end)
     
     local hrp = getHRP()
-    if hrp then applyPush(hrp, Vector3.zero, false, 0, 0, nil) end
+    if hrp then 
+        local linVel = hrp:FindFirstChild("AutoDodgeVelocity")
+        if linVel then linVel.Enabled = false end
+        local alignOri = hrp:FindFirstChild("AutoDodgeOrientation")
+        if alignOri then alignOri.Enabled = false end
+    end
     
     for _, esp in pairs(espObjects) do
         esp.billboard:Destroy()
@@ -932,8 +1209,9 @@ onBtn.Activated:Connect(setOnline)
 offBtn.Activated:Connect(setOffline)
 destroyBtn.Activated:Connect(function()
     setOffline()
-    addedConn:Disconnect()
-    removingConn:Disconnect()
+    if addedConn then addedConn:Disconnect() end
+    if removingConn then removingConn:Disconnect() end
+    if forceQueryLoop then task.cancel(forceQueryLoop) end
     
     local hrp = getHRP()
     if hrp then
