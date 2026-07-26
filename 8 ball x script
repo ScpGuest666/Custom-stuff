@@ -1,18 +1,16 @@
 -- [[ CONFIGURATION ]] --
 local POWER_SCALE = 28 
 local KISS_MULTIPLIER = 5.0
-local LEARNING_RATE = 0.5 -- 50% new data, 50% old data
+local LEARNING_RATE = 0.25 
 
 -- Wait for player to load
-local PlayerService = game:GetService("Players")
+local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
 local HttpService = game:GetService("HttpService")
-local player = PlayerService.LocalPlayer
-if not player then player = PlayerService.PlayerAdded:Wait() end
-player:WaitForChild("PlayerGui")
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
 
--- [[ FILE SYSTEM SETUP (DELTA EXECUTOR) ]] --
+-- [[ FILE SYSTEM SETUP ]] --
 local FOLDER_NAME = "Bank data"
 local FILE_NAME = FOLDER_NAME .. "/adjustments.json"
 
@@ -29,7 +27,6 @@ local function saveBankData()
             local count = 0
             for _ in pairs(dataToSave) do count = count + 1 end
             if count == 0 then dataToSave = {["_init"] = 1.0} end 
-            
             writefile(FILE_NAME, HttpService:JSONEncode(dataToSave))
         end)
     end
@@ -44,7 +41,6 @@ local function loadBankData()
                 local isCorrupted = false
                 for k, v in pairs(data) do 
                     if k ~= "_init" then 
-                        -- AUTO-FIX: If data is less than 5 degrees (and not angle 0), it's old multiplier data. Wipe it.
                         if tonumber(k) > 10 and v < 5 then
                             isCorrupted = true
                             break
@@ -64,78 +60,62 @@ local function loadBankData()
 end
 loadBankData()
 
--- [[ DYNAMIC INTERPOLATION ENGINE ]] --
+-- [[ DYNAMIC INTERPOLATION ]] --
 local function getBankOutAngle(angle)
     angle = math.clamp(angle, 0, 90)
-    
     local points = { [0] = 0, [90] = 90 }
     for k, v in pairs(bankData) do
         local numK = tonumber(k)
         if numK then points[numK] = v end
     end
-    
     local keys = {}
     for k, _ in pairs(points) do table.insert(keys, k) end
     table.sort(keys)
-    
     local lower, upper
     for i = 1, #keys do
         if keys[i] <= angle then lower = keys[i] end
         if keys[i] >= angle and not upper then upper = keys[i] break end
     end
-    
     if lower == upper then return points[lower] end
-    
     local lowerVal = points[lower]
     local upperVal = points[upper]
     local alpha = (angle - lower) / (upper - lower)
-    
     return lowerVal + (upperVal - lowerVal) * alpha
 end
 
--- [[ GUI SETUP (COMPACT) ]] --
+-- [[ GUI SETUP (Original Size, Upgraded Functions) ]] --
+local guiParent
+if type(gethui) == "function" then
+    guiParent = gethui()
+else
+    local success = pcall(function()
+        return game:GetService("CoreGui").Name
+    end)
+    if success then
+        guiParent = game:GetService("CoreGui")
+    else
+        guiParent = player:WaitForChild("PlayerGui")
+    end
+end
+
 local screenGui = Instance.new("ScreenGui")
-screenGui.Parent = player.PlayerGui
+screenGui.Name = "8BallProGui_" .. math.random(10000, 99999)
 screenGui.ResetOnSpawn = false
-screenGui.Name = "8BallProGui"
+screenGui.DisplayOrder = 2147483647 -- Maximum value to ensure it renders on top of EVERYTHING
+screenGui.IgnoreGuiInset = true -- Prevents the Roblox topbar from pushing the UI down
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+screenGui.Parent = guiParent
 
-local frame = Instance.new("Frame")
-frame.Parent = screenGui
-frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-frame.Size = UDim2.new(0, 150, 0, 85)
-frame.Position = UDim2.new(0.3, 0, 0.5, -50)
-frame.Active = true
-frame.Draggable = true
-
-local onButton = Instance.new("TextButton")
-onButton.Parent = frame
-onButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-onButton.Size = UDim2.new(0, 60, 0, 22)
-onButton.Position = UDim2.new(0, 10, 0, 15)
-onButton.Text = "On"
-onButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-onButton.TextScaled = true
-
-local offButton = Instance.new("TextButton")
-offButton.Parent = frame
-offButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-offButton.Size = UDim2.new(0, 60, 0, 22)
-offButton.Position = UDim2.new(0, 80, 0, 15)
-offButton.Text = "Off"
-offButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-offButton.TextScaled = true
-
-local destroyButton = Instance.new("TextButton")
-destroyButton.Parent = frame
-destroyButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-destroyButton.Size = UDim2.new(0, 130, 0, 22)
-destroyButton.Position = UDim2.new(0, 10, 0, 45)
-destroyButton.Text = "Destroy"
-destroyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-destroyButton.TextScaled = true
+local mainFrame = Instance.new("Frame")
+mainFrame.Parent = screenGui
+mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+mainFrame.Size = UDim2.new(0, 150, 0, 85)
+mainFrame.Position = UDim2.new(0.3, 0, 0.5, -50)
+mainFrame.Draggable = true
+mainFrame.Active = true
 
 local statusLabel = Instance.new("TextLabel")
-statusLabel.Parent = frame
+statusLabel.Parent = mainFrame
 statusLabel.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
 statusLabel.Size = UDim2.new(0, 150, 0, 22)
 statusLabel.Position = UDim2.new(0, 0, 0, -22)
@@ -143,8 +123,27 @@ statusLabel.Text = "Status: Offline"
 statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
 statusLabel.TextScaled = true
 
+local function createButton(name, text, x, y, width, height)
+    local btn = Instance.new("TextButton")
+    btn.Name = name
+    btn.Parent = mainFrame
+    btn.Text = text
+    btn.Size = UDim2.new(0, width, 0, height)
+    btn.Position = UDim2.new(0, x, 0, y)
+    btn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextScaled = true
+    btn.AutoButtonColor = true
+    btn.BorderSizePixel = 0
+    return btn
+end
+
+local onBtn = createButton("OnBtn", "On", 10, 15, 60, 22)
+local offBtn = createButton("OffBtn", "Off", 80, 15, 60, 22)
+local destroyBtn = createButton("DestroyBtn", "Destroy", 10, 45, 130, 22)
+
 local learningLabel = Instance.new("TextLabel")
-learningLabel.Parent = frame
+learningLabel.Parent = mainFrame
 learningLabel.BackgroundTransparency = 1
 learningLabel.Size = UDim2.new(0, 150, 0, 15)
 learningLabel.Position = UDim2.new(0, 0, 0, 70)
@@ -152,9 +151,8 @@ learningLabel.Text = "AI Bank Learning: Active"
 learningLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
 learningLabel.TextScaled = true
 
--- [[ GLOBAL VARIABLES ]] --
+-- [[ GLOBALS ]] --
 local activeConnections = {}
-local highlights = {}
 local trajectoryParts = {}
 local ghostBalls = {}
 local ghostLines = {}
@@ -164,15 +162,96 @@ local cachedTables = {}
 local isHighlighting = false
 local currentSessionId = 0
 
--- [[ HELPER FUNCTIONS ]] --
+-- [[ ANTI‑BLUR & ANTI‑INVISIBLE ]] --
+local function removeBlurEffects()
+    for _, obj in ipairs(Lighting:GetDescendants()) do
+        if obj:IsA("BlurEffect") or obj:IsA("DepthOfFieldEffect") then
+            obj.Enabled = false
+            task.wait()
+            obj:Destroy()
+        end
+    end
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BlurEffect") or obj:IsA("DepthOfFieldEffect") then
+            obj.Enabled = false
+            task.wait()
+            obj:Destroy()
+        end
+    end
+end
+
+local function forceBallsVisible()
+    for _, ball in ipairs(cachedBalls) do
+        if ball and ball:IsA("BasePart") then
+            ball.Transparency = 0
+        end
+    end
+end
+
+removeBlurEffects()
+task.spawn(function()
+    while true do
+        task.wait(5)
+        removeBlurEffects()
+    end
+end)
+
+-- [[ IMPROVED IGNORE FUNCTION ]] --
+local function isIgnorablePart(part)
+    if not part:IsA("BasePart") then return false end
+    if part:FindFirstChildOfClass("ParticleEmitter") or part:FindFirstChildOfClass("Fire") then return true end
+    if part.Transparency >= 1 then return true end
+    
+    local name = part.Name:lower()
+    if name:find("cube") or name:find("grey") or name:find("decoration") or 
+       name:find("pocket") or name:find("hole") or name:find("marker") or name:find("effect") or name:find("hitbox") then
+        return true
+    end
+    local parent = part.Parent
+    if parent then
+        local pName = parent.Name:lower()
+        if pName:find("cube") or pName:find("grey") or pName:find("decoration") or
+           pName:find("pocket") or pName:find("hole") or pName:find("marker") or pName:find("effect") or pName:find("hitbox") then
+            return true
+        end
+    end
+    local size = part.Size
+    if size.X < 2.5 and size.Y < 2.5 and size.Z < 2.5 then
+        if part:IsA("Part") and part.Shape == Enum.PartType.Block and not part:FindFirstChildOfClass("SpecialMesh") then
+            return true
+        end
+    end
+    local c = part.Color
+    local r, g, b = c.R*255, c.G*255, c.B*255
+    if r >= 100 and r <= 150 and g >= 100 and g <= 150 and b >= 100 and b <= 150 then
+        local diff = math.abs(r-g) + math.abs(g-b) + math.abs(b-r)
+        if diff < 30 then return true end
+    end
+    return false
+end
+
+-- [[ BALL / STICK DETECTION ]] --
 local function isBall(obj)
     if not obj:IsA("BasePart") then return false end
     if obj.Size.Magnitude > 5 then return false end
+    if obj:FindFirstChildOfClass("ParticleEmitter") or obj:FindFirstChildOfClass("Fire") then return false end
+    
     local name = obj.Name:lower()
+    if name:find("cyan") or name:find("fake") or name:find("effect") or name:find("hitbox") then return false end
+    if obj.Color == Color3.fromRGB(0, 255, 255) then return false end
+    
+    if obj:IsA("Part") and obj.Shape == Enum.PartType.Block then
+        if not obj:FindFirstChildOfClass("SpecialMesh") then return false end
+    end
+    
     if name:find("ball") or name == "cue" or name == "white" then return true end
     local num = tonumber(obj.Name)
     if num and num >= 1 and num <= 15 then return true end
     if obj:IsA("Part") and obj.Shape == Enum.PartType.Ball then return true end
+    
+    if math.abs(obj.Size.X - obj.Size.Y) < 0.01 and math.abs(obj.Size.Y - obj.Size.Z) < 0.01 then
+        return true
+    end
     return false
 end
 
@@ -181,7 +260,10 @@ local function isCueStick(obj)
     if obj.Size.Magnitude <= 2.5 then return false end
     local name = obj.Name:lower()
     local parentName = obj.Parent and obj.Parent.Name:lower() or ""
-    local isNamedCue = (name:find("cue") or name:find("stick") or name:find("aim") or parentName:find("cue") or parentName:find("stick"))
+    
+    local isNamedCue = (name:find("cue") or name:find("stick") or name:find("aim") or name:find("heartseeker") or 
+                        parentName:find("cue") or parentName:find("stick") or parentName:find("heartseeker"))
+                        
     if not isNamedCue then return false end
     local isNotBall = not (name:find("ball") or parentName:find("ball"))
     if not isNotBall then return false end
@@ -330,26 +412,22 @@ local function getBallIntersection(rayOrigin, rayDir, ballRadius, tableY, ignore
     return closestBall, closestDist
 end
 
--- Snaps the normal to the table's axes to ignore rounded/beveled meshes
 local function snapNormalToTable(normal, tableModel)
     if not tableModel then return normal.Unit end
     local part = tableModel:FindFirstChildWhichIsA("BasePart", true)
     if not part then return normal.Unit end
-    
     local localNormal = part.CFrame:VectorToObjectSpace(normal)
     local absX = math.abs(localNormal.X)
     local absZ = math.abs(localNormal.Z)
-    
     if absX > absZ then
         localNormal = Vector3.new(math.sign(localNormal.X), 0, 0)
     else
         localNormal = Vector3.new(0, 0, math.sign(localNormal.Z))
     end
-    
     return part.CFrame:VectorToWorldSpace(localNormal).Unit
 end
 
--- [[ VECTOR-BASED PHYSICS OBSERVER ]] --
+-- [[ PHYSICS OBSERVER ]] --
 local ballStates = {}
 
 local function monitorPhysics(dt)
@@ -357,17 +435,28 @@ local function monitorPhysics(dt)
     
     for _, ball in ipairs(cachedBalls) do
         if ball and ball.Parent then
+            
+            -- NOTE: We intentionally IGNORE the cue ball for AI learning.
+            -- Why? The cue ball is frequently affected by player-applied spin (English).
+            -- If the AI learns from spin-altered wall bounces, it will corrupt the baseline
+            -- prediction data, causing normal center-ball shots to miss. 
+            -- We ONLY learn from numbered balls (1-15) because they generally only have natural roll.
+            local num = tonumber(ball.Name)
+            if not (num and num >= 1 and num <= 15) then
+                continue
+            end
+            
             local currentPos = ball.Position * Vector3.new(1, 0, 1)
             local state = ballStates[ball]
             
             if not state then
-                ballStates[ball] = { lastPos = currentPos, velocity = Vector3.zero, cooldown = 0 }
+                ballStates[ball] = { lastPos = currentPos, velocity = Vector3.zero, cooldown = 0, stationaryFrames = 0 }
             else
                 local deltaPos = currentPos - state.lastPos
                 local distMoved = deltaPos.Magnitude
                 local speed = distMoved / dt
                 
-                if speed > 0.5 then
+                if speed > 2.5 then
                     local currentVel = deltaPos / dt
                     local currentDir = currentVel.Unit
                     
@@ -377,9 +466,7 @@ local function monitorPhysics(dt)
                         local prevDir = state.velocity.Unit
                         local dot = currentDir:Dot(prevDir)
                         
-                        -- Sharp direction change (angle > ~11.5°)
                         if dot < 0.98 and dot > -0.98 then
-                            -- Check if it hit another ball
                             local hitAnotherBall = false
                             for _, otherBall in ipairs(cachedBalls) do
                                 if otherBall ~= ball and otherBall.Parent then
@@ -391,32 +478,21 @@ local function monitorPhysics(dt)
                             end
                             
                             if not hitAnotherBall then
-                                -- Derive wall normal from velocity change
                                 local N = (currentDir - prevDir).Unit
-                                
-                                -- Ensure normal is horizontal (walls are vertical)
                                 if math.abs(N.Y) < 0.1 then
-                                    -- Make N point outward from wall
                                     if prevDir:Dot(N) > 0 then N = -N end
-                                    
-                                    -- Compute angles relative to normal
-                                    local inDot = -prevDir:Dot(N)  -- should be positive
-                                    local outDot = currentDir:Dot(N) -- should be positive
-                                    
+                                    local inDot = -prevDir:Dot(N)
+                                    local outDot = currentDir:Dot(N)
                                     if inDot > 0.05 and outDot > 0.05 and inDot < 0.98 and outDot < 0.98 then
                                         local in_angle = math.deg(math.acos(inDot))
                                         local out_angle = math.deg(math.acos(outDot))
-                                        
                                         local bucket = tostring(math.floor(in_angle + 0.5))
-                                        
                                         if bankData[bucket] then
                                             bankData[bucket] = (bankData[bucket] * (1 - LEARNING_RATE)) + (out_angle * LEARNING_RATE)
                                         else
                                             bankData[bucket] = out_angle
                                         end
                                         saveBankData()
-                                        
-                                        -- Show a brief learning message
                                         learningLabel.Text = string.format("Learned %s° → %.1f°", bucket, bankData[bucket])
                                         task.delay(2.5, function()
                                             if learningLabel.Text:find(bucket) then
@@ -433,8 +509,13 @@ local function monitorPhysics(dt)
                     if state.cooldown <= 0 then
                         state.velocity = currentVel
                     end
+                    state.stationaryFrames = 0
                 else
                     state.velocity = Vector3.zero
+                    state.stationaryFrames = state.stationaryFrames + 1
+                    if state.stationaryFrames > 5 then
+                        ballStates[ball] = { lastPos = currentPos, velocity = Vector3.zero, cooldown = 0, stationaryFrames = 0 }
+                    end
                 end
                 
                 state.lastPos = currentPos
@@ -447,6 +528,8 @@ end
 local function updateHighlights()
     if not isHighlighting then return end
     
+    forceBallsVisible()
+    
     local camera = workspace.CurrentCamera
     if not camera then return end
     
@@ -456,6 +539,12 @@ local function updateHighlights()
         camLook = camLook.Unit
     else
         camLook = nil
+    end
+    
+    if not camLook then
+        hideTrajectories()
+        clearGhostVisuals()
+        return
     end
     
     local activeModel = nil
@@ -483,189 +572,184 @@ local function updateHighlights()
         end
     end
     
-    local activeStick = nil
-    if activeCueBall and camLook then
-        local minStickDist = 15
-        local bestStick = nil
-        
-        for _, stick in ipairs(cachedSticks) do
-            if stick and stick.Parent and stick.Transparency < 0.9 then
-                local dist = (stick.Position - activeCueBall.Position).Magnitude
-                if dist < minStickDist then
-                    minStickDist = dist
-                    bestStick = stick
-                end
+    if not activeCueBall then
+        hideTrajectories()
+        clearGhostVisuals()
+        return
+    end
+    
+    local pullback = 0
+    local bestStick = nil
+    local minStickDist = 15
+    for _, stick in ipairs(cachedSticks) do
+        if stick and stick.Parent and stick.Transparency < 0.9 then
+            local dist = (stick.Position - activeCueBall.Position).Magnitude
+            if dist < minStickDist then
+                minStickDist = dist
+                bestStick = stick
             end
         end
-        
-        if bestStick then
-            local aimDir = (activeCueBall.Position - bestStick.Position) * Vector3.new(1, 0, 1)
-            if aimDir.Magnitude > 0.001 then
-                aimDir = aimDir.Unit
-                local alignment = camLook:Dot(aimDir)
-                if alignment > 0.75 then
-                    activeStick = bestStick
-                end
-            end
-        end
+    end
+    
+    if bestStick then
+        local stickLength = math.max(bestStick.Size.X, bestStick.Size.Y, bestStick.Size.Z)
+        local restingDist = (stickLength / 2) + (activeCueBall.Size.X / 2)
+        local currentDist = (activeCueBall.Position - bestStick.Position).Magnitude
+        pullback = math.max(0, currentDist - restingDist)
+    end
+    
+    local totalDistance
+    if pullback > 0 then
+        totalDistance = 5 + (pullback * POWER_SCALE)
+        totalDistance = math.clamp(totalDistance, 2, 150)
+    else
+        totalDistance = 30
     end
     
     hideTrajectories()
     clearGhostVisuals()
     local currentStatusText = "Status: Online"
     
-    if activeCueBall and activeStick then
-        local tableY = activeCueBall.Position.Y
-        local ballRadius = activeCueBall.Size.X / 2
-        local stickLength = math.max(activeStick.Size.X, activeStick.Size.Y, activeStick.Size.Z)
-        local restingDist = (stickLength / 2) + ballRadius
-        local currentDist = (activeCueBall.Position - activeStick.Position).Magnitude
-        local pullback = math.max(0, currentDist - restingDist)
+    local tableY = activeCueBall.Position.Y
+    local ballRadius = activeCueBall.Size.X / 2
+    local aimDir = camLook
+    
+    local lineIndex = 1
+    local maxLinesAllowed = 30
+    local totalCueDistance = 0 
+    local kissPowerCalculated = false
+    
+    local function simulatePath(startPos, direction, isCue, ignoreBall, maxBounces, color, remainingDist)
+        local currentPos = startPos
+        local currentDir = direction
+        local currentDistLeft = remainingDist
         
-        local totalDistance = 5 + (pullback * POWER_SCALE)
-        totalDistance = math.clamp(totalDistance, 2, 150) 
-        
-        local aimDir = (activeCueBall.Position - activeStick.Position) * Vector3.new(1, 0, 1)
-        if aimDir.Magnitude > 0 then
-            aimDir = aimDir.Unit
-            local lineIndex = 1
-            local maxLinesAllowed = 30
-            local totalCueDistance = 0 
-            local kissPowerCalculated = false
+        for bounce = 1, maxBounces do
+            if lineIndex > maxLinesAllowed or currentDistLeft <= 0.1 then return end
             
-            local function simulatePath(startPos, direction, isCue, ignoreBall, maxBounces, color, remainingDist)
-                local currentPos = startPos
-                local currentDir = direction
-                local currentDistLeft = remainingDist
+            local hitBall, ballDist = getBallIntersection(currentPos, currentDir, ballRadius, tableY, ignoreBall)
+            if hitBall and ballDist > currentDistLeft then hitBall = nil end
+            
+            local wallHitPos, wallNormal, wallDist = nil, nil, math.huge
+            local rayOrigin = Vector3.new(currentPos.X, tableY, currentPos.Z)
+            local ignoreList = {player.Character}
+            if bestStick then table.insert(ignoreList, bestStick) end
+            for _, b in ipairs(cachedBalls) do table.insert(ignoreList, b) end
+            
+            local searchDist = hitBall and ballDist or currentDistLeft
+            local currentRayOrigin = rayOrigin
+            local safety = 0
+            
+            while searchDist > 0 and safety < 50 do
+                safety = safety + 1
+                local rayParams = RaycastParams.new()
+                rayParams.FilterType = Enum.RaycastFilterType.Exclude
+                rayParams.FilterDescendantsInstances = ignoreList
                 
-                for bounce = 1, maxBounces do
-                    if lineIndex > maxLinesAllowed or currentDistLeft <= 0.1 then return end
+                local result = workspace:Raycast(currentRayOrigin, currentDir * searchDist, rayParams)
+                if result then
+                    local inst = result.Instance
+                    local isValidHit = true
                     
-                    local hitBall, ballDist = getBallIntersection(currentPos, currentDir, ballRadius, tableY, ignoreBall)
-                    if hitBall and ballDist > currentDistLeft then hitBall = nil end
-                    
-                    local wallHitPos, wallNormal, wallDist = nil, nil, math.huge
-                    local rayOrigin = Vector3.new(currentPos.X, tableY, currentPos.Z)
-                    local ignoreList = {player.Character, activeStick}
-                    for _, b in ipairs(cachedBalls) do table.insert(ignoreList, b) end
-                    
-                    local searchDist = hitBall and ballDist or currentDistLeft
-                    local currentRayOrigin = rayOrigin
-                    local safety = 0
-                    
-                    while searchDist > 0 and safety < 50 do
-                        safety = safety + 1
-                        local rayParams = RaycastParams.new()
-                        rayParams.FilterType = Enum.RaycastFilterType.Exclude
-                        rayParams.FilterDescendantsInstances = ignoreList
-                        
-                        local result = workspace:Raycast(currentRayOrigin, currentDir * searchDist, rayParams)
-                        if result then
-                            local inst = result.Instance
-                            local isValidHit = true
-                            
-                            if activeModel and not inst:IsDescendantOf(activeModel) then isValidHit = false end
-                            if math.abs(result.Normal.Y) > 0.95 then isValidHit = false end
-                            if inst.Transparency > 0.9 then isValidHit = false end
-                            
-                            if isValidHit then
-                                wallHitPos = result.Position
-                                
-                                -- SNAP NORMAL TO FIX ROUNDED MESHES
-                                local rawNormal = result.Normal * Vector3.new(1, 0, 1)
-                                if rawNormal.Magnitude > 0.001 then 
-                                    wallNormal = snapNormalToTable(rawNormal, activeModel)
-                                else 
-                                    wallNormal = -currentDir 
-                                end
-                                
-                                local rawDist = (Vector3.new(wallHitPos.X, tableY, wallHitPos.Z) - rayOrigin).Magnitude
-                                local dot = currentDir:Dot(wallNormal)
-                                local offset = ballRadius
-                                if dot < -0.001 then offset = math.min(ballRadius / math.abs(dot), ballRadius * 10) end
-                                wallDist = math.max(0, rawDist - offset)
-                                break
-                            else
-                                table.insert(ignoreList, inst)
-                            end
-                        else
-                            break
-                        end
+                    if isIgnorablePart(inst) then
+                        isValidHit = false
                     end
                     
-                    if hitBall and ballDist <= wallDist then
-                        local impactPos = currentPos + currentDir * ballDist
-                        drawLine(lineIndex, currentPos, impactPos, color, tableY)
-                        lineIndex = lineIndex + 1
-                        drawGhostBall(impactPos, color, tableY, ballRadius)
-                        local collisionNormal = (hitBall.Position * Vector3.new(1,0,1) - impactPos * Vector3.new(1,0,1)).Unit
-                        drawGhostLine(impactPos, collisionNormal, 1.5, getBallInfo(hitBall), tableY)
-                        
-                        currentDistLeft = currentDistLeft - ballDist
-                        if isCue then
-                            if not kissPowerCalculated then
-                                totalCueDistance = totalCueDistance + ballDist
-                                local kissPower = math.clamp(math.ceil(totalCueDistance * KISS_MULTIPLIER), 1, 100)
-                                currentStatusText = "Online | Kiss: ~" .. kissPower .. "%"
-                                kissPowerCalculated = true
-                            end
-                            local impactDot = math.clamp(currentDir:Dot(collisionNormal), 0, 1)
-                            local targetDist = currentDistLeft * impactDot * 0.85 
-                            local cueDist = currentDistLeft * math.sqrt(1 - (impactDot * impactDot)) * 0.6 
-                            simulatePath(hitBall.Position, collisionNormal, false, hitBall, 3, getBallInfo(hitBall), targetDist)
-                            local tangent = currentDir - currentDir:Dot(collisionNormal) * collisionNormal
-                            if tangent.Magnitude > 0.01 then
-                                simulatePath(impactPos + tangent.Unit * 0.05, tangent.Unit, false, hitBall, 1, Color3.fromRGB(150, 150, 255), cueDist)
-                            end
-                        else
-                            local impactDot = math.clamp(currentDir:Dot(collisionNormal), 0, 1)
-                            local targetDist = currentDistLeft * impactDot * 0.85
-                            simulatePath(hitBall.Position, collisionNormal, false, hitBall, 2, getBallInfo(hitBall), targetDist)
+                    if isValidHit then
+                        if activeModel and not inst:IsDescendantOf(activeModel) then isValidHit = false end
+                        if math.abs(result.Normal.Y) > 0.95 then isValidHit = false end
+                        if inst.Transparency > 0.9 then isValidHit = false end
+                    end
+                    
+                    if isValidHit then
+                        wallHitPos = result.Position
+                        local rawNormal = result.Normal * Vector3.new(1, 0, 1)
+                        if rawNormal.Magnitude > 0.001 then 
+                            wallNormal = snapNormalToTable(rawNormal, activeModel)
+                        else 
+                            wallNormal = -currentDir 
                         end
-                        break
-                        
-                    elseif wallHitPos and wallDist < math.huge then
-                        local impactPos = currentPos + currentDir * wallDist
-                        drawLine(lineIndex, currentPos, impactPos, color, tableY)
-                        lineIndex = lineIndex + 1
-                        drawGhostBall(impactPos, color, tableY, ballRadius)
-                        currentDistLeft = currentDistLeft - wallDist
-                        
-                        if isCue and not kissPowerCalculated then totalCueDistance = totalCueDistance + wallDist end
-                        
-                        -- [[ APPLY TRIGONOMETRIC BANK DATA ]] --
+                        local rawDist = (Vector3.new(wallHitPos.X, tableY, wallHitPos.Z) - rayOrigin).Magnitude
                         local dot = currentDir:Dot(wallNormal)
-                        local incomingAngle = math.deg(math.acos(math.abs(dot)))
-                        local out_angle = getBankOutAngle(incomingAngle)
-                        
-                        local v_norm = dot * wallNormal
-                        local v_tan_vec = currentDir - v_norm
-                        
-                        local newDir
-                        if v_tan_vec.Magnitude > 0.001 then
-                            newDir = (v_tan_vec.Unit * math.sin(math.rad(out_angle))) + (wallNormal * math.cos(math.rad(out_angle)))
-                        else
-                            newDir = wallNormal
-                        end
-                        
-                        currentDir = newDir.Unit
-                        currentPos = impactPos + wallNormal * 0.02 + currentDir * 0.05
-                        ignoreBall = nil
-                    else
-                        local endPos = currentPos + currentDir * currentDistLeft
-                        drawLine(lineIndex, currentPos, endPos, color, tableY)
-                        drawGhostBall(endPos, color, tableY, ballRadius) 
-                        lineIndex = lineIndex + 1
+                        local offset = ballRadius
+                        if dot < -0.001 then offset = math.min(ballRadius / math.abs(dot), ballRadius * 10) end
+                        wallDist = math.max(0, rawDist - offset)
                         break
+                    else
+                        table.insert(ignoreList, inst)
                     end
+                else
+                    break
                 end
             end
-            simulatePath(activeCueBall.Position, aimDir, true, activeCueBall, 4, Color3.fromRGB(255, 255, 255), totalDistance)
+            
+            if hitBall and ballDist <= wallDist then
+                local impactPos = currentPos + currentDir * ballDist
+                drawLine(lineIndex, currentPos, impactPos, color, tableY)
+                lineIndex = lineIndex + 1
+                drawGhostBall(impactPos, color, tableY, ballRadius)
+                local collisionNormal = (hitBall.Position * Vector3.new(1,0,1) - impactPos * Vector3.new(1,0,1)).Unit
+                drawGhostLine(impactPos, collisionNormal, 1.5, getBallInfo(hitBall), tableY)
+                currentDistLeft = currentDistLeft - ballDist
+                if isCue then
+                    if not kissPowerCalculated then
+                        totalCueDistance = totalCueDistance + ballDist
+                        local kissPower = math.clamp(math.ceil(totalCueDistance * KISS_MULTIPLIER), 1, 100)
+                        currentStatusText = "Online | Kiss: ~" .. kissPower .. "%"
+                        kissPowerCalculated = true
+                    end
+                    local impactDot = math.clamp(currentDir:Dot(collisionNormal), 0, 1)
+                    local targetDist = currentDistLeft * impactDot * 0.85 
+                    local cueDist = currentDistLeft * math.sqrt(1 - (impactDot * impactDot)) * 0.6 
+                    simulatePath(hitBall.Position, collisionNormal, false, hitBall, 3, getBallInfo(hitBall), targetDist)
+                    local tangent = currentDir - currentDir:Dot(collisionNormal) * collisionNormal
+                    if tangent.Magnitude > 0.01 then
+                        simulatePath(impactPos + tangent.Unit * 0.05, tangent.Unit, false, hitBall, 1, Color3.fromRGB(150, 150, 255), cueDist)
+                    end
+                else
+                    local impactDot = math.clamp(currentDir:Dot(collisionNormal), 0, 1)
+                    local targetDist = currentDistLeft * impactDot * 0.85
+                    simulatePath(hitBall.Position, collisionNormal, false, hitBall, 2, getBallInfo(hitBall), targetDist)
+                end
+                break
+                
+            elseif wallHitPos and wallDist < math.huge then
+                local impactPos = currentPos + currentDir * wallDist
+                drawLine(lineIndex, currentPos, impactPos, color, tableY)
+                lineIndex = lineIndex + 1
+                drawGhostBall(impactPos, color, tableY, ballRadius)
+                currentDistLeft = currentDistLeft - wallDist
+                if isCue and not kissPowerCalculated then totalCueDistance = totalCueDistance + wallDist end
+                local dot = currentDir:Dot(wallNormal)
+                local incomingAngle = math.deg(math.acos(math.abs(dot)))
+                local out_angle = getBankOutAngle(incomingAngle)
+                local v_norm = dot * wallNormal
+                local v_tan_vec = currentDir - v_norm
+                local newDir
+                if v_tan_vec.Magnitude > 0.001 then
+                    newDir = (v_tan_vec.Unit * math.sin(math.rad(out_angle))) + (wallNormal * math.cos(math.rad(out_angle)))
+                else
+                    newDir = wallNormal
+                end
+                currentDir = newDir.Unit
+                currentPos = impactPos + wallNormal * 0.02 + currentDir * 0.05
+                ignoreBall = nil
+            else
+                local endPos = currentPos + currentDir * currentDistLeft
+                drawLine(lineIndex, currentPos, endPos, color, tableY)
+                drawGhostBall(endPos, color, tableY, ballRadius) 
+                lineIndex = lineIndex + 1
+                break
+            end
         end
     end
+    
+    simulatePath(activeCueBall.Position, aimDir, true, activeCueBall, 4, Color3.fromRGB(255, 255, 255), totalDistance)
+    
     if statusLabel.Text ~= currentStatusText then statusLabel.Text = currentStatusText end
 end
 
+-- [[ STATUS CONTROL ]] --
 local function setStatusOnline()
     if isHighlighting then return end
     isHighlighting = true
@@ -706,6 +790,6 @@ local function cleanup()
     screenGui:Destroy()
 end
 
-onButton.MouseButton1Click:Connect(setStatusOnline)
-offButton.MouseButton1Click:Connect(setStatusOffline)
-destroyButton.MouseButton1Click:Connect(cleanup)
+onBtn.MouseButton1Click:Connect(setStatusOnline)
+offBtn.MouseButton1Click:Connect(setStatusOffline)
+destroyBtn.MouseButton1Click:Connect(cleanup)
