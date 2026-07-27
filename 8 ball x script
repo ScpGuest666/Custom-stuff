@@ -183,7 +183,20 @@ end
 local function forceBallsVisible()
     for _, ball in ipairs(cachedBalls) do
         if ball and ball:IsA("BasePart") then
-            ball.Transparency = 0
+            pcall(function()
+                -- Force standard transparency to 0
+                ball.Transparency = 0
+                
+                -- Force LocalTransparencyModifier to 0 (often used by skills to hide objects locally)
+                ball.LocalTransparencyModifier = 0
+                
+                -- Ensure decals/textures (like the numbers on the balls) are also visible
+                for _, child in ipairs(ball:GetChildren()) do
+                    if child:IsA("Decal") or child:IsA("Texture") then
+                        child.Transparency = 0
+                    end
+                end
+            end)
         end
     end
 end
