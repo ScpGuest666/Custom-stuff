@@ -1,89 +1,27 @@
 -- [[ CONFIGURATION ]] --
 local POWER_SCALE = 28 
-local KISS_MULTIPLIER = 5.0
-local LEARNING_RATE = 0.25 
+local MAX_EXTEND_DIST = 55
+local GOLD_COLOR = Color3.fromRGB(255, 215, 0)
 
 -- Wait for player to load
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
-local HttpService = game:GetService("HttpService")
+local Workspace = game:GetService("Workspace")
 local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
 
--- [[ FILE SYSTEM SETUP ]] --
-local FOLDER_NAME = "Bank data"
-local FILE_NAME = FOLDER_NAME .. "/adjustments.json"
-
-local bankData = {}
-
-if isfolder and not isfolder(FOLDER_NAME) then
-    pcall(function() makefolder(FOLDER_NAME) end)
-end
-
-local function saveBankData()
-    if writefile then
-        pcall(function()
-            local dataToSave = bankData
-            local count = 0
-            for _ in pairs(dataToSave) do count = count + 1 end
-            if count == 0 then dataToSave = {["_init"] = 1.0} end 
-            writefile(FILE_NAME, HttpService:JSONEncode(dataToSave))
-        end)
-    end
-end
-
-local function loadBankData()
-    if isfile and isfile(FILE_NAME) then
-        pcall(function()
-            local data = HttpService:JSONDecode(readfile(FILE_NAME))
-            if data then
-                bankData = {}
-                local isCorrupted = false
-                for k, v in pairs(data) do 
-                    if k ~= "_init" then 
-                        if tonumber(k) > 10 and v < 5 then
-                            isCorrupted = true
-                            break
-                        end
-                        bankData[tostring(k)] = v 
-                    end
-                end
-                if isCorrupted then
-                    bankData = {}
-                    saveBankData()
-                end
-            end
-        end)
+-- [[ HELPER: SNAP TO AXIS ]] --
+local function getSnappedAxis(vec)
+    local absX = math.abs(vec.X)
+    local absZ = math.abs(vec.Z)
+    if absX > absZ then
+        return Vector3.new(math.sign(vec.X), 0, 0)
     else
-        saveBankData()
+        return Vector3.new(0, 0, math.sign(vec.Z))
     end
 end
-loadBankData()
 
--- [[ DYNAMIC INTERPOLATION ]] --
-local function getBankOutAngle(angle)
-    angle = math.clamp(angle, 0, 90)
-    local points = { [0] = 0, [90] = 90 }
-    for k, v in pairs(bankData) do
-        local numK = tonumber(k)
-        if numK then points[numK] = v end
-    end
-    local keys = {}
-    for k, _ in pairs(points) do table.insert(keys, k) end
-    table.sort(keys)
-    local lower, upper
-    for i = 1, #keys do
-        if keys[i] <= angle then lower = keys[i] end
-        if keys[i] >= angle and not upper then upper = keys[i] break end
-    end
-    if lower == upper then return points[lower] end
-    local lowerVal = points[lower]
-    local upperVal = points[upper]
-    local alpha = (angle - lower) / (upper - lower)
-    return lowerVal + (upperVal - lowerVal) * alpha
-end
-
--- [[ GUI SETUP (Original Size, Upgraded Functions) ]] --
+-- [[ GUI SETUP ]] --
 local guiParent
 if type(gethui) == "function" then
     guiParent = gethui()
@@ -101,15 +39,15 @@ end
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "8BallProGui_" .. math.random(10000, 99999)
 screenGui.ResetOnSpawn = false
-screenGui.DisplayOrder = 2147483647 -- Maximum value to ensure it renders on top of EVERYTHING
-screenGui.IgnoreGuiInset = true -- Prevents the Roblox topbar from pushing the UI down
+screenGui.DisplayOrder = 2147483647 
+screenGui.IgnoreGuiInset = true 
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
 screenGui.Parent = guiParent
 
 local mainFrame = Instance.new("Frame")
 mainFrame.Parent = screenGui
 mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-mainFrame.Size = UDim2.new(0, 150, 0, 85)
+mainFrame.Size = UDim2.new(0, 160, 0, 110)
 mainFrame.Position = UDim2.new(0.3, 0, 0.5, -50)
 mainFrame.Draggable = true
 mainFrame.Active = true
@@ -117,7 +55,7 @@ mainFrame.Active = true
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Parent = mainFrame
 statusLabel.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-statusLabel.Size = UDim2.new(0, 150, 0, 22)
+statusLabel.Size = UDim2.new(0, 160, 0, 22)
 statusLabel.Position = UDim2.new(0, 0, 0, -22)
 statusLabel.Text = "Status: Offline"
 statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
@@ -138,20 +76,36 @@ local function createButton(name, text, x, y, width, height)
     return btn
 end
 
-local onBtn = createButton("OnBtn", "On", 10, 15, 60, 22)
-local offBtn = createButton("OffBtn", "Off", 80, 15, 60, 22)
-local destroyBtn = createButton("DestroyBtn", "Destroy", 10, 45, 130, 22)
+local onBtn = createButton("OnBtn", "On", 10, 15, 65, 22)
+local offBtn = createButton("OffBtn", "Off", 85, 15, 65, 22)
+local destroyBtn = createButton("DestroyBtn", "Destroy", 10, 45, 140, 22)
 
-local learningLabel = Instance.new("TextLabel")
-learningLabel.Parent = mainFrame
-learningLabel.BackgroundTransparency = 1
-learningLabel.Size = UDim2.new(0, 150, 0, 15)
-learningLabel.Position = UDim2.new(0, 0, 0, 70)
-learningLabel.Text = "AI Bank Learning: Active"
-learningLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
-learningLabel.TextScaled = true
+-- Calculate Button
+local calcBtn = Instance.new("TextButton")
+calcBtn.Parent = mainFrame
+calcBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+calcBtn.Size = UDim2.new(0, 140, 0, 22)
+calcBtn.Position = UDim2.new(0, 10, 0, 75)
+calcBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+calcBtn.Text = "Calculate: OFF"
+calcBtn.TextScaled = true
+calcBtn.BorderSizePixel = 0
 
--- [[ GLOBALS ]] --
+local mathLabel = Instance.new("TextLabel")
+mathLabel.Parent = mainFrame
+mathLabel.BackgroundTransparency = 1
+mathLabel.Size = UDim2.new(0, 160, 0, 15)
+mathLabel.Position = UDim2.new(0, 0, 0, 100)
+mathLabel.Text = "Math: Pure Reflection + Game Hook"
+mathLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
+mathLabel.TextScaled = true
+
+-- [[ FOLDERS & INSTANCES ]] --
+local customFolder = Instance.new("Folder")
+customFolder.Name = "CustomTrajectoryExtensions"
+customFolder.Parent = Workspace.CurrentCamera or Workspace
+
+-- [[ GLOBALS & CACHES ]] --
 local activeConnections = {}
 local trajectoryParts = {}
 local ghostBalls = {}
@@ -159,10 +113,22 @@ local ghostLines = {}
 local cachedBalls = {}
 local cachedSticks = {}
 local cachedTables = {}
+local cachedCushionWalls = {}
+local customLinePool = {}
+local originalProperties = {}
+
 local isHighlighting = false
 local currentSessionId = 0
+local lastWallScan = 0
 
--- [[ ANTI‑BLUR & ANTI‑INVISIBLE ]] --
+-- Calculation Globals
+local unfoldedStartPos = nil
+local unfoldedDirection = nil
+local unfoldedDistance = nil
+local isCalculating = false
+local calculatedLinePart = nil
+
+-- [[ ANTI‑BLUR & RESTORE HELPERS ]] --
 local function removeBlurEffects()
     for _, obj in ipairs(Lighting:GetDescendants()) do
         if obj:IsA("BlurEffect") or obj:IsA("DepthOfFieldEffect") then
@@ -180,17 +146,172 @@ local function removeBlurEffects()
     end
 end
 
+removeBlurEffects()
+task.spawn(function()
+    while true do
+        task.wait(5)
+        removeBlurEffects()
+    end
+end)
+
+local function saveOriginal(part)
+    if originalProperties[part] then return end
+    originalProperties[part] = {
+        Color = part.Color,
+        Material = part.Material
+    }
+end
+
+local function restorePart(part)
+    local props = originalProperties[part]
+    if props and part and part.Parent then
+        pcall(function()
+            part.Color = props.Color
+            part.Material = props.Material
+        end)
+    end
+    originalProperties[part] = nil
+end
+
+local function restoreAll()
+    for part, _ in pairs(originalProperties) do
+        restorePart(part)
+    end
+    table.clear(originalProperties)
+    table.clear(cachedCushionWalls)
+end
+
+-- [[ CUSHION WALL DETECTION ]] --
+local function isCushionWall(obj)
+    if not (obj:IsA("UnionOperation") or (obj:IsA("BasePart") and obj.Name == "Union")) then
+        return false
+    end
+    if not (obj.Parent and obj.Parent:IsA("Folder")) then
+        return false
+    end
+
+    local size = obj.Size
+    local minH = math.min(size.X, size.Z)
+    local maxH = math.max(size.X, size.Z)
+
+    if minH > 2.0 and maxH > 4.0 then return false end
+    if maxH >= 2.5 and minH <= 2.0 and size.Y <= 2.5 then return true end
+
+    return false
+end
+
+local function getClosest6CushionWalls()
+    local char = player.Character
+    local root = char and (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart)
+    local refPos = root and root.Position or (Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame.Position)
+    if not refPos then return {} end
+
+    local wallCandidates = {}
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if isCushionWall(obj) then
+            local dist = (obj.Position - refPos).Magnitude
+            if dist <= 35 then
+                table.insert(wallCandidates, { obj = obj, dist = dist })
+            end
+        end
+    end
+
+    table.sort(wallCandidates, function(a, b) return a.dist < b.dist end)
+
+    local selected = {}
+    for i = 1, math.min(#wallCandidates, 6) do
+        table.insert(selected, wallCandidates[i].obj)
+    end
+    return selected
+end
+
+-- [[ EXTENSION LINE POOL ]] --
+local function getCustomLine(index)
+    if not customLinePool[index] or not customLinePool[index].Parent then
+        local line = Instance.new("Part")
+        line.Name = "ExtLine_" .. index
+        line.Material = Enum.Material.Neon
+        line.Color = GOLD_COLOR
+        line.Transparency = 1
+        line.Anchored = true
+        line.CanCollide = false
+        line.CanQuery = false
+        line.CastShadow = false
+        line.Size = Vector3.new(0.12, 0.12, 1)
+        line.Parent = customFolder
+        customLinePool[index] = line
+    end
+    return customLinePool[index]
+end
+
+local function hideAllCustomLines()
+    for _, line in pairs(customLinePool) do
+        if line and line.Parent then
+            line.Transparency = 1
+        end
+    end
+end
+
+local function clearCustomLines()
+    for _, line in pairs(customLinePool) do
+        if line then line:Destroy() end
+    end
+    table.clear(customLinePool)
+end
+
+local function drawExtendedRayLine(origin, direction, lineIndex)
+    if direction.Magnitude < 0.01 then return false end
+    local dirUnit = direction.Unit
+    local rayDist = MAX_EXTEND_DIST
+
+    if #cachedCushionWalls > 0 then
+        local rayParams = RaycastParams.new()
+        rayParams.FilterType = Enum.RaycastFilterType.Include
+        rayParams.FilterDescendantsInstances = cachedCushionWalls
+
+        local hit = Workspace:Raycast(origin + dirUnit * 0.1, dirUnit * MAX_EXTEND_DIST, rayParams)
+        if hit then
+            rayDist = (hit.Position - origin).Magnitude
+        end
+    end
+
+    if rayDist > 0.2 then
+        local customLine = getCustomLine(lineIndex)
+        customLine.Size = Vector3.new(0.12, 0.12, rayDist)
+        customLine.CFrame = CFrame.lookAt(origin + dirUnit * (rayDist / 2), origin + dirUnit * (rayDist + 1))
+        customLine.Color = GOLD_COLOR
+        customLine.Transparency = 0
+        return true
+    end
+    return false
+end
+
+local function projectFromPart(part, lineIndex)
+    local size = part.Size
+    local cf = part.CFrame
+    local dir = cf.LookVector
+    local len = size.Z
+
+    if size.X > size.Y and size.X > size.Z then
+        dir = cf.RightVector
+        len = size.X
+    elseif size.Y > size.X and size.Y > size.Z then
+        dir = cf.UpVector
+        len = size.Y
+    end
+
+    if len < 0.15 then return false end
+    local startPos = cf.Position - dir * (len / 2)
+    return drawExtendedRayLine(startPos, dir, lineIndex)
+end
+
+-- [[ BALL / STICK / ENVIRONMENT FILTERS ]] --
 local function forceBallsVisible()
     for _, ball in ipairs(cachedBalls) do
         if ball and ball:IsA("BasePart") then
             pcall(function()
-                -- Force standard transparency to 0
                 ball.Transparency = 0
-                
-                -- Force LocalTransparencyModifier to 0 (often used by skills to hide objects locally)
                 ball.LocalTransparencyModifier = 0
-                
-                -- Ensure decals/textures (like the numbers on the balls) are also visible
                 for _, child in ipairs(ball:GetChildren()) do
                     if child:IsA("Decal") or child:IsA("Texture") then
                         child.Transparency = 0
@@ -201,17 +322,9 @@ local function forceBallsVisible()
     end
 end
 
-removeBlurEffects()
-task.spawn(function()
-    while true do
-        task.wait(5)
-        removeBlurEffects()
-    end
-end)
-
--- [[ IMPROVED IGNORE FUNCTION ]] --
 local function isIgnorablePart(part)
-    if not part:IsA("BasePart") then return false end
+    if not part:IsA("BasePart") then return true end
+    if part:IsDescendantOf(customFolder) then return true end
     if part:FindFirstChildOfClass("ParticleEmitter") or part:FindFirstChildOfClass("Fire") then return true end
     if part.Transparency >= 1 then return true end
     
@@ -243,9 +356,9 @@ local function isIgnorablePart(part)
     return false
 end
 
--- [[ BALL / STICK DETECTION ]] --
 local function isBall(obj)
     if not obj:IsA("BasePart") then return false end
+    if obj:IsDescendantOf(customFolder) then return false end
     if obj.Size.Magnitude > 5 then return false end
     if obj:FindFirstChildOfClass("ParticleEmitter") or obj:FindFirstChildOfClass("Fire") then return false end
     
@@ -334,6 +447,7 @@ local function getTrajectoryPart(index)
         local p = Instance.new("Part")
         p.Anchored = true
         p.CanCollide = false
+        p.CanQuery = false
         p.Parent = workspace
         trajectoryParts[index] = p
     end
@@ -373,6 +487,7 @@ local function drawGhostBall(position, color, tableY, radius)
     ballPart.CFrame = CFrame.new(flatPos) * CFrame.Angles(0, 0, math.rad(90))
     ballPart.Anchored = true
     ballPart.CanCollide = false
+    ballPart.CanQuery = false
     ballPart.Color = color
     ballPart.Material = Enum.Material.Neon
     ballPart.Transparency = 0
@@ -380,7 +495,7 @@ local function drawGhostBall(position, color, tableY, radius)
     table.insert(ghostBalls, ballPart)
 end
 
-local function drawGhostLine(startPos, direction, length, color, tableY)
+local function drawGhostLine(startPos, direction, length, color, tableY, material, transparency)
     local flatStart = Vector3.new(startPos.X, tableY, startPos.Z)
     local flatEnd = flatStart + direction * length
     local dist = length
@@ -388,11 +503,12 @@ local function drawGhostLine(startPos, direction, length, color, tableY)
     local linePart = Instance.new("Part")
     linePart.Anchored = true
     linePart.CanCollide = false
+    linePart.CanQuery = false
     linePart.Size = Vector3.new(0.12, 0.12, dist)
     linePart.CFrame = CFrame.lookAt(flatStart + (flatEnd - flatStart)/2, flatEnd)
     linePart.Color = color
-    linePart.Material = Enum.Material.Neon
-    linePart.Transparency = 0
+    linePart.Material = material or Enum.Material.Neon
+    linePart.Transparency = transparency or 0
     linePart.Parent = workspace
     table.insert(ghostLines, linePart)
 end
@@ -425,129 +541,123 @@ local function getBallIntersection(rayOrigin, rayDir, ballRadius, tableY, ignore
     return closestBall, closestDist
 end
 
-local function snapNormalToTable(normal, tableModel)
-    if not tableModel then return normal.Unit end
-    local part = tableModel:FindFirstChildWhichIsA("BasePart", true)
-    if not part then return normal.Unit end
-    local localNormal = part.CFrame:VectorToObjectSpace(normal)
-    local absX = math.abs(localNormal.X)
-    local absZ = math.abs(localNormal.Z)
-    if absX > absZ then
-        localNormal = Vector3.new(math.sign(localNormal.X), 0, 0)
-    else
-        localNormal = Vector3.new(0, 0, math.sign(localNormal.Z))
-    end
-    return part.CFrame:VectorToWorldSpace(localNormal).Unit
-end
-
--- [[ PHYSICS OBSERVER ]] --
-local ballStates = {}
-
-local function monitorPhysics(dt)
-    if not isHighlighting then return end
-    
-    for _, ball in ipairs(cachedBalls) do
-        if ball and ball.Parent then
-            
-            -- NOTE: We intentionally IGNORE the cue ball for AI learning.
-            -- Why? The cue ball is frequently affected by player-applied spin (English).
-            -- If the AI learns from spin-altered wall bounces, it will corrupt the baseline
-            -- prediction data, causing normal center-ball shots to miss. 
-            -- We ONLY learn from numbered balls (1-15) because they generally only have natural roll.
-            local num = tonumber(ball.Name)
-            if not (num and num >= 1 and num <= 15) then
-                continue
-            end
-            
-            local currentPos = ball.Position * Vector3.new(1, 0, 1)
-            local state = ballStates[ball]
-            
-            if not state then
-                ballStates[ball] = { lastPos = currentPos, velocity = Vector3.zero, cooldown = 0, stationaryFrames = 0 }
-            else
-                local deltaPos = currentPos - state.lastPos
-                local distMoved = deltaPos.Magnitude
-                local speed = distMoved / dt
-                
-                if speed > 2.5 then
-                    local currentVel = deltaPos / dt
-                    local currentDir = currentVel.Unit
-                    
-                    if state.cooldown > 0 then
-                        state.cooldown = state.cooldown - dt
-                    elseif state.velocity.Magnitude > 0 then
-                        local prevDir = state.velocity.Unit
-                        local dot = currentDir:Dot(prevDir)
-                        
-                        if dot < 0.98 and dot > -0.98 then
-                            local hitAnotherBall = false
-                            for _, otherBall in ipairs(cachedBalls) do
-                                if otherBall ~= ball and otherBall.Parent then
-                                    if (otherBall.Position - ball.Position).Magnitude < (ball.Size.X * 1.5) then
-                                        hitAnotherBall = true
-                                        break
-                                    end
-                                end
-                            end
-                            
-                            if not hitAnotherBall then
-                                local N = (currentDir - prevDir).Unit
-                                if math.abs(N.Y) < 0.1 then
-                                    if prevDir:Dot(N) > 0 then N = -N end
-                                    local inDot = -prevDir:Dot(N)
-                                    local outDot = currentDir:Dot(N)
-                                    if inDot > 0.05 and outDot > 0.05 and inDot < 0.98 and outDot < 0.98 then
-                                        local in_angle = math.deg(math.acos(inDot))
-                                        local out_angle = math.deg(math.acos(outDot))
-                                        local bucket = tostring(math.floor(in_angle + 0.5))
-                                        if bankData[bucket] then
-                                            bankData[bucket] = (bankData[bucket] * (1 - LEARNING_RATE)) + (out_angle * LEARNING_RATE)
-                                        else
-                                            bankData[bucket] = out_angle
-                                        end
-                                        saveBankData()
-                                        learningLabel.Text = string.format("Learned %s° → %.1f°", bucket, bankData[bucket])
-                                        task.delay(2.5, function()
-                                            if learningLabel.Text:find(bucket) then
-                                                learningLabel.Text = "AI Bank Learning: Active"
-                                            end
-                                        end)
-                                    end
-                                end
-                            end
-                            state.cooldown = 0.15
-                        end
-                    end
-                    
-                    if state.cooldown <= 0 then
-                        state.velocity = currentVel
-                    end
-                    state.stationaryFrames = 0
-                else
-                    state.velocity = Vector3.zero
-                    state.stationaryFrames = state.stationaryFrames + 1
-                    if state.stationaryFrames > 5 then
-                        ballStates[ball] = { lastPos = currentPos, velocity = Vector3.zero, cooldown = 0, stationaryFrames = 0 }
-                    end
-                end
-                
-                state.lastPos = currentPos
-            end
-        end
-    end
-end
-
--- [[ MAIN PREDICTION LOOP ]] --
+-- [[ MAIN COMBINED PREDICTION & EXTENSION LOOP ]] --
 local function updateHighlights()
     if not isHighlighting then return end
     
     forceBallsVisible()
     
+    local now = tick()
+    local rainbowColor = Color3.fromHSV((now * 1.5) % 1, 1, 1)
+
+    -- 1. Scan and highlight the 6 Cushion Rails in Rainbow
+    if now - lastWallScan > 0.4 or #cachedCushionWalls < 6 then
+        lastWallScan = now
+        cachedCushionWalls = getClosest6CushionWalls()
+    end
+
+    for _, wall in ipairs(cachedCushionWalls) do
+        if wall and wall.Parent then
+            saveOriginal(wall)
+            pcall(function()
+                wall.Color = rainbowColor
+                wall.Material = Enum.Material.Neon
+            end)
+        end
+    end
+
+    -- 2. Check for In-Game Trajectory Elements (TrajectoryViz)
+    local trajViz = Workspace:FindFirstChild("TrajectoryViz") or (Workspace.CurrentCamera and Workspace.CurrentCamera:FindFirstChild("TrajectoryViz"))
+    local inGameHookUsed = false
+    local extLineCount = 0
+
+    if trajViz then
+        local inGameMainLine = nil
+        local inGameDeflectParts = {}
+        local inGameGhostMarker = nil
+
+        for _, child in ipairs(trajViz:GetDescendants()) do
+            if child:IsA("BasePart") and child.Transparency < 0.95 then
+                saveOriginal(child)
+                pcall(function()
+                    child.Color = GOLD_COLOR
+                    child.Material = Enum.Material.Neon
+                end)
+
+                local name = string.lower(child.Name)
+                if string.find(name, "main") then
+                    inGameMainLine = child
+                elseif string.find(name, "deflect") or string.find(name, "bounce") then
+                    table.insert(inGameDeflectParts, child)
+                elseif string.find(name, "cylinder") or string.find(name, "ghost") or string.find(name, "circle") then
+                    inGameGhostMarker = child
+                end
+            end
+        end
+
+        local hookImpactPos = inGameGhostMarker and inGameGhostMarker.Position or nil
+        if inGameMainLine then
+            local mSize = inGameMainLine.Size
+            local mCf = inGameMainLine.CFrame
+            local mDir = mCf.LookVector
+            local mLen = mSize.Z
+            if mSize.X > mSize.Y and mSize.X > mSize.Z then
+                mDir = mCf.RightVector
+                mLen = mSize.X
+            end
+            if not hookImpactPos then
+                hookImpactPos = mCf.Position + mDir * (mLen / 2)
+            end
+        end
+
+        if hookImpactPos then
+            -- Find target ball at the ghost ball impact position
+            local targetBall = nil
+            local minContactDist = 2.5
+            for _, ball in ipairs(cachedBalls) do
+                if ball and ball.Parent then
+                    local distH = (Vector3.new(ball.Position.X, hookImpactPos.Y, ball.Position.Z) - hookImpactPos).Magnitude
+                    if distH < minContactDist and distH > 0.05 then
+                        minContactDist = distH
+                        targetBall = ball
+                    end
+                end
+            end
+
+            -- Extend target ball line of centers
+            if targetBall then
+                local ballTravelDir = Vector3.new(targetBall.Position.X - hookImpactPos.X, 0, targetBall.Position.Z - hookImpactPos.Z)
+                if ballTravelDir.Magnitude > 0.01 then
+                    extLineCount = extLineCount + 1
+                    drawExtendedRayLine(targetBall.Position, ballTravelDir, extLineCount)
+                    inGameHookUsed = true
+                end
+            end
+        end
+
+        -- Extend deflection lines from in-game parts
+        for _, defPart in ipairs(inGameDeflectParts) do
+            extLineCount = extLineCount + 1
+            if projectFromPart(defPart, extLineCount) then
+                inGameHookUsed = true
+            end
+        end
+    end
+
+    -- Hide unused custom extension lines
+    for i = extLineCount + 1, #customLinePool do
+        if customLinePool[i] then
+            customLinePool[i].Transparency = 1
+        end
+    end
+
+    -- 3. Raycast-Based Physics Trajectory Engine
     local camera = workspace.CurrentCamera
     if not camera then return end
     
     local camPos = camera.CFrame.Position
     local camLook = camera.CFrame.LookVector * Vector3.new(1, 0, 1)
+    
     if camLook.Magnitude > 0.001 then
         camLook = camLook.Unit
     else
@@ -621,7 +731,6 @@ local function updateHighlights()
     
     hideTrajectories()
     clearGhostVisuals()
-    local currentStatusText = "Status: Online"
     
     local tableY = activeCueBall.Position.Y
     local ballRadius = activeCueBall.Size.X / 2
@@ -629,8 +738,12 @@ local function updateHighlights()
     
     local lineIndex = 1
     local maxLinesAllowed = 30
-    local totalCueDistance = 0 
-    local kissPowerCalculated = false
+    local firstWallAngle = nil
+    local hasDrawnPerpLine = false
+    
+    local tempUnfoldedStart = nil
+    local tempUnfoldedDir = nil
+    local tempUnfoldedDist = nil
     
     local function simulatePath(startPos, direction, isCue, ignoreBall, maxBounces, color, remainingDist)
         local currentPos = startPos
@@ -645,7 +758,7 @@ local function updateHighlights()
             
             local wallHitPos, wallNormal, wallDist = nil, nil, math.huge
             local rayOrigin = Vector3.new(currentPos.X, tableY, currentPos.Z)
-            local ignoreList = {player.Character}
+            local ignoreList = {player.Character, customFolder}
             if bestStick then table.insert(ignoreList, bestStick) end
             for _, b in ipairs(cachedBalls) do table.insert(ignoreList, b) end
             
@@ -676,12 +789,14 @@ local function updateHighlights()
                     
                     if isValidHit then
                         wallHitPos = result.Position
+                        
                         local rawNormal = result.Normal * Vector3.new(1, 0, 1)
                         if rawNormal.Magnitude > 0.001 then 
-                            wallNormal = snapNormalToTable(rawNormal, activeModel)
+                            wallNormal = rawNormal.Unit
                         else 
                             wallNormal = -currentDir 
                         end
+                        
                         local rawDist = (Vector3.new(wallHitPos.X, tableY, wallHitPos.Z) - rayOrigin).Magnitude
                         local dot = currentDir:Dot(wallNormal)
                         local offset = ballRadius
@@ -698,6 +813,7 @@ local function updateHighlights()
             
             if hitBall and ballDist <= wallDist then
                 local impactPos = currentPos + currentDir * ballDist
+                
                 drawLine(lineIndex, currentPos, impactPos, color, tableY)
                 lineIndex = lineIndex + 1
                 drawGhostBall(impactPos, color, tableY, ballRadius)
@@ -705,16 +821,12 @@ local function updateHighlights()
                 drawGhostLine(impactPos, collisionNormal, 1.5, getBallInfo(hitBall), tableY)
                 currentDistLeft = currentDistLeft - ballDist
                 if isCue then
-                    if not kissPowerCalculated then
-                        totalCueDistance = totalCueDistance + ballDist
-                        local kissPower = math.clamp(math.ceil(totalCueDistance * KISS_MULTIPLIER), 1, 100)
-                        currentStatusText = "Online | Kiss: ~" .. kissPower .. "%"
-                        kissPowerCalculated = true
-                    end
                     local impactDot = math.clamp(currentDir:Dot(collisionNormal), 0, 1)
                     local targetDist = currentDistLeft * impactDot * 0.85 
                     local cueDist = currentDistLeft * math.sqrt(1 - (impactDot * impactDot)) * 0.6 
+                    
                     simulatePath(hitBall.Position, collisionNormal, false, hitBall, 3, getBallInfo(hitBall), targetDist)
+                    
                     local tangent = currentDir - currentDir:Dot(collisionNormal) * collisionNormal
                     if tangent.Magnitude > 0.01 then
                         simulatePath(impactPos + tangent.Unit * 0.05, tangent.Unit, false, hitBall, 1, Color3.fromRGB(150, 150, 255), cueDist)
@@ -728,23 +840,51 @@ local function updateHighlights()
                 
             elseif wallHitPos and wallDist < math.huge then
                 local impactPos = currentPos + currentDir * wallDist
+                
                 drawLine(lineIndex, currentPos, impactPos, color, tableY)
                 lineIndex = lineIndex + 1
                 drawGhostBall(impactPos, color, tableY, ballRadius)
                 currentDistLeft = currentDistLeft - wallDist
-                if isCue and not kissPowerCalculated then totalCueDistance = totalCueDistance + wallDist end
+                
                 local dot = currentDir:Dot(wallNormal)
                 local incomingAngle = math.deg(math.acos(math.abs(dot)))
-                local out_angle = getBankOutAngle(incomingAngle)
-                local v_norm = dot * wallNormal
-                local v_tan_vec = currentDir - v_norm
-                local newDir
-                if v_tan_vec.Magnitude > 0.001 then
-                    newDir = (v_tan_vec.Unit * math.sin(math.rad(out_angle))) + (wallNormal * math.cos(math.rad(out_angle)))
-                else
-                    newDir = wallNormal
+                
+                if not firstWallAngle then
+                    firstWallAngle = incomingAngle
                 end
+                
+                -- [[ THE UNFOLDING TRICK ]] --
+                if not hasDrawnPerpLine then
+                    hasDrawnPerpLine = true
+                    
+                    tempUnfoldedStart = impactPos
+                    tempUnfoldedDir = currentDir
+                    tempUnfoldedDist = currentDistLeft
+                    
+                    local perpDir = getSnappedAxis(-wallNormal)
+                    local pathStartFlat = Vector3.new(startPos.X, tableY, startPos.Z)
+                    
+                    local innerRayParams = RaycastParams.new()
+                    innerRayParams.FilterType = Enum.RaycastFilterType.Exclude
+                    innerRayParams.FilterDescendantsInstances = ignoreList
+                    local innerHit = workspace:Raycast(pathStartFlat, perpDir * 50, innerRayParams)
+                    local innerPos = innerHit and innerHit.Position or (pathStartFlat + perpDir * 10)
+                    
+                    local outerRayOrigin = innerPos + perpDir * 10
+                    local outerRayParams = RaycastParams.new()
+                    outerRayParams.FilterType = Enum.RaycastFilterType.Include
+                    outerRayParams.FilterDescendantsInstances = #cachedCushionWalls > 0 and cachedCushionWalls or {activeModel}
+                    local outerHit = workspace:Raycast(outerRayOrigin, -perpDir * 10, outerRayParams)
+                    local outerPos = outerHit and outerHit.Position or (innerPos + perpDir * 1.5)
+                    
+                    drawGhostLine(pathStartFlat, perpDir, (outerPos - pathStartFlat).Magnitude, rainbowColor, tableY, Enum.Material.SmoothPlastic, 0.5)
+                    drawGhostBall(outerPos, Color3.fromRGB(200, 200, 200), tableY, ballRadius)
+                end
+                
+                -- [[ PURE MATHEMATICAL REFLECTION ]] --
+                local newDir = currentDir - 2 * dot * wallNormal
                 currentDir = newDir.Unit
+                
                 currentPos = impactPos + wallNormal * 0.02 + currentDir * 0.05
                 ignoreBall = nil
             else
@@ -759,10 +899,67 @@ local function updateHighlights()
     
     simulatePath(activeCueBall.Position, aimDir, true, activeCueBall, 4, Color3.fromRGB(255, 255, 255), totalDistance)
     
-    if statusLabel.Text ~= currentStatusText then statusLabel.Text = currentStatusText end
+    if tempUnfoldedStart and tempUnfoldedDir then
+        unfoldedStartPos = tempUnfoldedStart
+        unfoldedDirection = tempUnfoldedDir
+        unfoldedDistance = tempUnfoldedDist
+    end
+    
+    -- Status text update
+    if inGameHookUsed then
+        statusLabel.Text = string.format("Hook Active (%d Ext)", extLineCount)
+        statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+    elseif firstWallAngle then
+        statusLabel.Text = string.format("Angle: %.1f° (%d Rails)", firstWallAngle, #cachedCushionWalls)
+        statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+    else
+        statusLabel.Text = string.format("Online | %d Rails Cached", #cachedCushionWalls)
+        statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+    end
 end
 
--- [[ STATUS CONTROL ]] --
+-- [[ BUTTON LOGIC ]] --
+calcBtn.MouseButton1Click:Connect(function()
+    isCalculating = not isCalculating
+    if isCalculating then
+        calcBtn.Text = "Calculate: ON"
+        calcBtn.TextColor3 = Color3.fromRGB(0, 255, 0)
+        
+        if unfoldedStartPos and unfoldedDirection and unfoldedDistance then
+            calculatedLinePart = Instance.new("Part")
+            calculatedLinePart.Anchored = true
+            calculatedLinePart.CanCollide = false
+            calculatedLinePart.CanQuery = false
+            
+            local flatStart = Vector3.new(unfoldedStartPos.X, unfoldedStartPos.Y, unfoldedStartPos.Z)
+            local flatEnd = flatStart + (unfoldedDirection * unfoldedDistance)
+            local dist = unfoldedDistance
+            
+            if dist > 0.01 then
+                calculatedLinePart.Size = Vector3.new(0.12, 0.12, dist)
+                calculatedLinePart.CFrame = CFrame.lookAt(flatStart + (flatEnd - flatStart)/2, flatEnd)
+                calculatedLinePart.Material = Enum.Material.SmoothPlastic
+                calculatedLinePart.Transparency = 0.5
+                calculatedLinePart.Parent = workspace
+                
+                task.spawn(function()
+                    while isCalculating and calculatedLinePart and calculatedLinePart.Parent do
+                        calculatedLinePart.Color = Color3.fromHSV((os.clock() % 2) / 2, 1, 1)
+                        task.wait()
+                    end
+                end)
+            end
+        end
+    else
+        calcBtn.Text = "Calculate: OFF"
+        calcBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        if calculatedLinePart then
+            calculatedLinePart:Destroy()
+            calculatedLinePart = nil
+        end
+    end
+end)
+
 local function setStatusOnline()
     if isHighlighting then return end
     isHighlighting = true
@@ -773,14 +970,17 @@ local function setStatusOnline()
     
     task.spawn(function()
         refreshCache()
+        cachedCushionWalls = getClosest6CushionWalls()
         while isHighlighting and currentSessionId == thisSession do
             task.wait(2)
-            if isHighlighting and currentSessionId == thisSession then refreshCache() end
+            if isHighlighting and currentSessionId == thisSession then 
+                refreshCache()
+                cachedCushionWalls = getClosest6CushionWalls()
+            end
         end
     end)
     
     table.insert(activeConnections, RunService.RenderStepped:Connect(updateHighlights))
-    table.insert(activeConnections, RunService.Heartbeat:Connect(monitorPhysics))
 end
 
 local function setStatusOffline()
@@ -788,8 +988,22 @@ local function setStatusOffline()
     currentSessionId = currentSessionId + 1
     statusLabel.Text = "Status: Offline"
     statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+    
     clearGhostVisuals()
     hideTrajectories()
+    hideAllCustomLines()
+    restoreAll()
+    
+    if isCalculating then
+        isCalculating = false
+        calcBtn.Text = "Calculate: OFF"
+        calcBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        if calculatedLinePart then
+            calculatedLinePart:Destroy()
+            calculatedLinePart = nil
+        end
+    end
+    
     for _, connection in pairs(activeConnections) do
         if connection and connection.Disconnect then connection:Disconnect() end
     end
@@ -800,6 +1014,8 @@ local function cleanup()
     setStatusOffline()
     for _, p in pairs(trajectoryParts) do p:Destroy() end
     clearGhostVisuals()
+    clearCustomLines()
+    if customFolder then customFolder:Destroy() end
     screenGui:Destroy()
 end
 
