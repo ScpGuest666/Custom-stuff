@@ -5,7 +5,7 @@ local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
 
--- Determine GUI parent (CoreGui / gethui / PlayerGui)
+-- Determine GUI parent
 local guiParent
 if type(gethui) == "function" then
     guiParent = gethui()
@@ -69,11 +69,171 @@ local onBtn = createButton("OnBtn", "On", 10, 20, 80, 30)
 local offBtn = createButton("OffBtn", "Off", 110, 20, 80, 30)
 local destroyBtn = createButton("DestroyBtn", "Destroy", 20, 60, 160, 30)
 
--- ==================== ACCURATE TRAJECTORY DETECTION & RAINBOW ====================
+-- ==================== SMART DYNAMIC FILTER & INDIVIDUAL BILLBOARDS ====================
 local isTracking = false
-local detectConnection = nil
+local renderConnection = nil
+local lastScan = 0
+local SCAN_INTERVAL = 0.2
 
--- Filter: ignore player character models and accessories
+-- Tracking tables
+local trackedObjects = {}      -- [instance] = { billboard = ..., anchor = ..., lastPos = Vector3, moveScore = number }
+local originalProperties = {}  -- [instance] = { saved props }
+
+-- Save original appearance
+local function saveOriginal(inst)
+    if originalProperties[inst] then return end
+
+    if inst:IsA("Beam") then
+        originalProperties[inst] = {
+            Color = inst.Color,
+            LightEmission = inst.LightEmission,
+            LightInfluence = inst.LightInfluence
+        }
+    elseif inst:IsA("LineHandleAdornment") or inst:IsA("CylinderHandleAdornment") or inst:IsA("SphereHandleAdornment") then
+        originalProperties[inst] = {
+            Color3 = inst.Color3
+        }
+    elseif inst:IsA("BasePart") then
+        originalProperties[inst] = {
+            Color = inst.Color,
+            Material = inst.Material
+        }
+    end
+end
+
+-- Restore individual object
+local function restoreObject(inst)
+    local props = originalProperties[inst]
+    if props and inst and inst.Parent then
+        pcall(function()
+            for prop, val in pairs(props) do
+                inst[prop] = val
+            end
+        end)
+    end
+    originalProperties[inst] = nil
+end
+
+-- Remove billboard for a specific object
+local function removeIndividualBillboard(inst)
+    local data = trackedObjects[inst]
+    if data then
+        if data.billboard then data.billboard:Destroy() end
+        if data.anchor then data.anchor:Destroy() end
+        trackedObjects[inst] = nil
+    end
+end
+
+-- Remove all billboards and restore colors
+local function cleanupAll()
+    for inst, _ in pairs(trackedObjects) do
+        removeIndividualBillboard(inst)
+        restoreObject(inst)
+    end
+    table.clear(trackedObjects)
+    table.clear(originalProperties)
+end
+
+-- Get current 3D position of an object / line
+local function getObjectWorldPos(inst)
+    if inst:IsA("Beam") and inst.Attachment0 and inst.Attachment1 then
+        return (inst.Attachment0.WorldPosition + inst.Attachment1.WorldPosition) / 2
+    elseif inst:IsA("BasePart") then
+        return inst.Position
+    elseif inst:IsA("LineHandleAdornment") or inst:IsA("CylinderHandleAdornment") or inst:IsA("SphereHandleAdornment") then
+        local ad = inst.Adornee
+        if ad then
+            return ad:IsA("BasePart") and ad.Position or (ad:IsA("Attachment") and ad.WorldPosition)
+        end
+    end
+    return nil
+end
+
+-- Create or update an INDIVIDUAL billboard directly on this specific line
+local function updateIndividualBillboard(inst, worldPos, isTrueLine)
+    local data = trackedObjects[inst]
+    if not data then
+        data = {
+            anchor = nil,
+            billboard = nil,
+            lastPos = worldPos,
+            moveScore = 0
+        }
+        trackedObjects[inst] = data
+    end
+
+    -- Create / position 3D anchor part
+    if not data.anchor or not data.anchor.Parent then
+        data.anchor = Instance.new("Part")
+        data.anchor.Name = "LineAnchor_" .. inst.Name
+        data.anchor.Size = Vector3.new(0.1, 0.1, 0.1)
+        data.anchor.Transparency = 1
+        data.anchor.Anchored = true
+        data.anchor.CanCollide = false
+        data.anchor.Parent = Workspace.CurrentCamera or Workspace
+    end
+    data.anchor.Position = worldPos
+
+    -- Create individual BillboardGui
+    if not data.billboard or not data.billboard.Parent then
+        local bb = Instance.new("BillboardGui")
+        bb.Name = "LineBillboard_" .. inst.Name
+        -- Sized in studs: shrinks and expands with distance
+        bb.Size = UDim2.new(5.5, 0, 2.2, 0)
+        bb.StudsOffset = Vector3.new(0, 1.2, 0)
+        bb.AlwaysOnTop = true
+        bb.Adornee = data.anchor
+        bb.Parent = guiParent
+
+        local bg = Instance.new("Frame")
+        bg.Name = "BG"
+        bg.Size = UDim2.new(1, 0, 1, 0)
+        bg.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+        bg.BackgroundTransparency = 0.2
+        bg.BorderSizePixel = 2
+        bg.Parent = bb
+
+        local lbl = Instance.new("TextLabel")
+        lbl.Name = "InfoLabel"
+        lbl.Size = UDim2.new(1, -8, 1, -8)
+        lbl.Position = UDim2.new(0, 4, 0, 4)
+        lbl.BackgroundTransparency = 1
+        lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+        lbl.TextScaled = true
+        lbl.Font = Enum.Font.SourceSansBold
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.TextYAlignment = Enum.TextYAlignment.Top
+        lbl.Parent = bg
+
+        data.billboard = bb
+    end
+
+    -- Update info text & border
+    local bg = data.billboard:FindFirstChild("BG")
+    local lbl = bg and bg:FindFirstChild("InfoLabel")
+    if bg and lbl then
+        if isTrueLine then
+            bg.BorderColor3 = Color3.fromRGB(0, 255, 0)
+            lbl.Text = string.format(
+                "✅ [TRUE LINE]\n• Name: %s\n• Class: %s\n• Parent: %s\n• Path: %s",
+                inst.Name,
+                inst.ClassName,
+                inst.Parent and inst.Parent.Name or "None",
+                inst:GetFullName()
+            )
+        else
+            bg.BorderColor3 = Color3.fromRGB(255, 170, 0)
+            lbl.Text = string.format(
+                "🔍 [CANDIDATE]\n• Name: %s\n• Class: %s\n• Parent: %s",
+                inst.Name,
+                inst.ClassName,
+                inst.Parent and inst.Parent.Name or "None"
+            )
+        end
+    end
+end
+
+-- Filter helpers
 local function isCharacter(inst)
     local model = inst:FindFirstAncestorOfClass("Model")
     while model do
@@ -85,17 +245,13 @@ local function isCharacter(inst)
     return false
 end
 
--- Filter: ignore static room building walls/floors
 local function isRoomGeometry(inst)
     local path = string.lower(inst:GetFullName())
-    if string.find(path, "lobby") or string.find(path, "room") or string.find(path, "wall") or string.find(path, "floor") or string.find(path, "building") then
-        return true
-    end
-    return false
+    return string.find(path, "lobby") or string.find(path, "wall") or string.find(path, "ceiling") or string.find(path, "floor") or string.find(path, "building")
 end
 
--- Collects active trajectory objects in the table view
-local function findTrajectoryVisuals()
+-- Scan candidate trajectory objects
+local function scanCandidates()
     local camera = Workspace.CurrentCamera
     if not camera then return {} end
 
@@ -103,53 +259,57 @@ local function findTrajectoryVisuals()
     local camLook = camera.CFrame.LookVector
     local results = {}
 
-    local function testCandidate(inst, pos)
-        if not pos then return false end
-        if isCharacter(inst) or isRoomGeometry(inst) then return false end
+    local function evaluate(inst, pos, isFlat)
+        if not pos or not isFlat then return end
+        if isCharacter(inst) or isRoomGeometry(inst) or string.find(inst.Name, "LineAnchor_") then return end
 
         local offset = (pos - camPos)
         local dist = offset.Magnitude
 
-        -- Table trajectory lines are strictly within 2 to 40 studs of the camera
-        if dist >= 2 and dist <= 40 and camLook:Dot(offset.Unit) > 0.4 then
-            table.insert(results, {object = inst, distance = dist})
-            return true
+        -- Must be in front of camera on pool table (2 to 35 studs)
+        if dist >= 2 and dist <= 35 and camLook:Dot(offset.Unit) > 0.35 then
+            table.insert(results, { object = inst, pos = pos })
         end
-        return false
     end
 
-    -- 1. Scan CurrentCamera (client-side raycast visuals are often parented here)
+    -- Scan Camera
     for _, item in ipairs(camera:GetDescendants()) do
         if item:IsA("Beam") and item.Enabled and item.Attachment0 and item.Attachment1 then
-            testCandidate(item, (item.Attachment0.WorldPosition + item.Attachment1.WorldPosition) / 2)
-        elseif (item:IsA("LineHandleAdornment") or item:IsA("CylinderHandleAdornment") or item:IsA("SphereHandleAdornment")) and item.Visible then
-            local ad = item.Adornee
-            local pos = ad and (ad:IsA("BasePart") and ad.Position or (ad:IsA("Attachment") and ad.WorldPosition)) or (camPos + camLook * 8)
-            testCandidate(item, pos)
+            local p0 = item.Attachment0.WorldPosition
+            local p1 = item.Attachment1.WorldPosition
+            local delta = (p1 - p0)
+            local dY = math.abs(delta.Y)
+            local isFlat = (dY <= 0.8) and (delta.Magnitude > 0.5) and (dY / delta.Magnitude < 0.25)
+            evaluate(item, (p0 + p1) / 2, isFlat)
         elseif item:IsA("BasePart") and item.Transparency < 0.95 then
-            testCandidate(item, item.Position)
+            local isFlat = math.abs(item.CFrame.LookVector.Y) < 0.4 or math.abs(item.CFrame.RightVector.Y) < 0.4
+            evaluate(item, item.Position, isFlat)
+        elseif (item:IsA("LineHandleAdornment") or item:IsA("CylinderHandleAdornment") or item:IsA("SphereHandleAdornment")) and item.Visible then
+            local pos = getObjectWorldPos(item) or (camPos + camLook * 8)
+            evaluate(item, pos, true)
         end
     end
 
-    -- 2. Scan Workspace (Pool Table / Cue / Aim Guideline models)
+    -- Scan Workspace
     for _, item in ipairs(Workspace:GetDescendants()) do
         if not isCharacter(item) and not isRoomGeometry(item) then
-            local name = string.lower(item.Name)
-            local pName = item.Parent and string.lower(item.Parent.Name) or ""
-            local isAimName = string.find(name, "aim") or string.find(name, "guide") or string.find(name, "traj") or string.find(name, "line") or string.find(name, "ray") or string.find(name, "ghost") or string.find(name, "target") or string.find(name, "pointer") or string.find(name, "cue")
-                or string.find(pName, "aim") or string.find(pName, "guide") or string.find(pName, "traj") or string.find(pName, "line") or string.find(pName, "visual") or string.find(pName, "cue")
-
             if item:IsA("Beam") and item.Enabled and item.Attachment0 and item.Attachment1 then
-                testCandidate(item, (item.Attachment0.WorldPosition + item.Attachment1.WorldPosition) / 2)
+                local p0 = item.Attachment0.WorldPosition
+                local p1 = item.Attachment1.WorldPosition
+                local delta = (p1 - p0)
+                local dY = math.abs(delta.Y)
+                local isFlat = (dY <= 0.8) and (delta.Magnitude > 0.5) and (dY / delta.Magnitude < 0.25)
+                evaluate(item, (p0 + p1) / 2, isFlat)
             elseif (item:IsA("LineHandleAdornment") or item:IsA("CylinderHandleAdornment") or item:IsA("SphereHandleAdornment")) and item.Visible then
-                local ad = item.Adornee
-                local pos = ad and (ad:IsA("BasePart") and ad.Position or (ad:IsA("Attachment") and ad.WorldPosition))
-                if pos then testCandidate(item, pos) end
+                local pos = getObjectWorldPos(item)
+                if pos then evaluate(item, pos, true) end
             elseif item:IsA("BasePart") and item.Transparency < 0.95 then
-                -- Thin cylinder/box lines or specifically named trajectory parts
+                local name = string.lower(item.Name)
+                local isAimName = string.find(name, "aim") or string.find(name, "guide") or string.find(name, "traj") or string.find(name, "line") or string.find(name, "ghost") or string.find(name, "target")
                 local isThin = (item.Size.X <= 0.6 and item.Size.Y <= 0.6) or (item.Size.X <= 0.6 and item.Size.Z <= 0.6) or (item.Size.Y <= 0.6 and item.Size.Z <= 0.6)
-                if isAimName or isThin then
-                    testCandidate(item, item.Position)
+                local isFlat = math.abs(item.CFrame.LookVector.Y) < 0.4 or math.abs(item.CFrame.RightVector.Y) < 0.4
+                if (isAimName or isThin) and isFlat then
+                    evaluate(item, item.Position, true)
                 end
             end
         end
@@ -158,40 +318,90 @@ local function findTrajectoryVisuals()
     return results
 end
 
--- Applies dynamic rainbow color
-local function applyRainbow(targetList)
+-- Rainbow Color Application
+local function applyRainbow(target)
     local rainbowColor = Color3.fromHSV((tick() * 1.5) % 1, 1, 1)
-
-    for _, entry in ipairs(targetList) do
-        local obj = entry.object
-        pcall(function()
-            if obj:IsA("Beam") then
-                obj.Color = ColorSequence.new(rainbowColor)
-                obj.LightEmission = 1
-                obj.LightInfluence = 0
-            elseif obj:IsA("LineHandleAdornment") or obj:IsA("CylinderHandleAdornment") or obj:IsA("SphereHandleAdornment") then
-                obj.Color3 = rainbowColor
-            elseif obj:IsA("BasePart") then
-                obj.Color = rainbowColor
-                obj.Material = Enum.Material.Neon
-            end
-        end)
-    end
+    pcall(function()
+        if target:IsA("Beam") then
+            target.Color = ColorSequence.new(rainbowColor)
+            target.LightEmission = 1
+            target.LightInfluence = 0
+        elseif target:IsA("LineHandleAdornment") or target:IsA("CylinderHandleAdornment") or target:IsA("SphereHandleAdornment") then
+            target.Color3 = rainbowColor
+        elseif target:IsA("BasePart") then
+            target.Color = rainbowColor
+            target.Material = Enum.Material.Neon
+        end
+    end)
 end
 
--- Detection loop
+-- Main Loop: Tracking + Swivel Movement Signature Filter
 local function startDetection()
-    if detectConnection then detectConnection:Disconnect() end
+    if renderConnection then renderConnection:Disconnect() end
 
-    detectConnection = RunService.RenderStepped:Connect(function()
+    renderConnection = RunService.RenderStepped:Connect(function()
         if not isTracking then return end
 
-        local visuals = findTrajectoryVisuals()
+        local now = tick()
+        if now - lastScan > SCAN_INTERVAL then
+            lastScan = now
+            local candidates = scanCandidates()
+            local activeSet = {}
 
-        if #visuals > 0 then
-            applyRainbow(visuals)
-            status.Text = "Status: Line Detected"
-            status.TextColor3 = Color3.fromRGB(0, 255, 0)
+            for _, cand in ipairs(candidates) do
+                local obj = cand.object
+                local curPos = cand.pos
+                activeSet[obj] = true
+
+                saveOriginal(obj)
+
+                -- Check dynamic movement (swivel detection)
+                local data = trackedObjects[obj]
+                local isMoving = false
+                if data and data.lastPos then
+                    local deltaMove = (curPos - data.lastPos).Magnitude
+                    if deltaMove > 0.02 then
+                        data.moveScore = math.min((data.moveScore or 0) + 1, 10)
+                    else
+                        data.moveScore = math.max((data.moveScore or 0) - 0.2, 0)
+                    end
+                    data.lastPos = curPos
+                    isMoving = (data.moveScore > 1)
+                end
+
+                updateIndividualBillboard(obj, curPos, isMoving)
+            end
+
+            -- Clean up elements that disappeared
+            for oldObj, _ in pairs(trackedObjects) do
+                if not activeSet[oldObj] then
+                    removeIndividualBillboard(oldObj)
+                    restoreObject(oldObj)
+                end
+            end
+        end
+
+        -- Rainbow updates and status text
+        local count = 0
+        local trueCount = 0
+        for obj, data in pairs(trackedObjects) do
+            if obj and obj.Parent then
+                applyRainbow(obj)
+                count = count + 1
+                if data.moveScore and data.moveScore > 1 then
+                    trueCount = trueCount + 1
+                end
+            end
+        end
+
+        if count > 0 then
+            if trueCount > 0 then
+                status.Text = string.format("Status: True Line Active (%d)", trueCount)
+                status.TextColor3 = Color3.fromRGB(0, 255, 0)
+            else
+                status.Text = string.format("Status: Tracking (%d Lines)", count)
+                status.TextColor3 = Color3.fromRGB(255, 200, 0)
+            end
         else
             status.Text = "Status: Waiting for Turn"
             status.TextColor3 = Color3.fromRGB(255, 170, 0)
@@ -199,11 +409,13 @@ local function startDetection()
     end)
 end
 
+-- Stop Detection & Revert Colors
 local function stopDetection()
-    if detectConnection then
-        detectConnection:Disconnect()
-        detectConnection = nil
+    if renderConnection then
+        renderConnection:Disconnect()
+        renderConnection = nil
     end
+    cleanupAll()
     status.Text = "Status: Offline"
     status.TextColor3 = Color3.fromRGB(255, 0, 0)
 end
