@@ -1,0 +1,226 @@
+-- Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
+-- Determine GUI parent (CoreGui / gethui / PlayerGui)
+local guiParent
+if type(gethui) == "function" then
+    guiParent = gethui()
+else
+    local success = pcall(function()
+        return game:GetService("CoreGui").Name
+    end)
+    if success then
+        guiParent = game:GetService("CoreGui")
+    else
+        guiParent = player:WaitForChild("PlayerGui")
+    end
+end
+
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "Gui_" .. math.random(10000, 99999)
+screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 2147483647
+screenGui.IgnoreGuiInset = true
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+screenGui.Parent = guiParent
+
+-- Main draggable frame
+local mainFrame = Instance.new("Frame")
+mainFrame.Parent = screenGui
+mainFrame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+mainFrame.Size = UDim2.new(0, 200, 0, 100)
+mainFrame.Position = UDim2.new(0.3, 0, 0.5, -50)
+mainFrame.Draggable = true
+mainFrame.Active = true
+
+-- Status label
+local status = Instance.new("TextLabel")
+status.Parent = mainFrame
+status.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+status.Size = UDim2.new(0, 200, 0, 30)
+status.Position = UDim2.new(0, 0, 0, -30)
+status.Text = "Status: Offline"
+status.TextColor3 = Color3.fromRGB(255, 0, 0)
+status.TextScaled = true
+
+-- Helper to create buttons
+local function createButton(name, text, x, y, width, height)
+    local btn = Instance.new("TextButton")
+    btn.Name = name
+    btn.Parent = mainFrame
+    btn.Text = text
+    btn.Size = UDim2.new(0, width, 0, height)
+    btn.Position = UDim2.new(0, x, 0, y)
+    btn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextScaled = true
+    btn.AutoButtonColor = true
+    btn.BorderSizePixel = 0
+    return btn
+end
+
+-- Create buttons
+local onBtn = createButton("OnBtn", "On", 10, 20, 80, 30)
+local offBtn = createButton("OffBtn", "Off", 110, 20, 80, 30)
+local destroyBtn = createButton("DestroyBtn", "Destroy", 20, 60, 160, 30)
+
+-- ==================== ACCURATE TRAJECTORY DETECTION & RAINBOW ====================
+local isTracking = false
+local detectConnection = nil
+
+-- Filter: ignore player character models and accessories
+local function isCharacter(inst)
+    local model = inst:FindFirstAncestorOfClass("Model")
+    while model do
+        if model:FindFirstChildOfClass("Humanoid") then
+            return true
+        end
+        model = model.Parent and model.Parent:FindFirstAncestorOfClass("Model")
+    end
+    return false
+end
+
+-- Filter: ignore static room building walls/floors
+local function isRoomGeometry(inst)
+    local path = string.lower(inst:GetFullName())
+    if string.find(path, "lobby") or string.find(path, "room") or string.find(path, "wall") or string.find(path, "floor") or string.find(path, "building") then
+        return true
+    end
+    return false
+end
+
+-- Collects active trajectory objects in the table view
+local function findTrajectoryVisuals()
+    local camera = Workspace.CurrentCamera
+    if not camera then return {} end
+
+    local camPos = camera.CFrame.Position
+    local camLook = camera.CFrame.LookVector
+    local results = {}
+
+    local function testCandidate(inst, pos)
+        if not pos then return false end
+        if isCharacter(inst) or isRoomGeometry(inst) then return false end
+
+        local offset = (pos - camPos)
+        local dist = offset.Magnitude
+
+        -- Table trajectory lines are strictly within 2 to 40 studs of the camera
+        if dist >= 2 and dist <= 40 and camLook:Dot(offset.Unit) > 0.4 then
+            table.insert(results, {object = inst, distance = dist})
+            return true
+        end
+        return false
+    end
+
+    -- 1. Scan CurrentCamera (client-side raycast visuals are often parented here)
+    for _, item in ipairs(camera:GetDescendants()) do
+        if item:IsA("Beam") and item.Enabled and item.Attachment0 and item.Attachment1 then
+            testCandidate(item, (item.Attachment0.WorldPosition + item.Attachment1.WorldPosition) / 2)
+        elseif (item:IsA("LineHandleAdornment") or item:IsA("CylinderHandleAdornment") or item:IsA("SphereHandleAdornment")) and item.Visible then
+            local ad = item.Adornee
+            local pos = ad and (ad:IsA("BasePart") and ad.Position or (ad:IsA("Attachment") and ad.WorldPosition)) or (camPos + camLook * 8)
+            testCandidate(item, pos)
+        elseif item:IsA("BasePart") and item.Transparency < 0.95 then
+            testCandidate(item, item.Position)
+        end
+    end
+
+    -- 2. Scan Workspace (Pool Table / Cue / Aim Guideline models)
+    for _, item in ipairs(Workspace:GetDescendants()) do
+        if not isCharacter(item) and not isRoomGeometry(item) then
+            local name = string.lower(item.Name)
+            local pName = item.Parent and string.lower(item.Parent.Name) or ""
+            local isAimName = string.find(name, "aim") or string.find(name, "guide") or string.find(name, "traj") or string.find(name, "line") or string.find(name, "ray") or string.find(name, "ghost") or string.find(name, "target") or string.find(name, "pointer") or string.find(name, "cue")
+                or string.find(pName, "aim") or string.find(pName, "guide") or string.find(pName, "traj") or string.find(pName, "line") or string.find(pName, "visual") or string.find(pName, "cue")
+
+            if item:IsA("Beam") and item.Enabled and item.Attachment0 and item.Attachment1 then
+                testCandidate(item, (item.Attachment0.WorldPosition + item.Attachment1.WorldPosition) / 2)
+            elseif (item:IsA("LineHandleAdornment") or item:IsA("CylinderHandleAdornment") or item:IsA("SphereHandleAdornment")) and item.Visible then
+                local ad = item.Adornee
+                local pos = ad and (ad:IsA("BasePart") and ad.Position or (ad:IsA("Attachment") and ad.WorldPosition))
+                if pos then testCandidate(item, pos) end
+            elseif item:IsA("BasePart") and item.Transparency < 0.95 then
+                -- Thin cylinder/box lines or specifically named trajectory parts
+                local isThin = (item.Size.X <= 0.6 and item.Size.Y <= 0.6) or (item.Size.X <= 0.6 and item.Size.Z <= 0.6) or (item.Size.Y <= 0.6 and item.Size.Z <= 0.6)
+                if isAimName or isThin then
+                    testCandidate(item, item.Position)
+                end
+            end
+        end
+    end
+
+    return results
+end
+
+-- Applies dynamic rainbow color
+local function applyRainbow(targetList)
+    local rainbowColor = Color3.fromHSV((tick() * 1.5) % 1, 1, 1)
+
+    for _, entry in ipairs(targetList) do
+        local obj = entry.object
+        pcall(function()
+            if obj:IsA("Beam") then
+                obj.Color = ColorSequence.new(rainbowColor)
+                obj.LightEmission = 1
+                obj.LightInfluence = 0
+            elseif obj:IsA("LineHandleAdornment") or obj:IsA("CylinderHandleAdornment") or obj:IsA("SphereHandleAdornment") then
+                obj.Color3 = rainbowColor
+            elseif obj:IsA("BasePart") then
+                obj.Color = rainbowColor
+                obj.Material = Enum.Material.Neon
+            end
+        end)
+    end
+end
+
+-- Detection loop
+local function startDetection()
+    if detectConnection then detectConnection:Disconnect() end
+
+    detectConnection = RunService.RenderStepped:Connect(function()
+        if not isTracking then return end
+
+        local visuals = findTrajectoryVisuals()
+
+        if #visuals > 0 then
+            applyRainbow(visuals)
+            status.Text = "Status: Line Detected"
+            status.TextColor3 = Color3.fromRGB(0, 255, 0)
+        else
+            status.Text = "Status: Waiting for Turn"
+            status.TextColor3 = Color3.fromRGB(255, 170, 0)
+        end
+    end)
+end
+
+local function stopDetection()
+    if detectConnection then
+        detectConnection:Disconnect()
+        detectConnection = nil
+    end
+    status.Text = "Status: Offline"
+    status.TextColor3 = Color3.fromRGB(255, 0, 0)
+end
+
+-- Button Connections
+onBtn.MouseButton1Click:Connect(function()
+    isTracking = true
+    startDetection()
+end)
+
+offBtn.MouseButton1Click:Connect(function()
+    isTracking = false
+    stopDetection()
+end)
+
+destroyBtn.MouseButton1Click:Connect(function()
+    isTracking = false
+    stopDetection()
+    screenGui:Destroy()
+end)
