@@ -1,0 +1,386 @@
+-- Wait for player & services
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
+-- [[ GUI PARENT SETUP ]] --
+local guiParent
+if type(gethui) == "function" then
+    guiParent = gethui()
+else
+    local success = pcall(function()
+        return game:GetService("CoreGui").Name
+    end)
+    if success then
+        guiParent = game:GetService("CoreGui")
+    else
+        guiParent = player:WaitForChild("PlayerGui")
+    end
+end
+
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "SearchGui_" .. math.random(10000, 99999)
+screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 2147483647
+screenGui.IgnoreGuiInset = true
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+screenGui.Parent = guiParent
+
+-- Main Draggable Frame (Exact 200x100 preserved)
+local mainFrame = Instance.new("Frame")
+mainFrame.Parent = screenGui
+mainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+mainFrame.Size = UDim2.new(0, 200, 0, 100)
+mainFrame.Position = UDim2.new(0.3, 0, 0.5, -50)
+mainFrame.Draggable = true
+mainFrame.Active = true
+mainFrame.ClipsDescendants = false
+
+-- Status Label
+local status = Instance.new("TextLabel")
+status.Parent = mainFrame
+status.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+status.Size = UDim2.new(0, 200, 0, 26)
+status.Position = UDim2.new(0, 0, 0, -26)
+status.Text = "Status: Offline"
+status.TextColor3 = Color3.fromRGB(255, 0, 0)
+status.TextScaled = true
+
+-- Helper to create buttons
+local function createButton(name, text, x, y, width, height)
+    local btn = Instance.new("TextButton")
+    btn.Name = name
+    btn.Parent = mainFrame
+    btn.Text = text
+    btn.Size = UDim2.new(0, width, 0, height)
+    btn.Position = UDim2.new(0, x, 0, y)
+    btn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextScaled = true
+    btn.AutoButtonColor = true
+    btn.BorderSizePixel = 0
+    return btn
+end
+
+local onBtn = createButton("OnBtn", "On", 8, 8, 88, 26)
+local offBtn = createButton("OffBtn", "Off", 104, 8, 88, 26)
+local destroyBtn = createButton("DestroyBtn", "Destroy", 8, 38, 184, 26)
+
+-- Search Box (Clears on focus automatically)
+local searchBox = Instance.new("TextBox")
+searchBox.Name = "SearchBox"
+searchBox.Parent = mainFrame
+searchBox.PlaceholderText = "Search item name..."
+searchBox.PlaceholderColor3 = Color3.fromRGB(170, 170, 170)
+searchBox.Text = ""
+searchBox.Size = UDim2.new(0, 184, 0, 24)
+searchBox.Position = UDim2.new(0, 8, 0, 68)
+searchBox.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+searchBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+searchBox.TextScaled = true
+searchBox.BorderSizePixel = 0
+searchBox.ClearTextOnFocus = true
+
+---------------------------------------------------------
+-- SEARCH, HIGHLIGHT & BILLBOARD ENGINE
+---------------------------------------------------------
+local isSystemActive = false
+local currentVisuals = {}
+local distanceUpdateConnection = nil
+
+-- Cleans existing highlights and billboards
+local function clearVisuals()
+    if distanceUpdateConnection then
+        distanceUpdateConnection:Disconnect()
+        distanceUpdateConnection = nil
+    end
+
+    for _, item in pairs(currentVisuals) do
+        if item.Highlight and item.Highlight.Parent then
+            item.Highlight:Destroy()
+        end
+        if item.Billboard and item.Billboard.Parent then
+            item.Billboard:Destroy()
+        end
+    end
+    table.clear(currentVisuals)
+end
+
+-- String normalizer (strips spaces, underscores, hyphens, lowercase)
+local function sanitize(str)
+    if type(str) ~= "string" then return "" end
+    return string.lower(str):gsub("[%s%p%c]", "")
+end
+
+-- Resolve the cleanest target (prevents lighting up entire houses/rooms)
+local function getPreciseTarget(instance)
+    if instance:IsA("Tool") then
+        return instance
+    end
+    
+    if instance:IsA("BasePart") then
+        local parent = instance.Parent
+        if parent and parent:IsA("Model") and parent ~= Workspace and not parent:IsA("Workspace") then
+            local childParts = 0
+            for _, c in ipairs(parent:GetChildren()) do
+                if c:IsA("BasePart") then
+                    childParts = childParts + 1
+                    if childParts > 8 then break end
+                end
+            end
+            if childParts <= 8 then
+                return parent
+            end
+        end
+        return instance
+    end
+
+    if instance:IsA("Model") then
+        local childParts = 0
+        for _, c in ipairs(instance:GetChildren()) do
+            if c:IsA("BasePart") then
+                childParts = childParts + 1
+                if childParts > 8 then break end
+            end
+        end
+        if childParts <= 8 then
+            return instance
+        else
+            return instance:FindFirstChildWhichIsA("BasePart") or instance
+        end
+    end
+
+    return nil
+end
+
+-- Determine a reliable world position/part for adorning BillboardGuis
+local function getAdorneePart(target)
+    if target:IsA("BasePart") then
+        return target
+    elseif target:IsA("Model") then
+        return target.PrimaryPart or target:FindFirstChildWhichIsA("BasePart", true)
+    elseif target:IsA("Tool") then
+        return target:FindFirstChild("Handle") or target:FindFirstChildWhichIsA("BasePart", true)
+    end
+    return nil
+end
+
+-- Check all possible metadata
+local function testMatch(obj, queryClean)
+    -- 1. Direct Name
+    if string.find(sanitize(obj.Name), queryClean, 1, true) then
+        return true, obj.Name
+    end
+
+    -- 2. ProximityPrompt text
+    if obj:IsA("ProximityPrompt") then
+        local objText = obj.ObjectText
+        local actText = obj.ActionText
+        if string.find(sanitize(objText), queryClean, 1, true) then
+            return true, objText ~= "" and objText or obj.Name
+        end
+        if string.find(sanitize(actText), queryClean, 1, true) then
+            return true, actText ~= "" and actText or obj.Name
+        end
+    end
+
+    -- 3. StringValue or ObjectValue
+    if obj:IsA("StringValue") then
+        if string.find(sanitize(obj.Value), queryClean, 1, true) then
+            return true, obj.Value
+        end
+    end
+
+    -- 4. Attributes
+    for attrName, attrVal in pairs(obj:GetAttributes()) do
+        if type(attrVal) == "string" and string.find(sanitize(attrVal), queryClean, 1, true) then
+            return true, tostring(attrVal)
+        end
+    end
+
+    return false, nil
+end
+
+-- Create Billboard with natural 3D world scaling
+local function createDynamicBillboard(adorneePart, displayName)
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "SearchMarker_" .. displayName
+    billboard.Adornee = adorneePart
+    billboard.AlwaysOnTop = true
+    
+    -- Using Studs (Scale) so the GUI expands/shrinks naturally with distance
+    billboard.Size = UDim2.new(0, 140, 0, 45)
+    billboard.StudsOffset = Vector3.new(0, 2.2, 0)
+    billboard.SizeOffset = Vector2.new(0, 0)
+    billboard.MaxDistance = 1500
+
+    -- Background frame
+    local tagFrame = Instance.new("Frame")
+    tagFrame.Parent = billboard
+    tagFrame.Size = UDim2.new(1, 0, 1, 0)
+    tagFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    tagFrame.BackgroundTransparency = 0.35
+    tagFrame.BorderSizePixel = 0
+
+    local uiCorner = Instance.new("UICorner")
+    uiCorner.CornerRadius = UDim.new(0, 6)
+    uiCorner.Parent = tagFrame
+
+    local uiStroke = Instance.new("UIStroke")
+    uiStroke.Color = Color3.fromRGB(255, 215, 0)
+    uiStroke.Thickness = 1.5
+    uiStroke.Parent = tagFrame
+
+    -- Item Name Label
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Name = "Title"
+    titleLabel.Parent = tagFrame
+    titleLabel.Size = UDim2.new(1, 0, 0.55, 0)
+    titleLabel.Position = UDim2.new(0, 0, 0, 2)
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Text = displayName
+    titleLabel.TextColor3 = Color3.fromRGB(255, 225, 50)
+    titleLabel.TextScaled = true
+    titleLabel.Font = Enum.Font.SourceSansBold
+
+    -- Distance / Subtitle Label
+    local distLabel = Instance.new("TextLabel")
+    distLabel.Name = "Distance"
+    distLabel.Parent = tagFrame
+    distLabel.Size = UDim2.new(1, 0, 0.4, 0)
+    distLabel.Position = UDim2.new(0, 0, 0.55, 0)
+    distLabel.BackgroundTransparency = 1
+    distLabel.Text = "..."
+    distLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    distLabel.TextScaled = true
+    distLabel.Font = Enum.Font.SourceSans
+
+    billboard.Parent = guiParent
+    return billboard, distLabel
+end
+
+-- Thorough search execution
+local function performSearch(query)
+    clearVisuals()
+    if not isSystemActive or query == "" or query:match("^%s*$") then
+        return
+    end
+
+    local cleanQuery = sanitize(query)
+    local matchesFound = 0
+    local processedTargets = {}
+
+    local searchLocations = { Workspace }
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Character then table.insert(searchLocations, p.Character) end
+        local bp = p:FindFirstChild("Backpack")
+        if bp then table.insert(searchLocations, bp) end
+    end
+
+    for _, container in ipairs(searchLocations) do
+        for _, inst in ipairs(container:GetDescendants()) do
+            if player.Character and inst:IsDescendantOf(player.Character) then
+                continue
+            end
+
+            local isMatch, matchedName = testMatch(inst, cleanQuery)
+            if isMatch then
+                local target = nil
+                if inst:IsA("ProximityPrompt") or inst:IsA("ValueBase") then
+                    target = getPreciseTarget(inst.Parent)
+                else
+                    target = getPreciseTarget(inst)
+                end
+
+                if target and not processedTargets[target] then
+                    processedTargets[target] = true
+
+                    -- 1. Create Highlight
+                    local highlight = Instance.new("Highlight")
+                    highlight.Name = "SearchHL_" .. target.Name
+                    highlight.Adornee = target
+                    highlight.FillColor = Color3.fromRGB(255, 215, 0)
+                    highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+                    highlight.FillTransparency = 0.25
+                    highlight.OutlineTransparency = 0
+                    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    highlight.Parent = target
+
+                    -- 2. Create Dynamic World Billboard
+                    local adorneePart = getAdorneePart(target)
+                    local billboard, distLabel = nil, nil
+                    if adorneePart then
+                        billboard, distLabel = createDynamicBillboard(adorneePart, matchedName or target.Name)
+                    end
+
+                    table.insert(currentVisuals, {
+                        Highlight = highlight,
+                        Billboard = billboard,
+                        DistLabel = distLabel,
+                        Adornee = adorneePart
+                    })
+
+                    matchesFound = matchesFound + 1
+                end
+            end
+        end
+    end
+
+    -- Real-time distance update loop
+    if matchesFound > 0 then
+        status.Text = "Found: " .. matchesFound .. " match(es)"
+        status.TextColor3 = Color3.fromRGB(0, 255, 128)
+
+        distanceUpdateConnection = RunService.RenderStepped:Connect(function()
+            local cam = Workspace.CurrentCamera
+            local camPos = cam and cam.CFrame.Position
+            if not camPos then return end
+
+            for _, item in ipairs(currentVisuals) do
+                if item.DistLabel and item.Adornee and item.Adornee.Parent then
+                    local dist = math.floor((item.Adornee.Position - camPos).Magnitude)
+                    item.DistLabel.Text = dist .. " studs"
+                end
+            end
+        end)
+    else
+        status.Text = "No items found"
+        status.TextColor3 = Color3.fromRGB(255, 165, 0)
+    end
+end
+
+-- Toggle functions
+local function setOnline()
+    isSystemActive = true
+    status.Text = "Status: Online"
+    status.TextColor3 = Color3.fromRGB(0, 255, 0)
+    if searchBox.Text ~= "" then
+        performSearch(searchBox.Text)
+    end
+end
+
+local function setOffline()
+    isSystemActive = false
+    clearVisuals()
+    status.Text = "Status: Offline"
+    status.TextColor3 = Color3.fromRGB(255, 0, 0)
+end
+
+-- Event Listeners
+onBtn.MouseButton1Click:Connect(setOnline)
+offBtn.MouseButton1Click:Connect(setOffline)
+destroyBtn.MouseButton1Click:Connect(function()
+    clearVisuals()
+    screenGui:Destroy()
+end)
+
+searchBox.FocusLost:Connect(function()
+    if isSystemActive then
+        performSearch(searchBox.Text)
+    else
+        status.Text = "Turn ON to search"
+        status.TextColor3 = Color3.fromRGB(255, 165, 0)
+    end
+end)
