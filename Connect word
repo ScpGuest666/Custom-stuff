@@ -31,7 +31,7 @@ screenGui.Parent = guiParent
 -- [[ CONFIG: RED DOT & INPUT POSITION ADJUSTMENTS ]]
 -- ====================================================
 local POINTER_OFFSET_X = 0     -- Adjust Pointer X position in pixels
-local POINTER_OFFSET_Y = -30     -- Adjust Pointer Y position in pixels
+local POINTER_OFFSET_Y = 35     -- Adjust Pointer Y position in pixels
 local SWIPE_SPEED_DELAY = 0.045 -- Drag step delay (higher = slower)
 -- ====================================================
 
