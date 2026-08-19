@@ -28,11 +28,12 @@ screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
 screenGui.Parent = guiParent
 
 -- ====================================================
--- [[ CONFIG: RED DOT & INPUT POSITION ADJUSTMENTS ]]
+-- [[ CONFIG: POSITION OFFSETS & SPEED ADJUSTMENTS ]]
 -- ====================================================
-local POINTER_OFFSET_X = 0     -- Adjust Pointer X position in pixels
+local POINTER_OFFSET_X = 0      -- Adjust Pointer X position in pixels
 local POINTER_OFFSET_Y = 35     -- Adjust Pointer Y position in pixels
-local SWIPE_SPEED_DELAY = 0.045 -- Drag step delay (higher = slower)
+local SWIPE_SPEED_DELAY = 0.015 -- Drag step delay (Lower = Faster swipes)
+local POST_SUBMIT_DELAY = 0.40  -- Wait time for game to process/register word
 -- ====================================================
 
 -- Folder to hold line segments, effects, and virtual input visuals
@@ -97,7 +98,7 @@ inputLabel.Font = Enum.Font.GothamBold
 inputLabel.ZIndex = 2147483647
 Instance.new("UICorner", inputLabel).CornerRadius = UDim.new(0, 4)
 
--- Input Ripple / Pulse Animation Helper
+-- Input Ripple Animation Helper
 local function spawnInputRipple(x, y, color)
     local ripple = Instance.new("Frame")
     ripple.Name = "InputRipple"
@@ -114,18 +115,18 @@ local function spawnInputRipple(x, y, color)
     stroke.Color = color or Color3.fromRGB(0, 255, 200)
     stroke.Transparency = 0
 
-    local tweenInfo = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    local t1 = TweenService:Create(ripple, tweenInfo, { Size = UDim2.new(0, 50, 0, 50) })
+    local tweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local t1 = TweenService:Create(ripple, tweenInfo, { Size = UDim2.new(0, 48, 0, 48) })
     local t2 = TweenService:Create(stroke, tweenInfo, { Transparency = 1 })
     t1:Play()
     t2:Play()
 
-    task.delay(0.45, function()
+    task.delay(0.35, function()
         ripple:Destroy()
     end)
 end
 
--- Compact UI Frame (50% scale)
+-- Compact UI Frame
 local mainFrame = Instance.new("Frame")
 mainFrame.Parent = screenGui
 mainFrame.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
@@ -173,7 +174,7 @@ end
 -- Compact 3-button row: Scan | Fill | Auto
 local scanBtn = createBtn("Scan", UDim2.new(0, 4, 0, 110), UDim2.new(0.30, -2, 0, 18), Color3.fromRGB(0, 120, 215))
 local fillBtn = createBtn("Fill", UDim2.new(0.33, 2, 0, 110), UDim2.new(0.33, -2, 0, 18), Color3.fromRGB(0, 175, 100))
-local autoBtn = createBtn("Auto: ON", UDim2.new(0.68, 2, 0, 110), UDim2.new(0.32, -4, 0, 18), Color3.fromRGB(40, 160, 40))
+local autoBtn = createBtn("Auto: OFF", UDim2.new(0.68, 2, 0, 110), UDim2.new(0.32, -4, 0, 18), Color3.fromRGB(180, 50, 50))
 local destroyBtn = createBtn("Close", UDim2.new(0, 4, 0, 132), UDim2.new(1, -8, 0, 18), Color3.fromRGB(60, 60, 65))
 
 local activeVisualObjects = {}
@@ -184,6 +185,7 @@ local TOUCH_ID = 8823
 local isHoldingInput = false
 local lastInputX, lastInputY = 0, 0
 local isRoundActive = false
+local autoEnabled = false
 local usedWordsThisRound = {}
 local rejectedWords = {}
 local currentTopWord = nil
@@ -483,10 +485,10 @@ local function getTileCenter(tile)
 end
 
 -- ----------------------------------------------------
--- 5. Visible Virtual Input Auto-Fill (PC Mouse & Mobile Touch)
+-- 5. Fast, Visible Virtual Input Auto-Fill (PC Mouse & Mobile Touch)
 -- ----------------------------------------------------
 local function performVirtualDrag(path)
-    if not path or #path < 2 or isFilling then return end
+    if not path or #path < 2 or isFilling then return false end
     isFilling = true
 
     local pStart = getTileCenter(path[1])
@@ -503,28 +505,28 @@ local function performVirtualDrag(path)
     pointer.BackgroundColor3 = Color3.fromRGB(0, 255, 120)
     spawnInputRipple(startX, startY, Color3.fromRGB(0, 255, 200))
 
-    -- 1. Send Mouse & Touch Began (Simultaneous PC Mouse + Mobile Touch)
+    -- 1. Send Mouse & Touch Began
     pcall(function()
         VirtualInputManager:SendMouseMoveEvent(startX, startY, game)
         VirtualInputManager:SendMouseButtonEvent(startX, startY, 0, true, game, 0)
         VirtualInputManager:SendTouchEvent(TOUCH_ID, 0, startX, startY)
     end)
     isHoldingInput = true
-    task.wait(0.08)
+    task.wait(0.03)
 
     -- Force initial drag registration
     pcall(function()
         VirtualInputManager:SendMouseMoveEvent(startX, startY, game)
         VirtualInputManager:SendTouchEvent(TOUCH_ID, 1, startX, startY)
     end)
-    inputLabel.Text = "DRAGGING..."
-    task.wait(0.04)
+    inputLabel.Text = "SWIPING..."
+    task.wait(0.01)
 
-    -- 2. Visible drag across each letter tile
+    -- 2. Fast, visible drag across each letter tile
     for i = 1, #path - 1 do
         local p1 = getTileCenter(path[i])
         local p2 = getTileCenter(path[i + 1])
-        local steps = 8
+        local steps = 5 -- Snappy & fast step count
 
         for s = 1, steps do
             local alpha = s / steps
@@ -533,7 +535,6 @@ local function performVirtualDrag(path)
             local currentY = mid.Y + POINTER_OFFSET_Y
             lastInputX, lastInputY = currentX, currentY
 
-            -- Move virtual input pointer smoothly on screen
             virtualInputContainer.Position = UDim2.new(0, currentX, 0, currentY)
 
             pcall(function()
@@ -556,7 +557,7 @@ local function performVirtualDrag(path)
     inputRingStroke.Color = Color3.fromRGB(255, 100, 100)
     pointer.BackgroundColor3 = Color3.fromRGB(255, 40, 40)
     spawnInputRipple(endX, endY, Color3.fromRGB(255, 80, 80))
-    task.wait(0.08)
+    task.wait(0.03)
 
     -- 3. Release mouse & touch at the last letter
     pcall(function()
@@ -565,9 +566,10 @@ local function performVirtualDrag(path)
     end)
     isHoldingInput = false
 
-    task.wait(0.2)
+    task.wait(0.08)
     virtualInputContainer.Visible = false
     isFilling = false
+    return true
 end
 
 -- ----------------------------------------------------
@@ -676,13 +678,13 @@ local function showPath(word, path)
 
                     local tween = TweenService:Create(
                         arrow,
-                        TweenInfo.new(0.28, Enum.EasingStyle.Linear),
+                        TweenInfo.new(0.22, Enum.EasingStyle.Linear),
                         { Position = UDim2.new(0, p2.X, 0, p2.Y) }
                     )
                     tween:Play()
                     tween.Completed:Wait()
                 end
-                task.wait(0.4)
+                task.wait(0.3)
             end
         end)
     end
@@ -691,10 +693,7 @@ end
 -- ----------------------------------------------------
 -- 7. Main UI Updater
 -- ----------------------------------------------------
-local autoEnabled = true
-local updateUI = nil
-
-updateUI = function()
+local function updateUI()
     if not dictionaryLoaded or isFilling then return end
 
     local grid, size = readGrid()
@@ -757,8 +756,38 @@ updateUI = function()
 end
 
 -- ----------------------------------------------------
--- 8. Auto-Skip Rejected Words on User Manual Drag
+-- 8. Synchronized Auto-Fill & Validation Routine
 -- ----------------------------------------------------
+local function executeFillCurrent()
+    if isFilling or not isRoundActive or not currentTopPath or not currentTopWord then
+        return false
+    end
+
+    local candidateWord = currentTopWord
+    local candidatePath = currentTopPath
+    local prevWords = lastWordsCount
+    local prevScore = lastScoreValue
+
+    local success = performVirtualDrag(candidatePath)
+    if not success then return false end
+
+    -- Wait for the game to process submission and animate
+    task.wait(POST_SUBMIT_DELAY)
+    syncFoundWords()
+
+    -- Check if word was accepted
+    if usedWordsThisRound[candidateWord] or lastWordsCount > prevWords or lastScoreValue > prevScore then
+        usedWordsThisRound[candidateWord] = true
+    else
+        -- Word was invalid / not accepted by the game dictionary
+        rejectedWords[candidateWord] = true
+    end
+
+    pcall(updateUI)
+    return true
+end
+
+-- User manual drag rejection detection
 local isUserDragging = false
 
 UserInputService.InputBegan:Connect(function(input)
@@ -776,13 +805,11 @@ UserInputService.InputEnded:Connect(function(input)
             local prevWords = lastWordsCount
             local prevScore = lastScoreValue
 
-            task.delay(0.4, function()
+            task.delay(0.35, function()
                 syncFoundWords()
                 if not usedWordsThisRound[candidateToTest] and lastWordsCount == prevWords and lastScoreValue == prevScore then
                     rejectedWords[candidateToTest] = true
-                    if autoEnabled then
-                        pcall(updateUI)
-                    end
+                    pcall(updateUI)
                 end
             end)
         end
@@ -790,18 +817,12 @@ UserInputService.InputEnded:Connect(function(input)
 end)
 
 -- Button Listeners
-scanBtn.MouseButton1Click:Connect(updateUI)
+scanBtn.MouseButton1Click:Connect(function()
+    pcall(updateUI)
+end)
 
 fillBtn.MouseButton1Click:Connect(function()
-    if currentTopPath and isRoundActive and not isFilling then
-        task.spawn(function()
-            performVirtualDrag(currentTopPath)
-            task.wait(0.2)
-            if autoEnabled then
-                pcall(updateUI)
-            end
-        end)
-    end
+    task.spawn(executeFillCurrent)
 end)
 
 autoBtn.MouseButton1Click:Connect(function()
@@ -817,12 +838,20 @@ destroyBtn.MouseButton1Click:Connect(function()
     screenGui:Destroy()
 end)
 
--- Background loop (0.7s)
+-- Continuous Auto-Fill & Scanning Loop
 task.spawn(function()
     while true do
-        if autoEnabled and not isFilling then
+        if dictionaryLoaded and not isFilling then
             pcall(updateUI)
+
+            if autoEnabled and isRoundActive and currentTopPath then
+                executeFillCurrent()
+                task.wait(0.1)
+            else
+                task.wait(0.5)
+            end
+        else
+            task.wait(0.5)
         end
-        task.wait(0.7)
     end
 end)
