@@ -1,0 +1,634 @@
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
+local guiParent = (type(gethui) == "function" and gethui()) or game:GetService("CoreGui") or player:WaitForChild("PlayerGui")
+
+if guiParent:FindFirstChild("ContextoFastMobile") then
+    guiParent:FindFirstChild("ContextoFastMobile"):Destroy()
+end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "ContextoFastMobile"
+screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 2147483647
+screenGui.Parent = guiParent
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Parent = screenGui
+mainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+mainFrame.BorderSizePixel = 0
+mainFrame.Size = UDim2.new(0, 180, 0, 125) 
+mainFrame.Position = UDim2.new(0.5, -90, 0.55, 0)
+mainFrame.Draggable = true
+mainFrame.Active = true
+
+local bestDisplay = Instance.new("TextLabel")
+bestDisplay.Parent = mainFrame
+bestDisplay.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+bestDisplay.BorderSizePixel = 0
+bestDisplay.Size = UDim2.new(1, 0, 0, 22)
+bestDisplay.Position = UDim2.new(0, 0, 0, -45)
+bestDisplay.Text = "Best: None (∞)"
+bestDisplay.TextColor3 = Color3.fromRGB(255, 215, 0)
+bestDisplay.TextScaled = true
+bestDisplay.Font = Enum.Font.SourceSansBold
+
+local status = Instance.new("TextLabel")
+status.Parent = mainFrame
+status.BackgroundColor3 = Color3.fromRGB(32, 32, 32)
+status.BorderSizePixel = 0
+status.Size = UDim2.new(1, 0, 0, 22)
+status.Position = UDim2.new(0, 0, 0, -22)
+status.Text = "Ready"
+status.TextColor3 = Color3.fromRGB(0, 255, 150)
+status.TextScaled = true
+status.Font = Enum.Font.SourceSansBold
+
+local function createButton(name, text, x, y, width, height, color)
+    local btn = Instance.new("TextButton")
+    btn.Name = name
+    btn.Parent = mainFrame
+    btn.Text = text
+    btn.Size = UDim2.new(0, width, 0, height)
+    btn.Position = UDim2.new(0, x, 0, y)
+    btn.BackgroundColor3 = color or Color3.fromRGB(45, 45, 45)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextScaled = true
+    btn.Font = Enum.Font.SourceSansSemibold
+    btn.BorderSizePixel = 0
+    return btn
+end
+
+local solveBtn = createButton("SolveBtn", "Start", 5, 5, 82, 26, Color3.fromRGB(0, 120, 215))
+local stopBtn = createButton("StopBtn", "Stop", 93, 5, 82, 26, Color3.fromRGB(180, 50, 50))
+local resetBtn = createButton("ResetBtn", "New Round (Reset)", 5, 36, 170, 26, Color3.fromRGB(60, 60, 60))
+local closeBtn = createButton("CloseBtn", "Close GUI", 5, 67, 170, 26, Color3.fromRGB(35, 35, 35))
+
+----------------------------------------------------------------------
+-- 1. HTTP & MULTI-RELATIONAL API FETCHER
+----------------------------------------------------------------------
+local apiCache = {}
+
+local function httpGet(url)
+    local result = nil
+    pcall(function()
+        local req = (type(request) == "function" and request)
+            or (type(http_request) == "function" and http_request)
+            or (type(syn) == "table" and type(syn.request) == "function" and syn.request)
+            or (type(fluxus) == "table" and type(fluxus.request) == "function" and fluxus.request)
+
+        if req then
+            local res = req({Url = url, Method = "GET", Headers = {["User-Agent"] = "RobloxApp/1.0"}})
+            if res and (res.StatusCode == 200 or res.Status == 200) then result = res.Body end
+        elseif type(game.HttpGet) == "function" then
+            result = game:HttpGet(url)
+        end
+    end)
+    return result
+end
+
+local function fetchRelated(url)
+    local raw = httpGet(url)
+    local words = {}
+    if raw then
+        local success, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
+        if success and type(decoded) == "table" then
+            for _, item in ipairs(decoded) do
+                local w = tostring(item.word or ""):lower():gsub("[^%a]", "")
+                if #w >= 3 and #w <= 15 then
+                    table.insert(words, w)
+                end
+            end
+        end
+    end
+    return words
+end
+
+local function getCandidates(word, mode)
+    if apiCache[word] then return apiCache[word] end
+
+    local result = {}
+    local isEasy = (mode == "Easy" or mode == "Medium")
+    local m1 = isEasy and 30 or 60
+    local m2 = isEasy and 20 or 40
+    local m3 = isEasy and 15 or 30
+    local m4 = isEasy and 10 or 20
+
+    local encoded = HttpService:UrlEncode(word)
+
+    local urls = {
+        "https://api.datamuse.com/words?ml=" .. encoded .. "&max=" .. m1,      
+        "https://api.datamuse.com/words?rel_trg=" .. encoded .. "&max=" .. m2, 
+        "https://api.datamuse.com/words?rel_spc=" .. encoded .. "&max=" .. m3, 
+        "https://api.datamuse.com/words?rel_jja=" .. encoded .. "&max=" .. m4  
+    }
+
+    for _, url in ipairs(urls) do
+        local pool = fetchRelated(url)
+        for _, w in ipairs(pool) do
+            result[w] = true
+        end
+    end
+
+    local list = {}
+    for w in pairs(result) do table.insert(list, w) end
+    apiCache[word] = list
+    return list
+end
+
+local function getCompoundCandidates(hotWordsList)
+    if #hotWordsList < 2 then return {} end
+    local w1 = HttpService:UrlEncode(hotWordsList[1].word)
+    local w2 = HttpService:UrlEncode(hotWordsList[2].word)
+    
+    local url = "https://api.datamuse.com/words?ml=" .. w1 .. "&topics=" .. w2
+    if #hotWordsList >= 3 and hotWordsList[3].rank <= 500 then
+        url = url .. "," .. HttpService:UrlEncode(hotWordsList[3].word)
+    end
+    url = url .. "&max=40"
+    
+    local cacheKey = "comp_" .. w1 .. "_" .. w2
+    if apiCache[cacheKey] then return apiCache[cacheKey] end
+    
+    local res = fetchRelated(url)
+    apiCache[cacheKey] = res
+    return res
+end
+
+----------------------------------------------------------------------
+-- 2. STRICT VISIBILITY CHECKER
+----------------------------------------------------------------------
+local function isActuallyVisible(obj)
+    if not obj:IsA("GuiObject") then return false end
+    
+    -- Check if text is transparent
+    if obj:IsA("TextLabel") and obj.TextTransparency > 0.9 then return false end
+    
+    -- Check hierarchy visibility
+    local current = obj
+    while current and current ~= game do
+        if current:IsA("GuiObject") and not current.Visible then return false end
+        if current:IsA("CanvasGroup") and current.GroupTransparency > 0.9 then return false end
+        current = current.Parent
+    end
+    
+    -- Check if it's physically on the screen (ignores pooled off-screen UI)
+    local camera = workspace.CurrentCamera
+    if camera then
+        local pos = obj.AbsolutePosition
+        local size = obj.AbsoluteSize
+        local screenSize = camera.ViewportSize
+        
+        if pos.X + size.X < -100 or pos.X > screenSize.X + 100 or pos.Y + size.Y < -100 or pos.Y > screenSize.Y + 100 then
+            return false
+        end
+    end
+    
+    return true
+end
+
+----------------------------------------------------------------------
+-- 3. DYNAMIC BLACKLIST & SCRAPER
+----------------------------------------------------------------------
+local STATIC_BLACKLIST = {
+    ["hint"]=true, ["free"]=true, ["shop"]=true, ["robux"]=true, ["streak"]=true,
+    ["coins"]=true, ["wins"]=true, ["mode"]=true, ["hard"]=true, ["easy"]=true,
+    ["medium"]=true, ["impossible"]=true, ["today"]=true, ["server"]=true,
+    ["guess"]=true, ["guesses"]=true, ["word"]=true, ["contexto"]=true,
+    ["close"]=true, ["reset"]=true, ["start"]=true, ["youwon"]=true,
+    ["won"]=true, ["winner"]=true, ["notbad"]=true, ["victory"]=true, ["get"]=true
+}
+
+local function getDynamicBlacklist()
+    local list = {}
+    for k, v in pairs(STATIC_BLACKLIST) do list[k] = v end
+    for _, p in ipairs(Players:GetPlayers()) do
+        list[p.Name:lower()] = true
+        list[p.DisplayName:lower()] = true
+    end
+    return list
+end
+
+local function isLeaderboardElement(obj)
+    local current = obj
+    while current and current ~= game do
+        local name = current.Name:lower()
+        if name:find("leaderboard") or name:find("playerlist") or name:find("scoreboard") or name:find("ranking") then
+            return true
+        end
+        current = current.Parent
+    end
+    return false
+end
+
+local observedWords = {} 
+local currentGameMode = "Hard"
+
+local function scrapeBoard()
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if not playerGui then return end
+
+    local blacklist = getDynamicBlacklist()
+    local currentScan = {}
+
+    for _, label in ipairs(playerGui:GetDescendants()) do
+        if label:IsDescendantOf(screenGui) then continue end
+
+        if label:IsA("TextLabel") and label.Text and label.Text ~= "" and isActuallyVisible(label) then
+            local modeMatch = label.Text:match("Mode:%s*(%a+)")
+            if modeMatch then currentGameMode = modeMatch end
+
+            if not isLeaderboardElement(label) then
+                local cleanLabelText = label.Text:gsub("%s+", "")
+                local rankStr = cleanLabelText:match("^#(%d+)$")
+                
+                if rankStr then
+                    local rank = tonumber(rankStr)
+                    local parent = label.Parent
+                    
+                    if parent and rank and rank > 0 then
+                        for _, sibling in ipairs(parent:GetChildren()) do
+                            if sibling:IsA("TextLabel") and sibling ~= label and sibling.Text ~= "" then
+                                local rawText = sibling.Text:lower():gsub("%s*x%s*%d+$", ""):match("^%s*(.-)%s*$") or ""
+
+                                if rawText:match("^[a-z]+$") and #rawText >= 2 and not blacklist[rawText] then
+                                    currentScan[rawText] = rank
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    for w, r in pairs(currentScan) do
+        if not observedWords[w] or r < observedWords[w].rank then
+            observedWords[w] = {rank = r, time = tick()}
+        else
+            if r == observedWords[w].rank then
+                observedWords[w].time = tick()
+            end
+        end
+    end
+end
+
+----------------------------------------------------------------------
+-- 4. GAME STATE DETECTOR (Wipes & Popups)
+----------------------------------------------------------------------
+local function checkGameState()
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if not playerGui then return "PLAYING", nil, 0 end
+
+    local popupState = "PLAYING"
+    local popupWord = nil
+    local visibleGuesses = 0
+
+    for _, obj in ipairs(playerGui:GetDescendants()) do
+        if obj:IsDescendantOf(screenGui) then continue end
+
+        if obj:IsA("TextLabel") and isActuallyVisible(obj) then
+            local text = obj.Text:lower()
+            
+            -- Check for Loss Popup ("Almost!")
+            if text:find("the word was") then
+                popupState = "LOSS"
+                local parent = obj.Parent
+                if parent then
+                    for _, sibling in ipairs(parent:GetChildren()) do
+                        if sibling:IsA("TextLabel") and sibling ~= obj then
+                            local cleanText = sibling.Text:match("^%s*(%a+)%s*$")
+                            if cleanText and #cleanText >= 2 and cleanText:lower() ~= "almost" then
+                                popupWord = cleanText:upper()
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- Check for Win Popup
+            if text:find("you won") or text:find("victory") or text:find("winner") then
+                popupState = "WIN"
+            end
+
+            -- Count visible guesses to detect if the board was wiped
+            if text:match("^#%d+$") then
+                visibleGuesses = visibleGuesses + 1
+            end
+        end
+    end
+
+    return popupState, popupWord, visibleGuesses
+end
+
+----------------------------------------------------------------------
+-- 5. INPUT SUBMISSION
+----------------------------------------------------------------------
+local cachedBox, cachedBtn = nil, nil
+
+local function getGameInput()
+    if cachedBox and cachedBox.Parent and isActuallyVisible(cachedBox) then return cachedBox, cachedBtn end
+    cachedBox, cachedBtn = nil, nil
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if not playerGui then return nil, nil end
+
+    for _, obj in ipairs(playerGui:GetDescendants()) do
+        if not obj:IsDescendantOf(screenGui) and not isLeaderboardElement(obj) and obj:IsA("TextBox") and isActuallyVisible(obj) then
+            cachedBox = obj
+            local container = obj.Parent
+            if container then
+                for _, c in ipairs(container:GetChildren()) do
+                    if c:IsA("TextButton") and isActuallyVisible(c) and not c.Text:lower():find("hint") then
+                        cachedBtn = c
+                        break
+                    end
+                end
+            end
+            break
+        end
+    end
+    return cachedBox, cachedBtn
+end
+
+local function submitWord(word)
+    local box, btn = getGameInput()
+    if not box then return false end
+
+    box.Text = word
+    task.wait(0.05)
+    
+    if type(firesignal) == "function" then
+        firesignal(box.FocusLost, true)
+        if btn then
+            firesignal(btn.MouseButton1Click)
+            firesignal(btn.Activated)
+        end
+    else
+        box:ReleaseFocus(true)
+    end
+
+    local startWait = tick()
+    local accepted = false
+    while tick() - startWait < 0.5 do
+        if box.Text == "" or box.Text ~= word then
+            accepted = true
+            break
+        end
+        task.wait(0.05)
+    end
+
+    if not accepted and box.Text == word then box.Text = "" end
+    return accepted
+end
+
+----------------------------------------------------------------------
+-- 6. SOLVER ENGINE & EVIDENCE MODEL
+----------------------------------------------------------------------
+local isRunning = false
+local solveThread = nil
+
+local submittedWords = {}
+local candidatePool = {}
+local candidateSources = {}
+
+local CATEGORY_SWEEP = {"person", "animal", "object", "place", "food", "activity", "emotion", "technology"}
+local catIndex = 1
+
+local function stopSolving()
+    isRunning = false
+    if solveThread then
+        task.cancel(solveThread)
+        solveThread = nil
+    end
+    status.Text = "Stopped"
+    status.TextColor3 = Color3.fromRGB(255, 80, 80)
+end
+
+local function softReset()
+    submittedWords = {}
+    observedWords = {}
+    candidatePool = {}
+    candidateSources = {}
+    catIndex = 1
+    bestDisplay.Text = "Best: None (∞)"
+    bestDisplay.TextColor3 = Color3.fromRGB(255, 215, 0)
+    status.Text = "New Round Started!"
+    status.TextColor3 = Color3.fromRGB(0, 255, 150)
+end
+
+local function hardReset()
+    stopSolving()
+    softReset()
+    apiCache = {} 
+    cachedBox = nil
+    cachedBtn = nil
+    status.Text = "Reset Done - Ready"
+end
+
+local function startSolving()
+    if isRunning then return end
+    isRunning = true
+    status.Text = "Initializing..."
+    status.TextColor3 = Color3.fromRGB(0, 220, 255)
+
+    solveThread = task.spawn(function()
+        while isRunning do
+            -- 1. Check Game State (Popups & Board Wipes)
+            local state, targetWord, visibleCount = checkGameState()
+
+            if state == "LOSS" or state == "WIN" then
+                if state == "LOSS" then
+                    bestDisplay.Text = "LOSS: " .. (targetWord or "UNKNOWN")
+                    bestDisplay.TextColor3 = Color3.fromRGB(255, 80, 80)
+                else
+                    bestDisplay.Text = "WINNER!"
+                    bestDisplay.TextColor3 = Color3.fromRGB(0, 255, 0)
+                end
+                
+                status.Text = "Waiting for popup to close..."
+                status.TextColor3 = Color3.fromRGB(255, 150, 0)
+                
+                -- Wait until popup is gone
+                while isRunning do
+                    local st = checkGameState()
+                    if st == "PLAYING" then break end
+                    task.wait(0.5)
+                end
+                
+                if isRunning then
+                    status.Text = "Starting new round..."
+                    
+                    -- Force a starting guess to trigger the board wipe
+                    local startWord = CATEGORY_SWEEP[catIndex] or "person"
+                    if catIndex <= #CATEGORY_SWEEP then
+                        catIndex = catIndex + 1
+                    end
+                    
+                    submitWord(startWord)
+                    
+                    -- CRITICAL FIX: Wait for the old board to physically disappear
+                    -- before we reset our memory, so we don't accidentally scrape it again.
+                    local waitStart = tick()
+                    while tick() - waitStart < 6 do
+                        local _, _, vc = checkGameState()
+                        if vc <= 3 then break end -- Board has been wiped!
+                        task.wait(0.2)
+                    end
+                    
+                    -- NOW we reset memory, guaranteeing no old words carry over
+                    softReset()
+                    submittedWords[startWord] = true
+                    continue
+                else
+                    break
+                end
+            end
+
+            -- Detect manual board wipe (e.g. user clicked reset or new round started)
+            local totalObserved = 0
+            for _ in pairs(observedWords) do totalObserved = totalObserved + 1 end
+            
+            if totalObserved >= 5 and visibleCount <= 2 then
+                status.Text = "Board wipe detected!"
+                task.wait(1) -- Wait a moment for the new board to settle
+                softReset()
+                continue
+            end
+
+            -- 2. Scrape and Analyze
+            scrapeBoard()
+
+            local hotWords = {}
+            for w, data in pairs(observedWords) do
+                table.insert(hotWords, {word = w, rank = data.rank, time = data.time})
+            end
+            table.sort(hotWords, function(a, b) return a.rank < b.rank end)
+
+            local best = hotWords[1]
+
+            if best and best.rank == 1 then
+                bestDisplay.Text = "WINNER: " .. best.word:upper() .. " (#1)"
+                bestDisplay.TextColor3 = Color3.fromRGB(0, 255, 0)
+                status.Text = "SOLVED! Waiting for new round..."
+                status.TextColor3 = Color3.fromRGB(0, 255, 0)
+                task.wait(1)
+                continue
+            end
+
+            if best then
+                bestDisplay.Text = "Best: " .. best.word:upper() .. " (#" .. best.rank .. ")"
+            end
+
+            local guessToSubmit = nil
+
+            -- PHASE 1: CATEGORY SWEEP
+            if (not best or best.rank > 800) and catIndex <= #CATEGORY_SWEEP then
+                status.Text = "Sweeping categories..."
+                local cat = CATEGORY_SWEEP[catIndex]
+                catIndex = catIndex + 1
+                
+                if not submittedWords[cat] and not observedWords[cat] then
+                    guessToSubmit = cat
+                end
+            else
+                -- PHASE 2: EVIDENCE-BASED SEARCH
+                status.Text = "Analyzing evidence..."
+                
+                for i = 1, math.min(#hotWords, 5) do
+                    local hw = hotWords[i].word
+                    local cands = getCandidates(hw, currentGameMode)
+                    for _, c in ipairs(cands) do
+                        if not observedWords[c] and not submittedWords[c] then
+                            candidatePool[c] = true
+                            candidateSources[c] = candidateSources[c] or {}
+                            candidateSources[c][hw] = true
+                        end
+                    end
+                end
+                
+                if #hotWords >= 2 and hotWords[2].rank <= 500 then
+                    local compCands = getCompoundCandidates(hotWords)
+                    for _, c in ipairs(compCands) do
+                        if not observedWords[c] and not submittedWords[c] then
+                            candidatePool[c] = true
+                            candidateSources[c] = candidateSources[c] or {}
+                            candidateSources[c][hotWords[1].word] = true
+                            candidateSources[c][hotWords[2].word] = true
+                        end
+                    end
+                end
+
+                local bestCand = nil
+                local bestScore = -1
+
+                for cand, _ in pairs(candidatePool) do
+                    if submittedWords[cand] or observedWords[cand] then
+                        candidatePool[cand] = nil 
+                    else
+                        local score = 0
+                        if candidateSources[cand] then
+                            local sourceCount = 0
+                            for src, _ in pairs(candidateSources[cand]) do
+                                local obs = observedWords[src]
+                                if obs then
+                                    sourceCount = sourceCount + 1
+                                    local rank = obs.rank
+                                    local age = tick() - obs.time
+                                    local freshness = math.exp(-age / 30) 
+                                    
+                                    local rankWeight = 0
+                                    if rank <= 50 then rankWeight = 5
+                                    elseif rank <= 200 then rankWeight = 3
+                                    elseif rank <= 800 then rankWeight = 1
+                                    else rankWeight = 0.2 end
+                                    
+                                    score = score + (rankWeight * freshness)
+                                end
+                            end
+                            
+                            if sourceCount > 1 then
+                                score = score * (1 + math.log(sourceCount) * 0.5)
+                            end
+                        end
+                        
+                        if score > bestScore then
+                            bestScore = score
+                            bestCand = cand
+                        end
+                    end
+                end
+
+                guessToSubmit = bestCand
+            end
+
+            -- Execute Guess
+            if guessToSubmit then
+                status.Text = "Guess: " .. guessToSubmit:upper()
+                local accepted = submitWord(guessToSubmit)
+                
+                if accepted then
+                    submittedWords[guessToSubmit] = true
+                    candidatePool[guessToSubmit] = nil
+                    task.wait(0.18)
+                else
+                    submittedWords[guessToSubmit] = true
+                    candidatePool[guessToSubmit] = nil
+                    task.wait(0.30)
+                end
+            else
+                status.Text = "Waiting for better data..."
+                task.wait(0.5)
+            end
+        end
+    end)
+end
+
+resetBtn.MouseButton1Click:Connect(hardReset)
+solveBtn.MouseButton1Click:Connect(startSolving)
+stopBtn.MouseButton1Click:Connect(stopSolving)
+closeBtn.MouseButton1Click:Connect(function()
+    hardReset()
+    screenGui:Destroy()
+end)
