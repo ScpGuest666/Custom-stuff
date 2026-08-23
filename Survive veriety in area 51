@@ -1,0 +1,572 @@
+-- Wait for player
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
+-- Determine the best parent for the GUI
+local guiParent
+if type(gethui) == "function" then
+    guiParent = gethui()
+else
+    local success = pcall(function() return game:GetService("CoreGui").Name end)
+    if success then guiParent = game:GetService("CoreGui") else guiParent = player:WaitForChild("PlayerGui") end
+end
+
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "Gui_" .. math.random(10000, 99999)
+screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 2147483647
+screenGui.IgnoreGuiInset = true
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+screenGui.Parent = guiParent
+
+-- Main draggable frame (Compact 170x50)
+local mainFrame = Instance.new("Frame")
+mainFrame.Parent = screenGui
+mainFrame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+mainFrame.Size = UDim2.new(0, 170, 0, 50)
+mainFrame.Position = UDim2.new(0.3, 0, 0.5, -25)
+mainFrame.Draggable = true
+mainFrame.Active = true
+
+-- Status label
+local status = Instance.new("TextLabel")
+status.Parent = mainFrame
+status.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+status.Size = UDim2.new(0, 170, 0, 15)
+status.Position = UDim2.new(0, 0, 0, -15)
+status.Text = "Status: Offline"
+status.TextColor3 = Color3.fromRGB(255, 0, 0)
+status.TextScaled = true
+
+-- Helper to create a proper TextButton
+local function createButton(name, text, x, y, width, height)
+    local btn = Instance.new("TextButton")
+    btn.Name = name
+    btn.Parent = mainFrame
+    btn.Text = text
+    btn.Size = UDim2.new(0, width, 0, height)
+    btn.Position = UDim2.new(0, x, 0, y)
+    btn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextScaled = true
+    btn.AutoButtonColor = true
+    btn.BorderSizePixel = 0
+    return btn
+end
+
+-- Create buttons (Row 1: On, Off, Rld, BBox | Row 2: Destroy)
+local onBtn = createButton("OnBtn", "On", 4, 5, 36, 18)
+local offBtn = createButton("OffBtn", "Off", 44, 5, 36, 18)
+local reloadBtn = createButton("ReloadBtn", "Rld", 84, 5, 36, 18)
+local boomboxBtn = createButton("BoomboxBtn", "BBox", 124, 5, 42, 18)
+local destroyBtn = createButton("DestroyBtn", "Destroy", 4, 27, 162, 18)
+
+-- Script State Variables
+local isScriptOnline = false
+local backpackConn = nil
+local renderConn = nil
+local charAddedConn = nil
+local charRemovedConn = nil
+local speedConn = nil
+local cachedWelds = {}
+local isBoomboxGuiVisible = false
+local defaultWalkSpeed = 16
+
+-- Roblox Control Module
+local controlsModule
+pcall(function()
+    local playerScripts = player:WaitForChild("PlayerScripts")
+    local PlayerModule = require(playerScripts:WaitForChild("PlayerModule"))
+    controlsModule = PlayerModule:GetControls()
+end)
+
+-- ==========================================
+-- WALKSPEED CAPTURE & CONTINUOUS LOCK
+-- ==========================================
+local function setupWalkSpeedLock(character)
+    if not character then return end
+    local humanoid = character:WaitForChild("Humanoid", 5)
+    if humanoid then
+        if humanoid.WalkSpeed > 0 then
+            defaultWalkSpeed = humanoid.WalkSpeed
+        end
+
+        if speedConn then speedConn:Disconnect() end
+        speedConn = humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+            if isScriptOnline and humanoid.WalkSpeed ~= defaultWalkSpeed then
+                humanoid.WalkSpeed = defaultWalkSpeed
+            end
+        end)
+    end
+end
+
+if player.Character then
+    setupWalkSpeedLock(player.Character)
+end
+player.CharacterAdded:Connect(setupWalkSpeedLock)
+
+-- ==========================================
+-- 9E9 HOOKS (CAMERA, SPEED & FREEZE PROTECTION)
+-- ==========================================
+pcall(function()
+    local oldNewIndex
+    oldNewIndex = hookmetamethod(game, "__newindex", function(t, k, v)
+        if isScriptOnline then
+            -- 1. Camera Recoil Protection
+            if t == workspace.CurrentCamera and k == "CFrame" then
+                if not checkcaller() then
+                    local callingScript = getcallingscript()
+                    if callingScript then
+                        local isDefaultCamera = false
+                        local playerScripts = player:FindFirstChild("PlayerScripts")
+                        if playerScripts then
+                            local playerModule = playerScripts:FindFirstChild("PlayerModule")
+                            if playerModule and callingScript:IsDescendantOf(playerModule) then
+                                isDefaultCamera = true
+                            end
+                        end
+                        local name = callingScript.Name
+                        if name == "CameraModule" or name == "BaseCamera" or name == "ClassicCamera" then
+                            isDefaultCamera = true
+                        end
+                        if not isDefaultCamera then return end
+                    end
+                end
+            end
+
+            -- 2. WalkSpeed Lock (Blocks reload scripts from zeroing speed)
+            if typeof(t) == "Instance" and t:IsA("Humanoid") and k == "WalkSpeed" then
+                if not checkcaller() and v ~= defaultWalkSpeed then
+                    return
+                end
+            end
+
+            -- 3. Anti-Freeze / Anti-Anchor Lock
+            if typeof(t) == "Instance" and t:IsA("BasePart") and k == "Anchored" then
+                if not checkcaller() and t.Parent == player.Character and v == true then
+                    return
+                end
+            end
+        end
+        return oldNewIndex(t, k, v)
+    end)
+end)
+
+-- ==========================================
+-- FAKE TOUCH PULSE (RESTORES JOYSTICK ON ANDROID)
+-- ==========================================
+local function triggerFakeTouch()
+    task.spawn(function()
+        local cam = workspace.CurrentCamera
+        local centerX = (cam and cam.ViewportSize.X > 0) and (cam.ViewportSize.X / 2) or 500
+        local centerY = (cam and cam.ViewportSize.Y > 0) and (cam.ViewportSize.Y / 2) or 300
+        
+        -- Multi-touch sequence at screen center
+        for i = 1, 3 do
+            pcall(function()
+                VirtualInputManager:SendTouchEvent(i + 50, 0, centerX, centerY) -- Began
+                task.wait(0.01)
+                VirtualInputManager:SendTouchEvent(i + 50, 2, centerX, centerY) -- Ended
+            end)
+            task.wait(0.01)
+        end
+
+        -- Ensure Humanoid Jump state is cleared
+        local char = player.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                hum.Jump = false
+            end
+        end
+
+        -- Re-enable Control Module
+        pcall(function()
+            if controlsModule then
+                if controlsModule.OnLastInputTypeChanged then
+                    controlsModule:OnLastInputTypeChanged(Enum.UserInputType.Touch)
+                end
+                controlsModule:Enable()
+            end
+        end)
+
+        -- Re-enable TouchGui
+        local playerGui = player:FindFirstChild("PlayerGui")
+        if playerGui then
+            local touchGui = playerGui:FindFirstChild("TouchGui")
+            if touchGui then
+                touchGui.Enabled = true
+                local tcf = touchGui:FindFirstChild("TouchControlFrame")
+                if tcf then
+                    tcf.Visible = true
+                    for _, child in ipairs(tcf:GetChildren()) do
+                        if child:IsA("GuiObject") then child.Visible = true end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- ==========================================
+-- DEEP FIRING LAG OPTIMIZER
+-- ==========================================
+local function deepOptimizeGuns()
+    local character = player.Character
+    if not character then return end
+    
+    for _, item in ipairs(character:GetChildren()) do
+        if item:IsA("Tool") then
+            for _, desc in ipairs(item:GetDescendants()) do
+                if desc:IsA("BasePart") then
+                    desc.CastShadow = false
+                    desc.CanCollide = false
+                    desc.CanTouch = false
+                    desc.CanQuery = false
+                    desc.Material = Enum.Material.SmoothPlastic
+                elseif desc:IsA("PointLight") or desc:IsA("SpotLight") or desc:IsA("SurfaceLight") then
+                    desc.Shadows = false
+                    desc.Range = 0
+                    desc.Brightness = 0
+                elseif desc:IsA("ParticleEmitter") then
+                    desc.LightEmission = 0
+                    desc.LightInfluence = 0
+                    desc.Lifetime = NumberRange.new(0.01, 0.03)
+                    desc.Size = NumberSequence.new(0.1)
+                end
+            end
+        end
+    end
+end
+
+-- ==========================================
+-- BOOMBOX DETECTION & GUI TOGGLE
+-- ==========================================
+local function getBoomboxTool()
+    local char = player.Character
+    local bp = player:FindFirstChild("Backpack")
+    
+    local function scan(parent)
+        if not parent then return nil end
+        for _, item in ipairs(parent:GetChildren()) do
+            if item:IsA("Tool") then
+                local name = string.lower(item.Name)
+                if string.find(name, "boombox") or string.find(name, "radio") or string.find(name, "music") then
+                    return item
+                end
+            end
+        end
+        return nil
+    end
+    return scan(char) or scan(bp)
+end
+
+local function getBoomboxGui()
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if playerGui then
+        for _, gui in ipairs(playerGui:GetChildren()) do
+            if gui:IsA("ScreenGui") and gui ~= screenGui then
+                local name = string.lower(gui.Name)
+                if string.find(name, "boombox") or string.find(name, "radio") or string.find(name, "music") then
+                    return gui
+                end
+                for _, desc in ipairs(gui:GetDescendants()) do
+                    if desc:IsA("TextLabel") or desc:IsA("TextBox") then
+                        local txt = string.lower(desc.Text)
+                        if string.find(txt, "beat") or string.find(txt, "id number") or string.find(txt, "song") or string.find(txt, "music") then
+                            return gui
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    local bTool = getBoomboxTool()
+    if bTool then
+        for _, child in ipairs(bTool:GetDescendants()) do
+            if child:IsA("ScreenGui") then
+                return child
+            end
+        end
+    end
+    return nil
+end
+
+local function toggleBoomboxGui()
+    local bTool = getBoomboxTool()
+    if not bTool then return end
+
+    local bgui = getBoomboxGui()
+    if bgui then
+        isBoomboxGuiVisible = not isBoomboxGuiVisible
+        if bgui:IsA("ScreenGui") then
+            bgui.Enabled = isBoomboxGuiVisible
+            if not bgui:IsDescendantOf(player:WaitForChild("PlayerGui")) then
+                bgui.Parent = player.PlayerGui
+            end
+        end
+        for _, frame in ipairs(bgui:GetChildren()) do
+            if frame:IsA("GuiObject") then
+                frame.Visible = isBoomboxGuiVisible
+            end
+        end
+    else
+        bTool:Activate()
+    end
+end
+
+-- ==========================================
+-- WELD CACHING (ZERO LAG ARCH)
+-- ==========================================
+local function refreshCache()
+    cachedWelds = {}
+    local character = player.Character
+    if not character then return end
+    
+    local tools = {}
+    for _, item in ipairs(character:GetChildren()) do
+        if item:IsA("Tool") then table.insert(tools, item) end
+    end
+    
+    for index, tool in ipairs(tools) do
+        local handle = tool:FindFirstChild("Handle") or tool:FindFirstChildWhichIsA("BasePart")
+        if handle then
+            local weld = nil
+            for _, desc in ipairs(character:GetDescendants()) do
+                if (desc:IsA("Weld") or desc:IsA("Motor6D")) and desc.Part1 == handle then
+                    weld = desc
+                    break
+                end
+            end
+            if weld and weld.Part0 then
+                table.insert(cachedWelds, {Weld = weld, Index = index, Total = #tools})
+            end
+        end
+    end
+end
+
+local function setupCharacterListeners()
+    local character = player.Character
+    if not character then return end
+    
+    if charAddedConn then charAddedConn:Disconnect() end
+    if charRemovedConn then charRemovedConn:Disconnect() end
+    
+    charAddedConn = character.ChildAdded:Connect(function(child)
+        if child:IsA("Tool") then
+            task.wait(0.08)
+            refreshCache()
+            deepOptimizeGuns()
+        end
+    end)
+    
+    charRemovedConn = character.ChildRemoved:Connect(function(child)
+        if child:IsA("Tool") then refreshCache() end
+    end)
+end
+
+-- ==========================================
+-- MULTI-EQUIP (BOOMBOX FIRST) & UNEQUIP
+-- ==========================================
+local function equipMultipleItems()
+    if not isScriptOnline then return end
+    local character = player.Character
+    local backpack = player:FindFirstChild("Backpack")
+    if not character or not backpack then return end
+
+    local normalTools = {}
+    local boomboxes = {}
+
+    for _, tool in ipairs(backpack:GetChildren()) do
+        if tool:IsA("Tool") then
+            local name = string.lower(tool.Name)
+            if string.find(name, "boombox") or string.find(name, "radio") or string.find(name, "music") then
+                table.insert(boomboxes, tool)
+            else
+                table.insert(normalTools, tool)
+            end
+        end
+    end
+
+    -- 1. Equip Boombox FIRST
+    for _, tool in ipairs(boomboxes) do
+        tool.Parent = character
+        task.wait(0.03)
+    end
+
+    -- 2. Equip Guns AFTER
+    for _, tool in ipairs(normalTools) do
+        tool.Parent = character
+        task.wait(0.03)
+    end
+    
+    deepOptimizeGuns()
+    refreshCache()
+end
+
+local function unequipAllItems()
+    local character = player.Character
+    local backpack = player:FindFirstChild("Backpack")
+    if not character or not backpack then return end
+
+    for _, tool in ipairs(character:GetChildren()) do
+        if tool:IsA("Tool") then tool.Parent = backpack end
+    end
+    cachedWelds = {}
+end
+
+local function setupAutoEquip()
+    local backpack = player:FindFirstChild("Backpack")
+    if backpack then
+        backpackConn = backpack.ChildAdded:Connect(function(child)
+            if isScriptOnline and child:IsA("Tool") then
+                task.wait(0.03)
+                if player.Character then child.Parent = player.Character end
+            end
+        end)
+    end
+end
+
+-- ==========================================
+-- CONTINUOUS JOYSTICK OVERRIDE & 9E9 ARCH
+-- ==========================================
+local function startMainLoop()
+    local camera = workspace.CurrentCamera
+    
+    renderConn = RunService.RenderStepped:Connect(function()
+        if not isScriptOnline then return end
+        
+        local character = player.Character
+        if not character then return end
+        local rootPart = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Torso")
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not rootPart or not humanoid then return end
+
+        -- 1. FORCE MOVEMENT WHEN JOYSTICK IS ACTIVE
+        if controlsModule and controlsModule.GetMoveVector then
+            local moveVec = controlsModule:GetMoveVector()
+            if moveVec.Magnitude > 0.01 then
+                humanoid:Move(moveVec, true)
+            end
+        end
+
+        -- Ensure HumanoidRootPart is never anchored
+        if rootPart.Anchored then
+            rootPart.Anchored = false
+        end
+
+        -- Ensure WalkSpeed is always default
+        if humanoid.WalkSpeed ~= defaultWalkSpeed then
+            humanoid.WalkSpeed = defaultWalkSpeed
+        end
+
+        -- 2. THE 9E9 CHARACTER FORCE
+        local bg = rootPart:FindFirstChild("AntiRecoilGyro")
+        if not bg then
+            bg = Instance.new("BodyGyro")
+            bg.Name = "AntiRecoilGyro"
+            bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+            bg.P = 100000
+            bg.D = 100
+            bg.Parent = rootPart
+        end
+        local camLook = camera.CFrame.LookVector
+        bg.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + Vector3.new(camLook.X, 0, camLook.Z))
+
+        -- 3. THE ANIME ARCH
+        for _, data in ipairs(cachedWelds) do
+            local weld = data.Weld
+            if weld and weld.Parent and weld.Part0 then
+                local progress = (data.Total == 1) and 0.5 or ((data.Index - 1) / (data.Total - 1))
+                local angleDeg = -75 + (progress * 150)
+                local angleRad = math.rad(angleDeg)
+
+                local radius = 4.5
+                local xOffset = math.sin(angleRad) * radius
+                local yOffset = 1.5 + (math.abs(math.sin(angleRad)) * 2)
+                local zOffset = 2
+
+                local targetWorldCFrame = CFrame.new(rootPart.Position) * camera.CFrame.Rotation * CFrame.new(xOffset, yOffset, zOffset)
+                weld.C0 = weld.Part0.CFrame:Inverse() * targetWorldCFrame * weld.C1
+            end
+        end
+    end)
+end
+
+-- Status toggle functions
+local function setOnline()
+    isScriptOnline = true
+    status.Text = "Status: Online"
+    status.TextColor3 = Color3.fromRGB(0, 255, 0)
+    
+    if player.Character then
+        setupWalkSpeedLock(player.Character)
+    end
+    
+    setupCharacterListeners()
+    equipMultipleItems()
+    setupAutoEquip()
+    
+    if not renderConn then startMainLoop() end
+end
+
+local function setOffline()
+    isScriptOnline = false
+    status.Text = "Status: Offline"
+    status.TextColor3 = Color3.fromRGB(255, 0, 0)
+    
+    if renderConn then renderConn:Disconnect(); renderConn = nil end
+    if backpackConn then backpackConn:Disconnect(); backpackConn = nil end
+    if charAddedConn then charAddedConn:Disconnect(); charAddedConn = nil end
+    if charRemovedConn then charRemovedConn:Disconnect(); charRemovedConn = nil end
+    
+    local character = player.Character
+    if character then
+        local rootPart = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Torso")
+        if rootPart then
+            local bg = rootPart:FindFirstChild("AntiRecoilGyro")
+            if bg then bg:Destroy() end
+        end
+    end
+    
+    unequipAllItems()
+end
+
+-- Connect clicks
+onBtn.MouseButton1Click:Connect(setOnline)
+offBtn.MouseButton1Click:Connect(setOffline)
+
+-- RELOAD BUTTON (R KEY + FAKE TOUCH PULSE FOR JOYSTICK)
+reloadBtn.MouseButton1Click:Connect(function()
+    if isScriptOnline then
+        -- 1. Send 'R' keypress and guarantee Spacebar is released
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.R, false, game)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.R, false, game)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+        
+        -- 2. Clear any jump state
+        local char = player.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                hum.Jump = false
+            end
+        end
+        
+        -- 3. Execute fake touch sequence at screen center to force mobile joystick back
+        triggerFakeTouch()
+    end
+end)
+
+-- BOOMBOX UI TOGGLE BUTTON
+boomboxBtn.MouseButton1Click:Connect(toggleBoomboxGui)
+
+destroyBtn.MouseButton1Click:Connect(function()
+    if speedConn then speedConn:Disconnect() end
+    setOffline()
+    screenGui:Destroy()
+end)
