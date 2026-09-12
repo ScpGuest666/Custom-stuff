@@ -140,7 +140,7 @@ cylinderStage.BackgroundTransparency = 1
 cylinderStage.Size = UDim2.new(1, -16, 0, 168)
 cylinderStage.Position = UDim2.new(0, 8, 0, 22)
 
-local randomizeBtn = createButton("RandomizeBtn", "Randomize", 8, 194, 104, 26, Color3.fromRGB(70, 90, 150))
+local randomizeBtn = createButton("RandomizeBtn", "Randomize", 8, 194, 104, 26, Color3.fromRGB(170, 50, 50))
 randomizeBtn.Parent = gameContainer
 
 local startBtn = createButton("StartBtn", "Start (Solve)", 120, 194, 104, 26, Color3.fromRGB(180, 115, 30))
@@ -351,10 +351,10 @@ local function startTimer()
 end
 
 -- ============================================================================
--- DYNAMIC REVERSE-WALK RANDOMIZER (TRUE VARIABLE HEIGHTS & SPACES)
+-- INDEPENDENT ADVERSARIAL RANDOMIZER (IRREGULAR HEIGHTS & DEADLOCK)
 -- ============================================================================
 local function randomizeGame()
-    if isSolving then return end
+    isSolving = false
     stopTimer()
 
     selectedTube = nil
@@ -363,79 +363,124 @@ local function randomizeGame()
     isGameActive = false
 
     local numColors = currentMode - 1
-    local capacity = currentMode
+    local totalBlocks = numColors * currentMode
 
-    -- 1. Start from a fully completed target state
-    tubes = {}
-    for c = 1, numColors do
-        tubes[c] = {}
-        for _ = 1, capacity do
-            table.insert(tubes[c], c)
-        end
+    -- 1. Generate truly random, irregular tube heights (varying wildly every press)
+    local heights = {}
+    for i = 1, currentMode do
+        heights[i] = 1 -- Every tube gets blocks (no empty buffer tubes)
     end
-    tubes[currentMode] = {} -- Initial buffer cylinder
 
-    -- 2. Scramble via random legal reverse moves (guarantees solvability)
-    local walkSteps = math.random(currentMode * 12, currentMode * 22)
-    local lastMove = nil
-
-    for _ = 1, walkSteps do
-        local validMoves = {}
+    local remaining = totalBlocks - currentMode
+    while remaining > 0 do
+        local candidates = {}
         for i = 1, currentMode do
-            if #tubes[i] > 0 then
-                for j = 1, currentMode do
-                    if i ~= j and #tubes[j] < capacity then
-                        if not lastMove or lastMove[1] ~= j or lastMove[2] ~= i then
-                            table.insert(validMoves, {i, j})
-                        end
-                    end
-                end
+            if heights[i] < currentMode then
+                table.insert(candidates, i)
             end
         end
-
-        if #validMoves == 0 then break end
-
-        local chosen = validMoves[math.random(1, #validMoves)]
-        local block = table.remove(tubes[chosen[1]])
-        table.insert(tubes[chosen[2]], block)
-        lastMove = chosen
+        if #candidates == 0 then break end
+        local chosen = candidates[math.random(1, #candidates)]
+        heights[chosen] = heights[chosen] + 1
+        remaining = remaining - 1
     end
 
-    -- 3. Ensure every cylinder has blocks (no cylinder is left emptied)
+    -- Randomly shuffle the height profile across cylinders
+    for i = currentMode, 2, -1 do
+        local j = math.random(1, i)
+        heights[i], heights[j] = heights[j], heights[i]
+    end
+
+    -- 2. Build block pool with exact color counts
+    local pool = {}
+    for c = 1, numColors do
+        for _ = 1, currentMode do
+            table.insert(pool, c)
+        end
+    end
+
+    -- Independent Fisher-Yates shuffle
+    for i = #pool, 2, -1 do
+        local j = math.random(1, i)
+        pool[i], pool[j] = pool[j], pool[i]
+    end
+
+    tubes = {}
     for i = 1, currentMode do
-        if #tubes[i] == 0 then
-            for j = 1, currentMode do
-                if #tubes[j] > 1 then
-                    table.insert(tubes[i], table.remove(tubes[j]))
+        tubes[i] = {}
+    end
+
+    -- Find the two tubes with greatest heights to inject the cyclic deadlock
+    local sortedIndices = {}
+    for i = 1, currentMode do table.insert(sortedIndices, i) end
+    table.sort(sortedIndices, function(a, b) return heights[a] > heights[b] end)
+    local tA, tB = sortedIndices[1], sortedIndices[2]
+
+    -- Mutually interlock the bases: Tube A gets [Color 1, Color 2], Tube B gets [Color 2, Color 1]
+    local c1, c2 = 1, 2
+    local function removeColor(c)
+        for idx, val in ipairs(pool) do
+            if val == c then
+                table.remove(pool, idx)
+                return c
+            end
+        end
+        return c
+    end
+
+    removeColor(c1)
+    removeColor(c2)
+    removeColor(c2)
+    removeColor(c1)
+
+    table.insert(tubes[tA], c1)
+    table.insert(tubes[tA], c2)
+    table.insert(tubes[tB], c2)
+    table.insert(tubes[tB], c1)
+
+    -- 3. Fill the remaining slots with maximum entropy (anti-matching adjacent)
+    for i = 1, currentMode do
+        local targetH = heights[i]
+        while #tubes[i] < targetH and #pool > 0 do
+            local lastVal = tubes[i][#tubes[i]]
+            local placed = false
+            for pIdx = 1, #pool do
+                if pool[pIdx] ~= lastVal then
+                    table.insert(tubes[i], table.remove(pool, pIdx))
+                    placed = true
                     break
                 end
             end
+            if not placed then
+                table.insert(tubes[i], table.remove(pool, 1))
+            end
         end
     end
 
-    -- 4. Shuffle tube ordering so heights and free spaces vary completely
-    for i = currentMode, 2, -1 do
-        local j = math.random(1, i)
-        tubes[i], tubes[j] = tubes[j], tubes[i]
+    -- Remainder fallback if any
+    while #pool > 0 do
+        for i = 1, currentMode do
+            if #tubes[i] < currentMode and #pool > 0 then
+                table.insert(tubes[i], table.remove(pool, 1))
+            end
+        end
     end
 
-    -- 5. Randomly remap colors to remove any fixed color distribution
-    local colorMap = {}
-    for c = 1, numColors do
-        table.insert(colorMap, c)
-    end
+    -- Randomly permute the color mapping so visual colors vary completely
+    local perm = {}
+    for c = 1, numColors do table.insert(perm, c) end
     for i = numColors, 2, -1 do
         local j = math.random(1, i)
-        colorMap[i], colorMap[j] = colorMap[j], colorMap[i]
+        perm[i], perm[j] = perm[j], perm[i]
     end
     for i = 1, currentMode do
         for k = 1, #tubes[i] do
-            tubes[i][k] = colorMap[tubes[i][k]]
+            tubes[i][k] = perm[tubes[i][k]]
         end
     end
 
     updateVisuals()
-    updateStatsDisplay()
+    statsLabel.Text = "Randomized! (Irregular Heights | Deadlocked)"
 end
 
 -- ============================================================================
@@ -502,7 +547,7 @@ local function switchMode()
 end
 
 -- ============================================================================
--- DYNAMIC A* SOLVER ENGINE
+-- DYNAMIC A* SOLVER ENGINE (DETECTS IMPOSSIBLE STATES)
 -- ============================================================================
 local function serializeState(st)
     local parts = {}
@@ -601,7 +646,7 @@ local function solveAStar(initialTubes)
     })
 
     local iterations = 0
-    local maxLimit = (currentMode == 4) and 10000 or 35000
+    local maxLimit = (currentMode == 4) and 6000 or 15000
 
     while #heap > 0 do
         iterations = iterations + 1
@@ -690,7 +735,7 @@ local function startSolving()
     selectedTube = nil
     updateVisuals()
 
-    statsLabel.Text = "Calculating optimal moves..."
+    statsLabel.Text = "Analyzing configuration..."
     task.wait(0.05)
 
     local solutionPath = solveAStar(tubes)
@@ -735,7 +780,7 @@ local function startSolving()
             stopTimer()
             statsLabel.Text = "Already solved!"
         else
-            statsLabel.Text = "No path found! Press Randomize."
+            statsLabel.Text = "Impossible to solve! (Deadlock detected)"
         end
     end
 end
