@@ -88,10 +88,11 @@ pcall(function()
 end)
 
 -- ============================================================================
--- MAIN GUI SETUP (REDUCED BY 25% - 232 x 312)
+-- SERVICES & CORE PLAYERS
 -- ============================================================================
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
 
@@ -103,6 +104,221 @@ else
     guiParent = success and game:GetService("CoreGui") or player:WaitForChild("PlayerGui")
 end
 
+-- ============================================================================
+-- CUSTOM MOBILE CONTROLS (JOYSTICK & JUMP BUTTON REPLACEMENT)
+-- ============================================================================
+local controlsGui = Instance.new("ScreenGui")
+controlsGui.Name = "CustomMobileControls_" .. math.random(10000, 99999)
+controlsGui.ResetOnSpawn = false
+controlsGui.DisplayOrder = 2147483640
+controlsGui.IgnoreGuiInset = true
+controlsGui.Enabled = true
+controlsGui.Parent = guiParent
+registerCleanup(controlsGui)
+
+-- Joystick Base
+local joyBase = Instance.new("ImageButton")
+joyBase.Name = "JoystickBase"
+joyBase.Parent = controlsGui
+joyBase.AnchorPoint = Vector2.new(0, 1)
+joyBase.Position = UDim2.new(0, 40, 1, -20)
+joyBase.Size = UDim2.new(0, 110, 0, 110)
+joyBase.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+joyBase.BackgroundTransparency = 0.65
+joyBase.AutoButtonColor = false
+joyBase.Active = true
+
+local baseCorner = Instance.new("UICorner")
+baseCorner.CornerRadius = UDim.new(1, 0)
+baseCorner.Parent = joyBase
+
+local baseStroke = Instance.new("UIStroke")
+baseStroke.Color = Color3.fromRGB(255, 255, 255)
+baseStroke.Transparency = 0.6
+baseStroke.Thickness = 2
+baseStroke.Parent = joyBase
+
+-- Inner Thumbstick Knob
+local joyKnob = Instance.new("Frame")
+joyKnob.Name = "JoystickKnob"
+joyKnob.Parent = joyBase
+joyKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+joyKnob.Position = UDim2.new(0.5, 0, 0.5, 0)
+joyKnob.Size = UDim2.new(0, 50, 0, 50)
+joyKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+joyKnob.BackgroundTransparency = 0.35
+joyKnob.Active = false
+
+local knobCorner = Instance.new("UICorner")
+knobCorner.CornerRadius = UDim.new(1, 0)
+knobCorner.Parent = joyKnob
+
+-- Jump Button
+local jumpBtn = Instance.new("ImageButton")
+jumpBtn.Name = "CustomJumpButton"
+jumpBtn.Parent = controlsGui
+jumpBtn.AnchorPoint = Vector2.new(1, 1)
+jumpBtn.Position = UDim2.new(1, -40, 1, -20)
+jumpBtn.Size = UDim2.new(0, 75, 0, 75)
+jumpBtn.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+jumpBtn.BackgroundTransparency = 0.65
+jumpBtn.AutoButtonColor = false
+jumpBtn.Active = false
+
+local jumpCorner = Instance.new("UICorner")
+jumpCorner.CornerRadius = UDim.new(1, 0)
+jumpCorner.Parent = jumpBtn
+
+local jumpStroke = Instance.new("UIStroke")
+jumpStroke.Color = Color3.fromRGB(255, 255, 255)
+jumpStroke.Transparency = 0.6
+jumpStroke.Thickness = 2
+jumpStroke.Parent = jumpBtn
+
+local jumpIcon = Instance.new("TextLabel")
+jumpIcon.Parent = jumpBtn
+jumpIcon.BackgroundTransparency = 1
+jumpIcon.Size = UDim2.new(1, 0, 1, 0)
+jumpIcon.Text = "▲"
+jumpIcon.TextColor3 = Color3.fromRGB(255, 255, 255)
+jumpIcon.TextSize = 28
+jumpIcon.Font = Enum.Font.GothamBold
+
+-- Touch States & Handling
+local currentMoveVector = Vector2.zero
+local activeJoystickTouch = nil
+local activeJumpTouch = nil
+local isJumpHeld = false
+local MAX_RADIUS = 45
+
+local function isInsideGui(pos, gui)
+    if not gui or not gui.Visible then return false end
+    local gPos = gui.AbsolutePosition
+    local gSize = gui.AbsoluteSize
+    return pos.X >= gPos.X and pos.X <= (gPos.X + gSize.X) and pos.Y >= gPos.Y and pos.Y <= (gPos.Y + gSize.Y)
+end
+
+local function resetJoystick()
+    activeJoystickTouch = nil
+    currentMoveVector = Vector2.zero
+    joyKnob.Position = UDim2.new(0.5, 0, 0.5, 0)
+end
+
+registerCleanup(joyBase.InputBegan:Connect(function(input)
+    if (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1) and not activeJoystickTouch then
+        activeJoystickTouch = input
+        local baseCenter = joyBase.AbsolutePosition + (joyBase.AbsoluteSize / 2)
+        local inputPos = Vector2.new(input.Position.X, input.Position.Y)
+        local delta = inputPos - baseCenter
+        local dist = delta.Magnitude
+        local clampedDist = math.min(dist, MAX_RADIUS)
+        local dir = (dist > 0) and (delta / dist) or Vector2.zero
+        local knobOffset = dir * clampedDist
+        
+        joyKnob.Position = UDim2.new(0.5, knobOffset.X, 0.5, knobOffset.Y)
+        currentMoveVector = Vector2.new(knobOffset.X / MAX_RADIUS, knobOffset.Y / MAX_RADIUS)
+    end
+end))
+
+registerCleanup(UserInputService.InputChanged:Connect(function(input)
+    if input == activeJoystickTouch then
+        local baseCenter = joyBase.AbsolutePosition + (joyBase.AbsoluteSize / 2)
+        local inputPos = Vector2.new(input.Position.X, input.Position.Y)
+        local delta = inputPos - baseCenter
+        local dist = delta.Magnitude
+        local clampedDist = math.min(dist, MAX_RADIUS)
+        local dir = (dist > 0) and (delta / dist) or Vector2.zero
+        local knobOffset = dir * clampedDist
+        
+        joyKnob.Position = UDim2.new(0.5, knobOffset.X, 0.5, knobOffset.Y)
+        currentMoveVector = Vector2.new(knobOffset.X / MAX_RADIUS, knobOffset.Y / MAX_RADIUS)
+    end
+end))
+
+registerCleanup(UserInputService.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        if input.UserInputState == Enum.UserInputState.Begin then
+            local touchPos = Vector2.new(input.Position.X, input.Position.Y)
+            if controlsGui.Enabled and isInsideGui(touchPos, jumpBtn) and not activeJumpTouch then
+                activeJumpTouch = input
+                isJumpHeld = true
+                jumpBtn.BackgroundTransparency = 0.4
+                local char = player.Character
+                if char then
+                    local hum = char:FindFirstChildOfClass("Humanoid")
+                    if hum then hum.Jump = true end
+                end
+            end
+        end
+    end
+end))
+
+registerCleanup(UserInputService.InputEnded:Connect(function(input)
+    if input == activeJoystickTouch then
+        resetJoystick()
+    end
+    if input == activeJumpTouch then
+        activeJumpTouch = nil
+        isJumpHeld = false
+        jumpBtn.BackgroundTransparency = 0.65
+    end
+end))
+
+-- Native TouchGui Hider
+local function hideNativeTouchGui()
+    local pGui = player:FindFirstChild("PlayerGui")
+    if pGui then
+        local tg = pGui:FindFirstChild("TouchGui")
+        if tg then
+            tg.Enabled = false
+            local conn = tg:GetPropertyChangedSignal("Enabled"):Connect(function()
+                if tg.Enabled then tg.Enabled = false end
+            end)
+            registerCleanup(conn)
+        end
+    end
+end
+
+hideNativeTouchGui()
+local pGuiConn = player:WaitForChild("PlayerGui", 5)
+if pGuiConn then
+    registerCleanup(pGuiConn.ChildAdded:Connect(function(child)
+        if child.Name == "TouchGui" then
+            child.Enabled = false
+            registerCleanup(child:GetPropertyChangedSignal("Enabled"):Connect(function()
+                if child.Enabled then child.Enabled = false end
+            end))
+        end
+    end))
+end
+
+-- RenderStepped Character Movement Loop
+registerCleanup(RunService.RenderStepped:Connect(function()
+    if not isAlive then return end
+    local char = player.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+
+    if currentMoveVector.Magnitude > 0.05 then
+        local cam = workspace.CurrentCamera
+        if cam then
+            local camCF = cam.CFrame
+            local flatForward = Vector3.new(camCF.LookVector.X, 0, camCF.LookVector.Z).Unit
+            local flatRight = Vector3.new(camCF.RightVector.X, 0, camCF.RightVector.Z).Unit
+            local moveDir = (flatRight * currentMoveVector.X) + (flatForward * -currentMoveVector.Y)
+            hum:Move(moveDir, false)
+        end
+    end
+
+    if isJumpHeld then
+        hum.Jump = true
+    end
+end))
+
+-- ============================================================================
+-- MAIN GUI SETUP (REDUCED BY 25% - 232 x 312)
+-- ============================================================================
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "ColorStackGui_" .. math.random(10000, 99999)
 screenGui.ResetOnSpawn = false
@@ -216,26 +432,30 @@ local copyBtn = createButton("CopyBtn", "Copy: OFF", 120, 222, 104, 24, Color3.f
 copyBtn.Parent = gameContainer
 
 -- ============================================================================
--- PALETTE & CONFIGURATION (MODES: 4, 5, 6, 8)
+-- PALETTE & DISTINCT COLOR MAPPING (SEPARATES YELLOW & ORANGE)
 -- ============================================================================
 local COLOR_PALETTE = {
-    [1] = Color3.fromRGB(235, 60, 60),   -- Red
-    [2] = Color3.fromRGB(50, 140, 245),  -- Blue
-    [3] = Color3.fromRGB(45, 205, 110),  -- Green
-    [4] = Color3.fromRGB(245, 190, 40),  -- Amber
-    [5] = Color3.fromRGB(165, 75, 240),  -- Purple
-    [6] = Color3.fromRGB(40, 215, 230),  -- Cyan
-    [7] = Color3.fromRGB(250, 95, 150),  -- Pink
+    [1] = Color3.fromRGB(235, 60, 60),    -- Red
+    [2] = Color3.fromRGB(50, 140, 245),   -- Blue
+    [3] = Color3.fromRGB(45, 205, 110),   -- Green
+    [4] = Color3.fromRGB(250, 215, 35),   -- Yellow (Strictly Distinct)
+    [5] = Color3.fromRGB(255, 130, 20),   -- Orange (Strictly Distinct)
+    [6] = Color3.fromRGB(165, 75, 240),   -- Purple
+    [7] = Color3.fromRGB(250, 95, 150),   -- Pink
+    [8] = Color3.fromRGB(40, 215, 230),   -- Cyan
+    [9] = Color3.fromRGB(160, 95, 45),    -- Brown
 }
 
 local COLOR_NAME_MAP = {
     red = 1,
-    blue = 2,
-    green = 3,
-    amber = 4, yellow = 4, orange = 4,
-    purple = 5, violet = 5,
-    cyan = 6, lightblue = 6,
-    pink = 7, magenta = 7
+    blue = 2, darkblue = 2,
+    green = 3, lime = 3,
+    yellow = 4,
+    orange = 5, amber = 5,
+    purple = 6, violet = 6,
+    pink = 7, magenta = 7,
+    cyan = 8, lightblue = 8, aqua = 8, teal = 8,
+    brown = 9,
 }
 
 local KEY_CODES = {
@@ -439,6 +659,8 @@ local function isGameWon(checkTubes)
     local st = checkTubes or tubes
     local numColors = currentMode - 1
     local completed = 0
+    local seenColors = {}
+
     for i = 1, currentMode do
         local t = st[i]
         if t and #t == currentMode then
@@ -450,7 +672,8 @@ local function isGameWon(checkTubes)
                     break
                 end
             end
-            if match then
+            if match and not seenColors[base] then
+                seenColors[base] = true
                 completed = completed + 1
             else
                 return false
@@ -695,12 +918,12 @@ local function switchMode()
 end
 
 -- ============================================================================
--- DYNAMIC A* SOLVER ENGINE
+-- DYNAMIC A* SOLVER ENGINE (WITH STRICT DISTINCT HEURISTICS)
 -- ============================================================================
 local function serializeState(st)
     local parts = {}
     for i = 1, currentMode do
-        parts[i] = table.concat(st[i], "")
+        parts[i] = table.concat(st[i], "-")
     end
     table.sort(parts)
     return table.concat(parts, "|")
@@ -727,14 +950,14 @@ local function calculateHeuristic(st)
             local hasMismatch = false
             for idx = 1, len do
                 if t[idx] ~= base then
-                    cost = cost + (currentMode + 1 - idx) * 3
+                    cost = cost + (currentMode + 1 - idx) * 4
                     hasMismatch = true
                 else
                     cost = cost - 1
                 end
             end
             if not hasMismatch and len == currentMode then
-                cost = cost - 15
+                cost = cost - 20
             end
         end
     end
@@ -794,7 +1017,7 @@ local function solveAStar(initialTubes)
     })
 
     local iterations = 0
-    local maxLimit = (currentMode <= 5) and 8000 or 15000
+    local maxLimit = (currentMode <= 5) and 8000 or 25000
 
     while #heap > 0 do
         iterations = iterations + 1
@@ -928,7 +1151,7 @@ local function executeFastMove(fromIdx, toIdx, initialFromCount)
 end
 
 -- ============================================================================
--- ASYNCHRONOUS PIPELINE 3D SOLVER
+-- ASYNCHRONOUS PIPELINE 3D SOLVER WITH VERIFIED LANDINGS & BACKTRACKING
 -- ============================================================================
 local function toggle3DSolver()
     if not isCopying then return end
@@ -1177,7 +1400,6 @@ local function findTargetBoard()
 
     if #allBoards == 0 then return nil end
 
-    -- Filter boards strictly to the player's immediate table
     local nearbyBoards = {}
     for _, board in ipairs(allBoards) do
         local pos = getBoardCenter(board)
@@ -1204,7 +1426,6 @@ local function findTargetBoard()
             local perpDist = (pos - rayPoint).Magnitude
             local charDist = (pos - rootPos).Magnitude
 
-            -- Camera crosshair dominates so the exact board you are looking at is selected
             local score = (camDot * 100) - (perpDist * 5.0) - (charDist * 1.5)
             if score > bestScore then
                 bestScore = score
@@ -1237,7 +1458,6 @@ end
 local function stepCopyMirror()
     if not isCopying or not isAlive then return end
 
-    -- Red ↔ Blue color transition on the Start Button
     local t = (math.sin(os.clock() * 3.8) + 1) * 0.5
     local redColor = Color3.fromRGB(235, 60, 60)
     local blueColor = Color3.fromRGB(50, 140, 245)
@@ -1263,7 +1483,6 @@ local function stepCopyMirror()
 
     local boardPos = getBoardCenter(board) or Vector3.zero
 
-    -- Locate the companion board on the same table to isolate parts
     local otherBoard = nil
     if board.Parent then
         local otherName = (board.Name == "StackBoard1") and "StackBoard2" or "StackBoard1"
@@ -1289,7 +1508,6 @@ local function stepCopyMirror()
         end
     end
 
-    -- Fallback: If cylinders are siblings under the Table model, filter by proximity to this board
     if #cylinders == 0 and board.Parent then
         for _, obj in ipairs(board.Parent:GetDescendants()) do
             if obj:IsA("BasePart") then
