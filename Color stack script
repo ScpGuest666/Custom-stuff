@@ -883,10 +883,8 @@ local function executeFastMove(fromIdx, toIdx, initialFromCount)
 
     if hover ~= nil then
         if hover == fromIdx then
-            -- Block is already held and hovering: immediately send destination
             simulateKeyPress(toIdx)
         else
-            -- Wrong block hovering: drop it down first
             simulateKeyPress(hover)
             local dropWait = os.clock()
             while os.clock() - dropWait < 0.3 do
@@ -894,7 +892,6 @@ local function executeFastMove(fromIdx, toIdx, initialFromCount)
                 task.wait()
             end
 
-            -- Now pick up fromIdx
             simulateKeyPress(fromIdx)
             local pickWait = os.clock()
             while os.clock() - pickWait < 0.25 do
@@ -905,7 +902,6 @@ local function executeFastMove(fromIdx, toIdx, initialFromCount)
             simulateKeyPress(toIdx)
         end
     else
-        -- Not hovering: pick up fromIdx
         simulateKeyPress(fromIdx)
 
         local pickWait = os.clock()
@@ -917,8 +913,6 @@ local function executeFastMove(fromIdx, toIdx, initialFromCount)
         simulateKeyPress(toIdx)
     end
 
-    -- Strictly wait ONLY until the block disappears from the source cylinder
-    -- (Does not wait for arrival at toIdx)
     local disappearWait = os.clock()
     local disappeared = false
 
@@ -934,7 +928,7 @@ local function executeFastMove(fromIdx, toIdx, initialFromCount)
 end
 
 -- ============================================================================
--- ASYNCHRONOUS PIPELINE 3D SOLVER WITH REAL-TIME LANDING VERIFICATION & BACKTRACKING
+-- ASYNCHRONOUS PIPELINE 3D SOLVER
 -- ============================================================================
 local function toggle3DSolver()
     if not isCopying then return end
@@ -980,7 +974,6 @@ local function toggle3DSolver()
 
             statsLabel.Text = string.format("3D: %d/%d (%d->%d)", pathIndex, #solutionPath, fromIdx, toIdx)
 
-            -- If the cylinder we need to pick up from is currently waiting for an in-flight block to land, wait for it
             if isCylinderAwaitingArrival(fromIdx) then
                 local waitArrival = os.clock()
                 while isCylinderAwaitingArrival(fromIdx) and (os.clock() - waitArrival < 1.8) do
@@ -991,30 +984,24 @@ local function toggle3DSolver()
             local initialFromCount = #tubes[fromIdx] or 0
             local movingColor = tubes[fromIdx] and tubes[fromIdx][initialFromCount]
 
-            -- Execute the move: ONLY waits until the block has successfully lifted and disappeared from fromIdx
             local disappeared = executeFastMove(fromIdx, toIdx, initialFromCount)
 
             if disappeared then
-                -- Register the block as in-flight towards toIdx
                 table.insert(pendingLandings, {
                     from = fromIdx,
                     to = toIdx,
                     color = movingColor,
                     timestamp = os.clock()
                 })
-                -- Immediately advance to the next block (rinse and repeat)
                 pathIndex = pathIndex + 1
             else
-                -- Input was dropped or block didn't lift: small recovery pause before retrying
                 task.wait(0.04)
             end
 
-            -- Check if background landing listener detected any desync / wrong cylinder landing
             if mismatchDetected then
                 mismatchDetected = false
                 statsLabel.Text = "Mismatch detected! Backtracking..."
-                
-                -- Allow in-motion blocks to finish settling
+
                 local settleWait = os.clock()
                 while os.clock() - settleWait < 0.5 do
                     if getHoveringTube() == nil then break end
@@ -1023,7 +1010,6 @@ local function toggle3DSolver()
 
                 table.clear(pendingLandings)
 
-                -- Backtrack: re-calculate the optimal solution path directly from the actual board state
                 local fixPath = solveAStar(tubes)
                 if fixPath and #fixPath > 0 then
                     solutionPath = fixPath
@@ -1034,7 +1020,6 @@ local function toggle3DSolver()
             task.wait()
         end
 
-        -- Pipeline finished: wait for any remaining in-flight blocks to land and confirm final state
         local finalWait = os.clock()
         while #pendingLandings > 0 and (os.clock() - finalWait < 2.0) do
             if mismatchDetected then
@@ -1133,7 +1118,7 @@ local function onStartClicked()
 end
 
 -- ============================================================================
--- 3D STACKBOARD TARGET DETECTION & VISUAL MIRRORING (WITH LANDING MONITOR)
+-- CAMERA CROSSHAIR & TABLE-ISOLATED BOARD TARGETING
 -- ============================================================================
 local function updateButtonLockVisuals()
     if isCopying then
@@ -1160,60 +1145,70 @@ local function updateButtonLockVisuals()
     end
 end
 
+local function getBoardCenter(obj)
+    if obj:IsA("Model") then
+        local success, cf = pcall(function() return obj:GetBoundingBox() end)
+        if success and cf then return cf.Position end
+        return obj:GetPivot().Position
+    elseif obj:IsA("BasePart") then
+        return obj.Position
+    end
+    return nil
+end
+
 local function findTargetBoard()
     local char = player.Character
     local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
     if not root then return nil end
 
     local rootPos = root.Position
-    local lookVec = root.CFrame.LookVector
-    local candidates = {}
+    local cam = workspace.CurrentCamera
+    local camPos = cam and cam.CFrame.Position or rootPos
+    local camLook = cam and cam.CFrame.LookVector or root.CFrame.LookVector
 
+    local allBoards = {}
     for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") and (obj.Name == "StackBoard1" or obj.Name == "StackBoard2") then
-            table.insert(candidates, obj)
-        end
-    end
-
-    if #candidates == 0 then
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj:IsA("BasePart") and (obj.Name == "StackBoard1" or obj.Name == "StackBoard2") then
-                table.insert(candidates, obj)
+        if (obj.Name == "StackBoard1" or obj.Name == "StackBoard2") and (obj:IsA("Model") or obj:IsA("BasePart")) then
+            if not (obj.Parent and (obj.Parent.Name == "StackBoard1" or obj.Parent.Name == "StackBoard2")) then
+                table.insert(allBoards, obj)
             end
         end
     end
 
-    if #candidates == 0 then return nil end
-    if #candidates == 1 then return candidates[1] end
+    if #allBoards == 0 then return nil end
 
+    -- Filter boards strictly to the player's immediate table
+    local nearbyBoards = {}
+    for _, board in ipairs(allBoards) do
+        local pos = getBoardCenter(board)
+        if pos then
+            local dist = (pos - rootPos).Magnitude
+            if dist < 32 then
+                table.insert(nearbyBoards, board)
+            end
+        end
+    end
+
+    local candidateList = (#nearbyBoards > 0) and nearbyBoards or allBoards
     local bestBoard = nil
     local bestScore = -math.huge
 
-    for _, obj in ipairs(candidates) do
-        local pos = nil
-        if obj:IsA("Model") then
-            local success, cf = pcall(function() return obj:GetBoundingBox() end)
-            pos = (success and cf) and cf.Position or obj:GetPivot().Position
-        elseif obj:IsA("BasePart") then
-            pos = obj.Position
-        end
-
+    for _, board in ipairs(candidateList) do
+        local pos = getBoardCenter(board)
         if pos then
-            local toBoard = pos - rootPos
-            local dist = toBoard.Magnitude
+            local toBoardCam = pos - camPos
+            local camDir = toBoardCam.Unit
+            local camDot = camLook:Dot(camDir)
+            local forwardProj = math.max(0, toBoardCam:Dot(camLook))
+            local rayPoint = camPos + (camLook * forwardProj)
+            local perpDist = (pos - rayPoint).Magnitude
+            local charDist = (pos - rootPos).Magnitude
 
-            if dist < 45 then
-                local dir = toBoard.Unit
-                local dot = lookVec:Dot(dir)
-                local forwardProj = math.max(0, toBoard:Dot(lookVec))
-                local rayPoint = rootPos + (lookVec * forwardProj)
-                local perpDist = (pos - rayPoint).Magnitude
-
-                local score = (dot * 100) - (perpDist * 3.5) - (dist * 0.8)
-                if score > bestScore then
-                    bestScore = score
-                    bestBoard = obj
-                end
+            -- Camera crosshair dominates so the exact board you are looking at is selected
+            local score = (camDot * 100) - (perpDist * 5.0) - (charDist * 1.5)
+            if score > bestScore then
+                bestScore = score
+                bestBoard = board
             end
         end
     end
@@ -1263,22 +1258,54 @@ local function stepCopyMirror()
         table.clear(confirmedCylinderBlocks)
         table.clear(pendingLandings)
         mismatchDetected = false
+        rebuildCylinders()
     end
 
-    -- 1. Gather Cylinders and Ghost Cylinders
-    local searchScope = board.Parent or board
+    local boardPos = getBoardCenter(board) or Vector3.zero
+
+    -- Locate the companion board on the same table to isolate parts
+    local otherBoard = nil
+    if board.Parent then
+        local otherName = (board.Name == "StackBoard1") and "StackBoard2" or "StackBoard1"
+        for _, sibling in ipairs(board.Parent:GetChildren()) do
+            if sibling ~= board and (sibling.Name == otherName or string.find(sibling.Name, "StackBoard")) then
+                otherBoard = sibling
+                break
+            end
+        end
+    end
+    local otherBoardPos = otherBoard and getBoardCenter(otherBoard)
+
+    -- 1. Gather Cylinders and Ghost Cylinders strictly for THIS board
     local cylinders = {}
     local ghostCylinders = {}
 
-    for _, obj in ipairs(searchScope:GetDescendants()) do
+    for _, obj in ipairs(board:GetDescendants()) do
         if obj:IsA("BasePart") then
             local cNum = string.match(obj.Name, "^Cylinder(%d+)$")
-            if cNum then
-                cylinders[tonumber(cNum)] = obj
-            end
+            if cNum then cylinders[tonumber(cNum)] = obj end
             local gNum = string.match(obj.Name, "^GhostCylinder(%d+)$")
-            if gNum then
-                ghostCylinders[tonumber(gNum)] = obj
+            if gNum then ghostCylinders[tonumber(gNum)] = obj end
+        end
+    end
+
+    -- Fallback: If cylinders are siblings under the Table model, filter by proximity to this board
+    if #cylinders == 0 and board.Parent then
+        for _, obj in ipairs(board.Parent:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                local isUnderOther = otherBoard and obj:IsDescendantOf(otherBoard)
+                if not isUnderOther then
+                    local objPos = obj.Position
+                    local distToThis = (objPos - boardPos).Magnitude
+                    local distToOther = otherBoardPos and (objPos - otherBoardPos).Magnitude or math.huge
+
+                    if distToThis <= distToOther then
+                        local cNum = string.match(obj.Name, "^Cylinder(%d+)$")
+                        if cNum then cylinders[tonumber(cNum)] = obj end
+                        local gNum = string.match(obj.Name, "^GhostCylinder(%d+)$")
+                        if gNum then ghostCylinders[tonumber(gNum)] = obj end
+                    end
+                end
             end
         end
     end
@@ -1312,7 +1339,7 @@ local function stepCopyMirror()
         rebuildCylinders()
     end
 
-    -- 2. Detect & Mirror ONLY Color Blocks That Reached The Cylinder
+    -- 2. Detect & Mirror ONLY Color Blocks Belonging to THIS Board
     local allBlocks = {}
 
     for partKey in pairs(confirmedCylinderBlocks) do
@@ -1321,34 +1348,43 @@ local function stepCopyMirror()
         end
     end
 
+    local searchScope = board.Parent or board
+
     for _, obj in ipairs(searchScope:GetDescendants()) do
-        local info = parseBlockInfo(obj)
-        if info then
-            local part = info.part
-            local pPos = part.Position
+        local isUnderOther = otherBoard and obj:IsDescendantOf(otherBoard)
+        if not isUnderOther then
+            local info = parseBlockInfo(obj)
+            if info then
+                local part = info.part
+                local pPos = part.Position
+                local distToThis = (pPos - boardPos).Magnitude
+                local distToOther = otherBoardPos and (pPos - otherBoardPos).Magnitude or math.huge
 
-            local insideCylinder = false
-            for i = 1, currentMode do
-                local cyl = cylinders[i]
-                if cyl then
-                    local distXZ = (Vector2.new(pPos.X, pPos.Z) - Vector2.new(cyl.Position.X, cyl.Position.Z)).Magnitude
-                    local cylRadius = math.max(cyl.Size.X, cyl.Size.Z) * 0.85
-                    local cylTopY = cyl.Position.Y + (cyl.Size.Y * 0.5)
-                    local cylBaseY = cyl.Position.Y - (cyl.Size.Y * 0.5)
+                if distToThis <= distToOther + 1.0 then
+                    local insideCylinder = false
+                    for i = 1, currentMode do
+                        local cyl = cylinders[i]
+                        if cyl then
+                            local distXZ = (Vector2.new(pPos.X, pPos.Z) - Vector2.new(cyl.Position.X, cyl.Position.Z)).Magnitude
+                            local cylRadius = math.max(cyl.Size.X, cyl.Size.Z) * 0.85
+                            local cylTopY = cyl.Position.Y + (cyl.Size.Y * 0.5)
+                            local cylBaseY = cyl.Position.Y - (cyl.Size.Y * 0.5)
 
-                    if distXZ <= cylRadius and pPos.Y <= (cylTopY + 0.1) and pPos.Y >= (cylBaseY - 0.5) then
-                        insideCylinder = true
-                        break
+                            if distXZ <= cylRadius and pPos.Y <= (cylTopY + 0.1) and pPos.Y >= (cylBaseY - 0.5) then
+                                insideCylinder = true
+                                break
+                            end
+                        end
+                    end
+
+                    if insideCylinder then
+                        confirmedCylinderBlocks[part] = true
+                    end
+
+                    if confirmedCylinderBlocks[part] then
+                        table.insert(allBlocks, info)
                     end
                 end
-            end
-
-            if insideCylinder then
-                confirmedCylinderBlocks[part] = true
-            end
-
-            if confirmedCylinderBlocks[part] then
-                table.insert(allBlocks, info)
             end
         end
     end
@@ -1430,13 +1466,12 @@ local function stepCopyMirror()
         end
     end
 
-    -- 5. Listen to Blocks Appearing in Cylinders and Verify Against Calculating
+    -- 5. Real-Time Landing Verification Against Planned Calculation
     if #pendingLandings > 0 then
         for i = 1, currentMode do
             local prevCount = previousTubesCounts[i] or 0
             local newCount = #newTubes[i]
 
-            -- Block has appeared / landed in cylinder 'i'
             if newCount > prevCount then
                 local matchedIdx = nil
                 for pIdx, pending in ipairs(pendingLandings) do
@@ -1447,16 +1482,13 @@ local function stepCopyMirror()
                 end
 
                 if matchedIdx then
-                    -- Successfully landed at the exact calculated cylinder!
                     table.remove(pendingLandings, matchedIdx)
                 else
-                    -- A block appeared in an unexpected cylinder (or fell back to source)
                     mismatchDetected = true
                 end
             end
         end
 
-        -- Timeout detection for lost in-flight blocks
         local now = os.clock()
         for _, pending in ipairs(pendingLandings) do
             if now - pending.timestamp > 2.2 then
@@ -1499,7 +1531,8 @@ local function stepCopyMirror()
 
     updateVisuals()
     if not isSolving3D then
-        statsLabel.Text = string.format("Copying: %s | %d Cylinders Live", board.Name, currentMode)
+        local tableName = board.Parent and board.Parent.Name or "Table"
+        statsLabel.Text = string.format("Copying: %s (%s) | %d Cyl", board.Name, tableName, currentMode)
     end
 end
 
