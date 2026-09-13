@@ -78,7 +78,7 @@ pcall(function()
         local oldCreate = TweenService.Create
         hookfunction(TweenService.Create, function(self, inst, info, props)
             if inst and typeof(inst) == "Instance" and inst:IsA("BasePart") and string.find(inst.Name, "Block") then
-                local fastTime = math.clamp(info.Time * 0.18, 0.03, 0.12)
+                local fastTime = math.clamp(info.Time * 0.10, 0.02, 0.06)
                 local fastInfo = TweenInfo.new(fastTime, info.EasingStyle, info.EasingDirection, info.RepeatCount, info.Reverses, info.DelayTime)
                 return oldCreate(self, inst, fastInfo, props)
             end
@@ -251,6 +251,7 @@ local KEY_CODES = {
 
 local currentMode = 4
 local tubes = {}
+local previousTubesCounts = {}
 local tubeButtons = {}
 local tubeSlots = {}
 local tubeCustomColors = {}
@@ -267,6 +268,8 @@ local timerThread = nil
 local copyLoopConn = nil
 local currentTrackedBoard = nil
 local confirmedCylinderBlocks = {}
+local pendingLandings = {}
+local mismatchDetected = false
 local activeTubeConnections = {}
 
 local LAYOUT_CONFIG = {
@@ -303,7 +306,7 @@ local LAYOUT_CONFIG = {
 local onTubeClicked
 
 -- ============================================================================
--- 3D INPUT CONTROLLER
+-- INPUT & HOVER LISTENER CONTROLLER
 -- ============================================================================
 local function simulateKeyPress(tubeIndex)
     local kc = KEY_CODES[tubeIndex]
@@ -311,14 +314,24 @@ local function simulateKeyPress(tubeIndex)
     pcall(function()
         VirtualInputManager:SendKeyEvent(true, kc, false, game)
     end)
-    task.wait(0.015)
-    pcall(function()
-        VirtualInputManager:SendKeyEvent(false, kc, false, game)
+    task.defer(function()
+        pcall(function()
+            VirtualInputManager:SendKeyEvent(false, kc, false, game)
+        end)
     end)
 end
 
 local function getHoveringTube()
     return currentHoverTube
+end
+
+local function isCylinderAwaitingArrival(cylIdx)
+    for _, item in ipairs(pendingLandings) do
+        if item.to == cylIdx then
+            return true
+        end
+    end
+    return false
 end
 
 -- ============================================================================
@@ -863,13 +876,73 @@ local function solveAStar(initialTubes)
 end
 
 -- ============================================================================
--- VERIFIED 3D SOLVER WITH HOVER-AWARE STATE MACHINE (ZERO DELAY TO DESTINATION)
+-- FAST DISAPPEAR-ONLY MOVE DISPATCHER
+-- ============================================================================
+local function executeFastMove(fromIdx, toIdx, initialFromCount)
+    local hover = getHoveringTube()
+
+    if hover ~= nil then
+        if hover == fromIdx then
+            -- Block is already held and hovering: immediately send destination
+            simulateKeyPress(toIdx)
+        else
+            -- Wrong block hovering: drop it down first
+            simulateKeyPress(hover)
+            local dropWait = os.clock()
+            while os.clock() - dropWait < 0.3 do
+                if getHoveringTube() == nil then break end
+                task.wait()
+            end
+
+            -- Now pick up fromIdx
+            simulateKeyPress(fromIdx)
+            local pickWait = os.clock()
+            while os.clock() - pickWait < 0.25 do
+                if getHoveringTube() == fromIdx or (#tubes[fromIdx] or 0) < initialFromCount then break end
+                task.wait()
+            end
+
+            simulateKeyPress(toIdx)
+        end
+    else
+        -- Not hovering: pick up fromIdx
+        simulateKeyPress(fromIdx)
+
+        local pickWait = os.clock()
+        while os.clock() - pickWait < 0.25 do
+            if getHoveringTube() == fromIdx or (#tubes[fromIdx] or 0) < initialFromCount then break end
+            task.wait()
+        end
+
+        simulateKeyPress(toIdx)
+    end
+
+    -- Strictly wait ONLY until the block disappears from the source cylinder
+    -- (Does not wait for arrival at toIdx)
+    local disappearWait = os.clock()
+    local disappeared = false
+
+    while os.clock() - disappearWait < 0.35 do
+        if (#tubes[fromIdx] or 0) < initialFromCount and getHoveringTube() ~= fromIdx then
+            disappeared = true
+            break
+        end
+        task.wait()
+    end
+
+    return disappeared
+end
+
+-- ============================================================================
+-- ASYNCHRONOUS PIPELINE 3D SOLVER WITH REAL-TIME LANDING VERIFICATION & BACKTRACKING
 -- ============================================================================
 local function toggle3DSolver()
     if not isCopying then return end
 
     if isSolving3D then
         isSolving3D = false
+        table.clear(pendingLandings)
+        mismatchDetected = false
         statsLabel.Text = "3D Solver Stopped."
         return
     end
@@ -880,7 +953,7 @@ local function toggle3DSolver()
     end
 
     statsLabel.Text = "Calculating 3D moves..."
-    task.wait(0.02)
+    task.wait(0.01)
 
     local solutionPath = solveAStar(tubes)
 
@@ -892,102 +965,93 @@ local function toggle3DSolver()
     end
 
     isSolving3D = true
+    table.clear(pendingLandings)
+    mismatchDetected = false
 
     task.spawn(function()
-        local total = #solutionPath
-        for moveIndex = 1, total do
+        local pathIndex = 1
+
+        while pathIndex <= #solutionPath do
             if not isAlive or not isCopying or not isSolving3D then break end
 
-            local move = solutionPath[moveIndex]
+            local move = solutionPath[pathIndex]
             local fromIdx = move.from
             local toIdx = move.to
 
-            statsLabel.Text = string.format("3D: %d/%d (%d->%d)", moveIndex, total, fromIdx, toIdx)
+            statsLabel.Text = string.format("3D: %d/%d (%d->%d)", pathIndex, #solutionPath, fromIdx, toIdx)
+
+            -- If the cylinder we need to pick up from is currently waiting for an in-flight block to land, wait for it
+            if isCylinderAwaitingArrival(fromIdx) then
+                local waitArrival = os.clock()
+                while isCylinderAwaitingArrival(fromIdx) and (os.clock() - waitArrival < 1.8) do
+                    task.wait()
+                end
+            end
 
             local initialFromCount = #tubes[fromIdx] or 0
-            local initialToCount = #tubes[toIdx] or 0
+            local movingColor = tubes[fromIdx] and tubes[fromIdx][initialFromCount]
 
-            local hover = getHoveringTube()
+            -- Execute the move: ONLY waits until the block has successfully lifted and disappeared from fromIdx
+            local disappeared = executeFastMove(fromIdx, toIdx, initialFromCount)
 
-            if hover ~= nil then
-                if hover == fromIdx then
-                    -- Block is ALREADY hovering above the source cylinder!
-                    -- Do NOT trigger pick up again (avoids accidental drop). Move immediately with zero delay!
-                    simulateKeyPress(toIdx)
-                else
-                    -- Wrong block is currently picked up! Drop it back down first.
-                    simulateKeyPress(hover)
-                    local dropWait = os.clock()
-                    while os.clock() - dropWait < 0.4 do
-                        if getHoveringTube() == nil then break end
-                        task.wait()
-                    end
-
-                    -- Now cleanly pick up the correct block
-                    simulateKeyPress(fromIdx)
-                    local pickWait = os.clock()
-                    while os.clock() - pickWait < 0.35 do
-                        if getHoveringTube() == fromIdx or (#tubes[fromIdx] or 0) < initialFromCount then break end
-                        task.wait()
-                    end
-
-                    -- Zero delay: Move to next cylinder immediately
-                    simulateKeyPress(toIdx)
-                end
+            if disappeared then
+                -- Register the block as in-flight towards toIdx
+                table.insert(pendingLandings, {
+                    from = fromIdx,
+                    to = toIdx,
+                    color = movingColor,
+                    timestamp = os.clock()
+                })
+                -- Immediately advance to the next block (rinse and repeat)
+                pathIndex = pathIndex + 1
             else
-                -- No block is hovering; initiate pick up
-                simulateKeyPress(fromIdx)
+                -- Input was dropped or block didn't lift: small recovery pause before retrying
+                task.wait(0.04)
+            end
 
-                -- Fast hover listener check: as soon as pick up is detected, fire toIdx immediately
-                local pickWait = os.clock()
-                while os.clock() - pickWait < 0.35 do
-                    if getHoveringTube() == fromIdx or (#tubes[fromIdx] or 0) < initialFromCount then break end
+            -- Check if background landing listener detected any desync / wrong cylinder landing
+            if mismatchDetected then
+                mismatchDetected = false
+                statsLabel.Text = "Mismatch detected! Backtracking..."
+                
+                -- Allow in-motion blocks to finish settling
+                local settleWait = os.clock()
+                while os.clock() - settleWait < 0.5 do
+                    if getHoveringTube() == nil then break end
                     task.wait()
                 end
 
-                -- Zero artificial delay: Move to next cylinder immediately
-                simulateKeyPress(toIdx)
+                table.clear(pendingLandings)
+
+                -- Backtrack: re-calculate the optimal solution path directly from the actual board state
+                local fixPath = solveAStar(tubes)
+                if fixPath and #fixPath > 0 then
+                    solutionPath = fixPath
+                    pathIndex = 1
+                end
             end
 
-            -- Confirm the block successfully disappears from fromIdx AND reappears in toIdx on the 2D board
-            local moveConfirmed = false
-            local waitStart = os.clock()
-
-            while os.clock() - waitStart < 3.0 do
-                if not isAlive or not isCopying or not isSolving3D then break end
-
-                local currentFromCount = #tubes[fromIdx] or 0
-                local currentToCount = #tubes[toIdx] or 0
-
-                local disappeared = (currentFromCount < initialFromCount)
-                local reappeared = (currentToCount > initialToCount)
-
-                if disappeared and reappeared then
-                    moveConfirmed = true
-                    break
-                end
-
-                -- Fast fail-safe: if still hovering over fromIdx, re-fire destination key immediately
-                if (os.clock() - waitStart > 0.35) and getHoveringTube() == fromIdx then
-                    simulateKeyPress(toIdx)
-                    waitStart = os.clock()
-                elseif (os.clock() - waitStart > 0.6) and currentFromCount == initialFromCount and getHoveringTube() == nil then
-                    -- Block reset into fromIdx; re-pick up and send destination key
-                    simulateKeyPress(fromIdx)
-                    local pWait = os.clock()
-                    while os.clock() - pWait < 0.25 do
-                        if getHoveringTube() == fromIdx then break end
-                        task.wait()
-                    end
-                    simulateKeyPress(toIdx)
-                    waitStart = os.clock()
-                end
-
-                task.wait()
-            end
+            task.wait()
         end
 
+        -- Pipeline finished: wait for any remaining in-flight blocks to land and confirm final state
+        local finalWait = os.clock()
+        while #pendingLandings > 0 and (os.clock() - finalWait < 2.0) do
+            if mismatchDetected then
+                mismatchDetected = false
+                local fixPath = solveAStar(tubes)
+                if fixPath and #fixPath > 0 then
+                    solutionPath = fixPath
+                    pathIndex = 1
+                    table.clear(pendingLandings)
+                end
+            end
+            task.wait()
+        end
+
+        table.clear(pendingLandings)
         isSolving3D = false
+
         if isGameWon(tubes) then
             statsLabel.Text = "3D Board Solved!"
         else
@@ -1069,7 +1133,7 @@ local function onStartClicked()
 end
 
 -- ============================================================================
--- 3D STACKBOARD TARGET DETECTION & VISUAL MIRRORING
+-- 3D STACKBOARD TARGET DETECTION & VISUAL MIRRORING (WITH LANDING MONITOR)
 -- ============================================================================
 local function updateButtonLockVisuals()
     if isCopying then
@@ -1197,6 +1261,8 @@ local function stepCopyMirror()
     if currentTrackedBoard ~= board then
         currentTrackedBoard = board
         table.clear(confirmedCylinderBlocks)
+        table.clear(pendingLandings)
+        mismatchDetected = false
     end
 
     -- 1. Gather Cylinders and Ghost Cylinders
@@ -1241,6 +1307,8 @@ local function stepCopyMirror()
         currentMode = detectedCount
         changeBtn.Text = string.format("Mode (%d)", currentMode)
         table.clear(confirmedCylinderBlocks)
+        table.clear(pendingLandings)
+        mismatchDetected = false
         rebuildCylinders()
     end
 
@@ -1329,8 +1397,7 @@ local function stepCopyMirror()
             local topY = cylRef.Position.Y + (cylRef.Size.Y * 0.5)
 
             if bestDistXZ <= cylRadius then
-                -- Block is suspended above the cylinder top (actively picked up)
-                if pPos.Y > (topY + 0.25) then
+                if pPos.Y > (topY + 0.08) then
                     hoveringTube = bestTubeIdx
                     bInfo.isHover = true
                 else
@@ -1363,12 +1430,52 @@ local function stepCopyMirror()
         end
     end
 
+    -- 5. Listen to Blocks Appearing in Cylinders and Verify Against Calculating
+    if #pendingLandings > 0 then
+        for i = 1, currentMode do
+            local prevCount = previousTubesCounts[i] or 0
+            local newCount = #newTubes[i]
+
+            -- Block has appeared / landed in cylinder 'i'
+            if newCount > prevCount then
+                local matchedIdx = nil
+                for pIdx, pending in ipairs(pendingLandings) do
+                    if pending.to == i then
+                        matchedIdx = pIdx
+                        break
+                    end
+                end
+
+                if matchedIdx then
+                    -- Successfully landed at the exact calculated cylinder!
+                    table.remove(pendingLandings, matchedIdx)
+                else
+                    -- A block appeared in an unexpected cylinder (or fell back to source)
+                    mismatchDetected = true
+                end
+            end
+        end
+
+        -- Timeout detection for lost in-flight blocks
+        local now = os.clock()
+        for _, pending in ipairs(pendingLandings) do
+            if now - pending.timestamp > 2.2 then
+                mismatchDetected = true
+                break
+            end
+        end
+    end
+
+    for i = 1, currentMode do
+        previousTubesCounts[i] = #newTubes[i]
+    end
+
     tubes = newTubes
     tubeCustomColors = newColors
     currentHoverTube = hoveringTube
     selectedTube = hoveringTube
 
-    -- 5. Mirror Transit / In-Air Flight Animation
+    -- 6. Mirror Transit / In-Air Flight Animation
     if movingBlockInfo and tubeButtons[movingBlockInfo.fromIdx] and tubeButtons[movingBlockInfo.toIdx] then
         local btnA = tubeButtons[movingBlockInfo.fromIdx]
         local btnB = tubeButtons[movingBlockInfo.toIdx]
@@ -1404,10 +1511,13 @@ local function toggleCopy()
     selectedTube = nil
     currentHoverTube = nil
     currentTrackedBoard = nil
+    table.clear(pendingLandings)
+    mismatchDetected = false
     updateButtonLockVisuals()
 
     if isCopying then
         table.clear(confirmedCylinderBlocks)
+        table.clear(previousTubesCounts)
         if copyLoopConn then copyLoopConn:Disconnect() end
         copyLoopConn = RunService.Heartbeat:Connect(stepCopyMirror)
         registerCleanup(copyLoopConn)
@@ -1418,6 +1528,7 @@ local function toggleCopy()
             copyLoopConn = nil
         end
         table.clear(confirmedCylinderBlocks)
+        table.clear(previousTubesCounts)
         transitBlock.Visible = false
         statsLabel.Text = "Copy: OFF | Ready"
         updateVisuals()
