@@ -1,0 +1,419 @@
+-- ============================================================================
+-- PREVIOUS SCRIPT INSTANCE KILL SWITCH
+-- ============================================================================
+local getgenv = getgenv or function() return _G end
+local genv = getgenv()
+
+if genv.MyScript_Cleanup and type(genv.MyScript_Cleanup) == "function" then
+    pcall(genv.MyScript_Cleanup)
+    genv.MyScript_Cleanup = nil
+end
+
+local cleanupTasks = {}
+local isAlive = true
+local isOnline = false
+local currentMode = "search" -- "search" or "index"
+local currentSearchQuery = ""
+local activeHighlights = {}
+
+local function registerCleanup(item)
+    table.insert(cleanupTasks, item)
+    return item
+end
+
+local function clearHighlights()
+    for _, item in ipairs(activeHighlights) do
+        pcall(function()
+            if typeof(item) == "Instance" then
+                item:Destroy()
+            end
+        end)
+    end
+    table.clear(activeHighlights)
+end
+
+local function cleanup()
+    isAlive = false
+    isOnline = false
+    clearHighlights()
+
+    for _, item in ipairs(cleanupTasks) do
+        pcall(function()
+            if typeof(item) == "RBXScriptConnection" then
+                item:Disconnect()
+            elseif typeof(item) == "Instance" then
+                item:Destroy()
+            elseif type(item) == "thread" then
+                task.cancel(item)
+            elseif type(item) == "function" then
+                item()
+            end
+        end)
+    end
+    table.clear(cleanupTasks)
+
+    if genv.MyScript_Cleanup == cleanup then
+        genv.MyScript_Cleanup = nil
+    end
+end
+
+genv.MyScript_Cleanup = cleanup
+
+-- ============================================================================
+-- MAIN SCRIPT SETUP
+-- ============================================================================
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
+local guiParent
+if type(gethui) == "function" then
+    guiParent = gethui()
+else
+    local success = pcall(function()
+        return game:GetService("CoreGui").Name
+    end)
+    if success then
+        guiParent = game:GetService("CoreGui")
+    else
+        guiParent = player:WaitForChild("PlayerGui")
+    end
+end
+
+-- ScreenGui Setup
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "Gui_" .. math.random(10000, 99999)
+screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 2147483647
+screenGui.IgnoreGuiInset = true
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+screenGui.Parent = guiParent
+registerCleanup(screenGui)
+
+-- Main Frame (Remains strictly 112x56)
+local mainFrame = Instance.new("Frame")
+mainFrame.Parent = screenGui
+mainFrame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+mainFrame.Size = UDim2.new(0, 112, 0, 56)
+mainFrame.Position = UDim2.new(0.3, 0, 0.5, -28)
+mainFrame.Active = true
+
+-- Status Label (Attached at top: 112x17)
+local status = Instance.new("TextLabel")
+status.Parent = mainFrame
+status.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+status.Size = UDim2.new(0, 112, 0, 17)
+status.Position = UDim2.new(0, 0, 0, -17)
+status.Text = "Status: Offline"
+status.TextColor3 = Color3.fromRGB(255, 0, 0)
+status.TextScaled = true
+status.Active = true
+
+-- ============================================================================
+-- UNIVERSAL DRAG HANDLER (Works on both PC & Mobile for Status Bar & Main Frame)
+-- ============================================================================
+local function makeDraggable(handle, frameToMove)
+    local dragging = false
+    local dragStart = nil
+    local startPos = nil
+
+    registerCleanup(handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frameToMove.Position
+
+            local endCon
+            endCon = input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                    endCon:Disconnect()
+                end
+            end)
+            registerCleanup(endCon)
+        end
+    end))
+
+    registerCleanup(UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            frameToMove.Position = UDim2.new(
+                startPos.X.Scale,
+                startPos.X.Offset + delta.X,
+                startPos.Y.Scale,
+                startPos.Y.Offset + delta.Y
+            )
+        end
+    end))
+end
+
+-- Allow dragging by grabbing either the status bar or the main frame body
+makeDraggable(status, mainFrame)
+makeDraggable(mainFrame, mainFrame)
+
+-- ============================================================================
+-- INPUTS & BUTTONS (2x2 Compact Grid)
+-- ============================================================================
+
+-- Search Box (Clears on focus/tap)
+local textBox = Instance.new("TextBox")
+textBox.Name = "SearchBox"
+textBox.Parent = mainFrame
+textBox.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+textBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+textBox.PlaceholderColor3 = Color3.fromRGB(160, 160, 160)
+textBox.PlaceholderText = "Search item..."
+textBox.Size = UDim2.new(0, 104, 0, 14)
+textBox.Position = UDim2.new(0, 4, 0, 3)
+textBox.TextScaled = true
+textBox.ClearTextOnFocus = true
+textBox.BorderSizePixel = 0
+
+registerCleanup(textBox.Focused:Connect(function()
+    textBox.Text = ""
+end))
+
+local function createButton(name, text, x, y, width, height)
+    local btn = Instance.new("TextButton")
+    btn.Name = name
+    btn.Parent = mainFrame
+    btn.Text = text
+    btn.Size = UDim2.new(0, width, 0, height)
+    btn.Position = UDim2.new(0, x, 0, y)
+    btn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextScaled = true
+    btn.AutoButtonColor = true
+    btn.BorderSizePixel = 0
+    return btn
+end
+
+-- 2x2 Button Layout fitted within the 112x56 frame
+local onBtn = createButton("OnBtn", "On", 4, 20, 50, 14)
+local offBtn = createButton("OffBtn", "Off", 58, 20, 50, 14)
+local indexBtn = createButton("IndexBtn", "Index", 4, 37, 50, 14)
+local destroyBtn = createButton("DestroyBtn", "Destroy", 58, 37, 50, 14)
+
+-- ============================================================================
+-- INDEX DETECTOR & HIGHLIGHT LOGIC
+-- ============================================================================
+
+-- Function to extract names of eggs shown in the Index GUI (specifically "x... In Map")
+local function getIndexEggNames()
+    local names = {}
+    local pGui = player:FindFirstChild("PlayerGui")
+    if not pGui then return names end
+
+    for _, desc in ipairs(pGui:GetDescendants()) do
+        if desc:IsA("TextLabel") and string.find(string.lower(desc.Text), "in map") then
+            local card = desc.Parent
+            local detectedName = nil
+
+            -- 1. Try card container name
+            if card and card.Name and not string.match(card.Name, "^Frame") and not string.match(card.Name, "^Template") and not string.match(card.Name, "^Slot") then
+                detectedName = card.Name
+            end
+
+            -- 2. Try attributes or StringValues
+            if card and not detectedName then
+                for attrKey, attrVal in pairs(card:GetAttributes()) do
+                    if type(attrVal) == "string" and string.find(string.lower(attrKey), "name") then
+                        detectedName = attrVal
+                        break
+                    end
+                end
+                for _, child in ipairs(card:GetChildren()) do
+                    if child:IsA("StringValue") and string.find(string.lower(child.Name), "name") then
+                        detectedName = child.Value
+                        break
+                    end
+                end
+            end
+
+            -- 3. Try reading label text on the card (excluding currency/multipliers)
+            if card and not detectedName then
+                for _, child in ipairs(card:GetDescendants()) do
+                    if child:IsA("TextLabel") and child ~= desc then
+                        local t = child.Text
+                        if not string.match(t, "^%s*[%$]?[%d%.]+%s*[kKmMbBtTqQ]?%s*$") and not string.find(string.lower(t), "in map") and #t > 1 then
+                            detectedName = t
+                            break
+                        end
+                    end
+                end
+            end
+
+            if detectedName and detectedName ~= "" then
+                table.insert(names, string.lower(detectedName))
+            end
+        end
+    end
+
+    return names
+end
+
+local function applyHighlight(targetInstance, rootPart, displayName, color)
+    local hl = Instance.new("Highlight")
+    hl.Name = "SearchHighlight"
+    hl.Adornee = targetInstance
+    hl.FillColor = color
+    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+    hl.FillTransparency = 0.4
+    hl.OutlineTransparency = 0
+    hl.Parent = targetInstance
+    table.insert(activeHighlights, hl)
+
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "SearchBillboard"
+    bb.Adornee = rootPart
+    bb.Size = UDim2.new(0, 130, 0, 32)
+    bb.StudsOffset = Vector3.new(0, 3.5, 0)
+    bb.AlwaysOnTop = true
+
+    local label = Instance.new("TextLabel")
+    label.Parent = bb
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+
+    -- Distance display calculation
+    local dist = 0
+    if player.Character and player.Character.PrimaryPart then
+        dist = math.floor((player.Character.PrimaryPart.Position - rootPart.Position).Magnitude)
+    end
+
+    label.Text = displayName .. " [" .. dist .. "m]"
+    label.TextColor3 = color
+    label.TextStrokeTransparency = 0
+    label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    label.TextScaled = true
+
+    bb.Parent = targetInstance
+    table.insert(activeHighlights, bb)
+end
+
+local function updateSearch()
+    clearHighlights()
+    if not isOnline then return end
+
+    local char = player.Character
+
+    if currentMode == "search" then
+        if currentSearchQuery == "" then return end
+        local query = string.lower(currentSearchQuery)
+
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if not isOnline or currentMode ~= "search" then break end
+            if char and (obj == char or obj:IsDescendantOf(char)) then continue end
+
+            if string.find(string.lower(obj.Name), query, 1, true) then
+                local targetInstance = nil
+                local rootPart = nil
+
+                if obj:IsA("Model") then
+                    targetInstance = obj
+                    rootPart = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                elseif obj:IsA("BasePart") and not (obj.Parent and obj.Parent:IsA("Model") and string.find(string.lower(obj.Parent.Name), query, 1, true)) then
+                    targetInstance = obj
+                    rootPart = obj
+                end
+
+                if targetInstance and rootPart then
+                    applyHighlight(targetInstance, rootPart, obj.Name, Color3.fromRGB(255, 220, 0))
+                end
+            end
+        end
+
+    elseif currentMode == "index" then
+        local indexEggNames = getIndexEggNames()
+
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if not isOnline or currentMode ~= "index" then break end
+            if char and (obj == char or obj:IsDescendantOf(char)) then continue end
+
+            local objName = string.lower(obj.Name)
+            local isMatch = false
+
+            -- Match by names identified from Index UI
+            if #indexEggNames > 0 then
+                for _, name in ipairs(indexEggNames) do
+                    if string.find(objName, name, 1, true) or string.find(name, objName, 1, true) then
+                        isMatch = true
+                        break
+                    end
+                end
+            else
+                -- Fallback: Highlight any spawned egg in map if Index UI hasn't loaded text
+                if string.find(objName, "egg", 1, true) then
+                    isMatch = true
+                end
+            end
+
+            if isMatch then
+                local targetInstance = nil
+                local rootPart = nil
+
+                if obj:IsA("Model") then
+                    targetInstance = obj
+                    rootPart = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                elseif obj:IsA("BasePart") and not (obj.Parent and obj.Parent:IsA("Model") and string.find(string.lower(obj.Parent.Name), "egg", 1, true)) then
+                    targetInstance = obj
+                    rootPart = obj
+                end
+
+                if targetInstance and rootPart then
+                    applyHighlight(targetInstance, rootPart, "[Index] " .. obj.Name, Color3.fromRGB(0, 255, 200))
+                end
+            end
+        end
+    end
+end
+
+-- Refresh loop to detect new spawns and update markers
+local refreshThread = task.spawn(function()
+    while isAlive do
+        if isOnline then
+            updateSearch()
+        end
+        task.wait(3)
+    end
+end)
+registerCleanup(refreshThread)
+
+-- Textbox listeners
+registerCleanup(textBox.FocusLost:Connect(function()
+    currentSearchQuery = textBox.Text
+    if isOnline and currentMode == "search" then
+        updateSearch()
+    end
+end))
+
+-- Status toggles
+local function setOnline()
+    isOnline = true
+    currentMode = "search"
+    currentSearchQuery = textBox.Text
+    status.Text = "Status: Online"
+    status.TextColor3 = Color3.fromRGB(0, 255, 0)
+    updateSearch()
+end
+
+local function setIndexMode()
+    isOnline = true
+    currentMode = "index"
+    status.Text = "Status: Index Eggs"
+    status.TextColor3 = Color3.fromRGB(0, 255, 200)
+    updateSearch()
+end
+
+local function setOffline()
+    isOnline = false
+    status.Text = "Status: Offline"
+    status.TextColor3 = Color3.fromRGB(255, 0, 0)
+    clearHighlights()
+end
+
+registerCleanup(onBtn.MouseButton1Click:Connect(setOnline))
+registerCleanup(offBtn.MouseButton1Click:Connect(setOffline))
+registerCleanup(indexBtn.MouseButton1Click:Connect(setIndexMode))
+registerCleanup(destroyBtn.MouseButton1Click:Connect(cleanup))
